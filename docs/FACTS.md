@@ -42,7 +42,7 @@ Pinned packages (exact versions, from the lockfile):
 | `langgraph` | | |
 | LangGraph SQLite checkpointer package | | |
 | `langchain-openai` | | |
-| Contree SDK (package name: TODO) | | |
+| Contree SDK: `contree-sdk` (UNVERIFIED, from the Python quickstart docs) | docs pin `0.3.6` | Confirm in the spike |
 | `pydantic` | | |
 | `pytest` | | |
 
@@ -51,7 +51,7 @@ Pinned packages (exact versions, from the lockfile):
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
 | Base URL | | NOT YET CHECKED | | | |
-| Env var that holds the key (name only) | | NOT YET CHECKED | | | |
+| Env var that holds the key (name only) | `NEBIUS_API_KEY`; the same key serves Sandboxes | UNVERIFIED | docs.tokenfactory.nebius.com/sandboxes/start/set-up-access | 2026-10-09 | A |
 | Nano model ID, from `GET /v1/models` | | NOT YET CHECKED | | | |
 | Super model ID | | NOT YET CHECKED | | | |
 | Ultra model ID | | NOT YET CHECKED | | | |
@@ -70,8 +70,9 @@ Pinned packages (exact versions, from the lockfile):
 
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
-| Sandboxes access granted, per person and per project | | NOT YET CHECKED | | | |
-| SDK import path | | NOT YET CHECKED | | | |
+| Sandboxes access granted, per person and per project | Beta: access must be requested at tokenfactory.nebius.com/sandboxes/about | UNVERIFIED | docs.tokenfactory.nebius.com/sandboxes/overview | 2026-10-09 | A |
+| SDK credentials | Env vars `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID`, read when `Contree()` is constructed. No constructor auth params are documented. `NEBIUS_AI_PROJECT` (CLI only) does not replace `NEBIUS_PROJECT_ID`. | UNVERIFIED | docs.tokenfactory.nebius.com/sandboxes/start/set-up-access and python-quickstart | 2026-10-09 | A |
+| SDK import path | `from contree_sdk import Contree`; async API, `client.images.use(...)` | UNVERIFIED | docs.tokenfactory.nebius.com/sandboxes/start/python-quickstart | 2026-10-09 | A |
 | Import path of the Deep Agents backend (docs mention `contree_sdk.langchain.sandbox`) | | UNVERIFIED | | | |
 | How to create a sandbox | | NOT YET CHECKED | | | |
 | How to run a command in it | | NOT YET CHECKED | | | |

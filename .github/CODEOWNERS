@@ -1,0 +1,5 @@
+# Shared files: a PR touching these needs approval from the other owner (branch protection requires code-owner review).
+# The three cross-owner functions (evaluate, run, make_middleware) get a line each once their files exist.
+/schemas/      @ritamgh @Shekharpadhy
+/config.yaml   @ritamgh @Shekharpadhy
+/.github/      @ritamgh @Shekharpadhy

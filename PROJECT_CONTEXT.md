@@ -16,7 +16,9 @@ The repo has docs and config only, no code yet. Next: the day-0 spike (FACTS sec
 | `docs/SPEC.md` | Build spec: formats, cross-owner signatures, tasks T1–T6, weekly checklists, budget. The held-out T7 and T8 are sealed outside the repo. |
 | `docs/FACTS.md` | Verified API, platform and model facts, with evidence. Mostly NOT YET CHECKED. |
 | `.env.example` | Names of the env variables. The real `.env` is gitignored and agents never read it. |
-| `.claude/settings.json` | Shared Claude Code permissions (deny reading `.env`) |
+| `.claude/settings.json` | Shared Claude Code permissions (deny reading `.env` and `*heldout*`) |
+| `ruff.toml` | Lint and format config (ruff, py312, line length 100) |
+| `.github/CODEOWNERS` | Shared files need the other owner's approval: `main` is protected and requires a PR with code-owner review |
 
 ## Planned layout (from SPEC "Repo layout")
 

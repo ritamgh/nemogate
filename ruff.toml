@@ -1,0 +1,6 @@
+# Lint and format config shared by A and B. ruff is added as a dev dependency with the repo skeleton.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]

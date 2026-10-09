@@ -90,7 +90,8 @@ config.yaml both  model IDs, prices, temperatures, safe config
 uv sync                         # install pinned dependencies
 uv run pytest                   # tests, stub model by default
 NEMOGATE_LIVE=1 uv run <cmd>    # opt in to real model calls (spends credits)
-# TODO: lint and format commands, once chosen
+uv run ruff check .             # lint (config in ruff.toml)
+uv run ruff format .            # format
 ```
 
 ## Vocabulary
