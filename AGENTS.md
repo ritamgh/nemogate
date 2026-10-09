@@ -12,9 +12,10 @@ It is a hackathon entry. Submission closes Oct 30, 2026 at 10:00am PDT. Features
 
 ## Read before you write code
 
-1. `docs/SPEC.md`: the plan, the formats, the task list, the checklists. If it disagrees with this file, the spec wins. Exception: once `schemas/` exists, the code there wins over the spec's description of a format.
-2. `docs/FACTS.md`: verified facts about the libraries, the platform and the models. Trust it over your memory.
-3. Any `README.md` and tests in the folder you are working in.
+1. `PROJECT_CONTEXT.md`: where things are, current status, gotchas.
+2. `docs/SPEC.md`: the plan, the formats, the task list, the checklists. If it disagrees with this file, the spec wins. Exception: once `schemas/` exists, the code there wins over the spec's description of a format. It is about 550 lines: read Shared interfaces plus your component and week sections.
+3. `docs/FACTS.md`: verified facts about the libraries, the platform and the models. Trust it over your memory. A fact not marked VERIFIED is a guess.
+4. Any `README.md` and tests in the folder you are working in.
 
 **Do not invent APIs.** Deep Agents, Contree, LangGraph middleware and Token Factory change often, and your training data is probably out of date. If a fact you need is not in `docs/FACTS.md`, read the installed package source, verify it, and record it in `docs/FACTS.md` with the evidence. If you cannot verify it, stop and ask.
 
@@ -47,7 +48,7 @@ config.yaml both  model IDs, prices, temperatures, safe config
 - `sut` (Super): the system under test, nothing else.
 - `planner` (Ultra): repair planning, at most 3 calls per repair iteration.
 
-**2. Secrets.** Never read, print, log, echo or commit `.env` or any API key. Do not put keys in code, tests, fixtures, logs or PR text. If you see a key in any output, say so and stop.
+**2. Secrets.** Never read, print, log, echo or commit `.env` or any API key. Do not put keys in code, tests, fixtures, logs or PR text. If you see a key in any output, say so and stop. Code loads `.env` at runtime through `common/` and nowhere else.
 
 **3. Spend.** We have about $30 of credit in total.
 - Unit tests use the stub model. Real model calls need an explicit opt-in (`NEMOGATE_LIVE=1`).
@@ -63,6 +64,14 @@ config.yaml both  model IDs, prices, temperatures, safe config
 - Prompts describe the method, never the seed repo or its rules.
 - Tasks are data. Adding one must not need a pipeline change.
 - When a task fails, find the general cause and fix that. Never add a special case, tune a prompt to a task's wording, or soften a task or check until it passes.
+- The generality check: run it before every commit that touches pipeline code. No output means it passed.
+
+```
+grep -rnE '\bT[1-8]\b|C-00[0-9]|migrations/|RISK|CHANGED:|delete_file|run_tests|http_get|utils_old|descripton|export_csv' \
+  common preflight ledger oracle gate replay repair report \
+  --include='*.py' --include='*.yaml' --include='*.txt' --include='*.md' \
+  --exclude-dir=tests --exclude-dir=fixtures 2>/dev/null
+```
 
 **6. Sealed tasks.** T7 and T8 are held out. Their text lives outside this repo. Do not look for it, guess at it, or open, run or reference anything named `*heldout*` until a human says the final sweep has started. If you come across their wording or rules anyway, keep it out of every prompt, test, fixture and line of code.
 
@@ -81,7 +90,7 @@ config.yaml both  model IDs, prices, temperatures, safe config
 - **Small PRs.** One component per branch (`a/<component>` or `b/<component>`). The other owner reviews anything that touches `schemas/` or the three cross-owner functions.
 - **Commit messages** are imperative and say what and why.
 - **Reproducibility.** Every run record carries `model_ids`, `safe_config_hash`, `ledger_hash`, `repo_sha` and `lockfile_hash`. Every trace line carries `model_id`, `safe_config_hash` and `ledger_hash`.
-- **Definition of done.** Acceptance tests pass. Output conforms to `schemas/`. The generality check is clean. No secrets. Cost is logged. `docs/FACTS.md` is updated with anything you learned.
+- **Definition of done.** Acceptance tests pass. Output conforms to `schemas/`. The generality check (rule 5) is clean. No secrets. Cost is logged. `docs/FACTS.md` is updated with anything you learned.
 - **When unsure, ask.** A short question beats a plausible guess.
 
 ## Commands
