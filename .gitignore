@@ -218,3 +218,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- NemoGate ----
+# Secrets: only the template is committed
+.env.*
+!.env.example
+
+# Run artifacts: one folder per run (config, trace, record, checkpoints). results/ IS committed.
+runs/
+*.sqlite
+*.sqlite3
+*.db
+checkpoints/
+
+# Per-machine Claude Code files (CLAUDE.md and .claude/settings.json are shared)
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Held-out tasks stay out of git until the final sweep (remove this line then, so results are reproducible)
+*heldout*

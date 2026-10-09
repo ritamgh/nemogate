@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Edit(./.env)",
+      "Bash(cat .env:*)",
+      "Bash(less .env:*)",
+      "Bash(head .env:*)",
+      "Bash(tail .env:*)",
+      "Bash(grep:* .env)",
+      "Bash(source .env:*)",
+      "Read(**/*heldout*)",
+      "Read(~/Developer/nemogate-sealed/**)",
+      "Read(~/Downloads/NemoGate build spec.md)"
+    ]
+  }
+}
