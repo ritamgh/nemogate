@@ -18,7 +18,7 @@ Execution work goes through the `orchestrate` skill. Workers don't inherit this 
 
 - Hard rules 1–9 from AGENTS.md, in particular `get_model(role)` only, no `.env`, the stub model only, no `*heldout*`, and no weakening of tests, predicates or ledger entries.
 - **Workers never spend credit.** No `NEMOGATE_LIVE=1`, no live probes, no sweeps. Any step that needs a real model call comes back to the orchestrator, and the orchestrator asks a human first.
-- The owned folders, one card per branch named `a/<component>` or `b/<component>`.
+- The owned folders, one card per branch named with the owner's prefix (AGENTS.md, How to work): `ritgh/<component>` for A.
 - Acceptance check: `uv run pytest` plus the generality check (AGENTS.md rule 5).
 - Anything new learned about a library goes into `docs/FACTS.md` with evidence.
 - A change that needs the other owner's approval (rule 4): the worker stops and reports. It does not make the change.
