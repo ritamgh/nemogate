@@ -82,7 +82,10 @@ EVENT_LIST = TypeAdapter(list[Event])
 def parse_trace_jsonl(text: str) -> list[Event]:
     """Parse a JSONL trace, skipping blank lines. A bad line raises ValueError naming "line N"."""
     events: list[Event] = []
-    for number, line in enumerate(text.splitlines(), start=1):
+    # Split on "\n" only: str.splitlines() also splits on U+2028, U+2029 and U+0085, which may
+    # appear unescaped inside a JSON string.
+    for number, raw in enumerate(text.split("\n"), start=1):
+        line = raw.removesuffix("\r")
         if not line.strip():
             continue
         try:

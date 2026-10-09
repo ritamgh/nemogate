@@ -173,6 +173,22 @@ def test_parse_trace_jsonl_counts_blank_lines_in_line_numbers():
         parse_trace_jsonl(f"{final}\n\nnot json\n")
 
 
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
+def test_unicode_line_separators_inside_a_json_string_round_trip(separator):
+    # Breaks if the trace is split with str.splitlines(): it also splits on U+2028,
+    # U+2029, U+0085 and others, which model output can legitimately contain.
+    event = FinalOutput(**COMMON, content=f"first{separator}second")
+    parsed = parse_trace_jsonl(dump_event_jsonl(event) + "\n")
+    assert parsed == [event]
+    assert parsed[0].content == f"first{separator}second"
+
+
+def test_parse_trace_jsonl_accepts_crlf_line_endings():
+    # Breaks if a trailing "\r" is left on the line (or CRLF files are rejected).
+    final = dump_event_jsonl(EVENT.validate_python(EXAMPLES[-1][1]))
+    assert len(parse_trace_jsonl(f"{final}\r\n{final}\r\n")) == 2
+
+
 @pytest.mark.parametrize(("model", "data"), EXAMPLES, ids=EXAMPLE_IDS)
 def test_dump_and_validate_round_trip(model, data):
     # Breaks if a field is lost or renamed between dump_event_jsonl and EVENT.validate_json.
