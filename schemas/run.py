@@ -81,8 +81,13 @@ def is_comparable(a: RunRecord, b: RunRecord) -> bool:
 
     SPEC "Reproducibility fields": two runs are comparable only if model_ids,
     safe_config_hash, ledger_hash, repo_sha and lockfile_hash match.
-    Open choices: must all three model_ids match, or only the roles a run used?
-    Should repo_sha be compared, given the repair loop deliberately re-runs on a patched branch?
+    Strict: the whole model_ids dict and all four hashes must match; pre- and post-repair runs
+    (different repo_sha) never pool.
     """
-    # TODO(user): implement — about 5 lines.
-    raise NotImplementedError
+    return (
+        a.model_ids == b.model_ids
+        and a.safe_config_hash == b.safe_config_hash
+        and a.ledger_hash == b.ledger_hash
+        and a.repo_sha == b.repo_sha
+        and a.lockfile_hash == b.lockfile_hash
+    )

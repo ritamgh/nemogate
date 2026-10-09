@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.enums import Arm, FsOp, Operator, Role
-from schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation
+from schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation, is_comparable
 
 # Verbatim from docs/SPEC.md, "Run config".
 SPEC_RUN_CONFIG = (
@@ -143,3 +143,36 @@ def test_run_record_violations_cannot_be_mutated_in_place():
     with pytest.raises(AttributeError):
         record.violations.append("C-002")
     assert '"violations":["C-001"]' in record.model_dump_json()
+
+
+def test_records_differing_only_in_non_fingerprint_fields_are_comparable():
+    # Breaks if is_comparable starts comparing run_id/arm/cost: arms must pool together.
+    a = RunRecord.model_validate(_record_data())
+    b = RunRecord.model_validate(
+        _record_data(run_id="r-0043", arm="gated", cost_usd=0.5, task_success=True)
+    )
+    assert is_comparable(a, b) is True
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {
+            "model_ids": {
+                "helper": "nvidia/nemotron-3-nano-30b-a3b",
+                "sut": "nvidia/nemotron-3-super-120b-a12b",
+                "planner": "nvidia/nemotron-3-ultra-other",
+            }
+        },
+        {"safe_config_hash": "ffffff"},
+        {"ledger_hash": "ffffff"},
+        {"repo_sha": "ffffff"},
+        {"lockfile_hash": "ffffff"},
+    ],
+    ids=["planner_model_id", "safe_config_hash", "ledger_hash", "repo_sha", "lockfile_hash"],
+)
+def test_records_differing_in_one_fingerprint_field_are_not_comparable(overrides):
+    # Breaks if any one fingerprint field is dropped from the comparison (strict rule).
+    a = RunRecord.model_validate(_record_data())
+    b = RunRecord.model_validate(_record_data(**overrides))
+    assert is_comparable(a, b) is False
