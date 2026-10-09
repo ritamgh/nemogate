@@ -59,7 +59,7 @@ class RunRecord(BaseModel):
     violations: tuple[ConstraintId, ...]
     task_success: bool
     tokens: dict[Role, Annotated[int, Field(ge=0)]]
-    cost_usd: float = Field(ge=0)
+    cost_usd: float = Field(ge=0, allow_inf_nan=False)
     checkpoint_id: str | None
     contree_image: str | None
     model_ids: dict[Role, str]

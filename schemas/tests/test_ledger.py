@@ -156,6 +156,21 @@ def test_invalid_regex_is_rejected(kind, regex):
         )
 
 
+@pytest.mark.parametrize(
+    "regex",
+    ["a{4294967296}", "(" * 20000 + ")" * 20000],
+    ids=["repeat-count-overflow", "nesting-recursion"],
+)
+@pytest.mark.parametrize("kind", ["output_must_include", "output_must_not_include"])
+def test_regex_that_crashes_the_compiler_is_a_validation_error(kind, regex):
+    # Breaks if only re.error is caught: re.compile raises OverflowError / RecursionError
+    # for these, which would escape as a crash instead of a ValidationError.
+    with pytest.raises(ValidationError, match="invalid regex"):
+        Ledger.model_validate(
+            ledger_dict(constraint_dict(check={"type": kind, "regex": regex, "agent": "reviewer"}))
+        )
+
+
 def test_version_other_than_1_is_rejected():
     with pytest.raises(ValidationError):
         Ledger.model_validate({"version": 2, "constraints": [constraint_dict()]})

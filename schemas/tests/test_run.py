@@ -95,6 +95,13 @@ def test_run_record_missing_a_model_role_is_rejected():
         RunRecord.model_validate(_record_data(model_ids=model_ids))
 
 
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+def test_run_record_non_finite_cost_is_rejected(bad):
+    # Breaks if inf is accepted: it dumps as JSON null, so the record cannot be reloaded.
+    with pytest.raises(ValidationError):
+        RunRecord.model_validate(_record_data(cost_usd=bad))
+
+
 def test_run_record_negative_cost_is_rejected():
     with pytest.raises(ValidationError):
         RunRecord.model_validate(_record_data(cost_usd=-0.01))

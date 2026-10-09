@@ -23,8 +23,9 @@ NonEmptyStr = Annotated[str, Field(min_length=1)]
 def _check_regex(value: str) -> str:
     try:
         re.compile(value)
-    except re.error as exc:
-        raise ValueError(f"invalid regex {value!r}: {exc}") from exc
+    except (re.error, OverflowError, RecursionError) as exc:
+        # OverflowError: huge repeat count. RecursionError: very deep nesting.
+        raise ValueError(f"invalid regex {value[:80]!r}: {type(exc).__name__}: {exc}") from exc
     return value
 
 
