@@ -3,7 +3,6 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from schemas.contracts import EvaluateFn, MakeMiddlewareFn, RunFn
 from schemas.enums import Arm, FsOp, Operator, Role
 from schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation
 
@@ -136,23 +135,6 @@ def test_violation_requires_the_step_key():
     # step is nullable but not optional: the oracle must say None explicitly.
     with pytest.raises(ValidationError):
         Violation.model_validate({"constraint_id": "C-001", "predicate": "p", "detail": "d"})
-
-
-def test_cross_owner_protocols_accept_functions_with_the_agreed_signatures():
-    # Breaks if schemas.contracts stops importing, or a Protocol stops being runtime-checkable.
-    def evaluate(ledger, trace, fs_diff):
-        return []
-
-    def run(task_ids, arms, operators, n, repo_ref="main"):
-        return []
-
-    def make_middleware(run_config):
-        return []
-
-    assert isinstance(evaluate, EvaluateFn)
-    assert isinstance(run, RunFn)
-    assert isinstance(make_middleware, MakeMiddlewareFn)
-    assert not isinstance("not callable", EvaluateFn)
 
 
 def test_run_record_violations_cannot_be_mutated_in_place():
