@@ -2,7 +2,7 @@
 
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn, RunFn
-from schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation
+from schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation, is_comparable
 from schemas.trace import (
     EVENT,
     EVENT_LIST,
@@ -39,6 +39,7 @@ __all__ = [
     "ToolResult",
     "Violation",
     "dump_event_jsonl",
+    "is_comparable",
     "load_config",
     "parse_trace_jsonl",
 ]

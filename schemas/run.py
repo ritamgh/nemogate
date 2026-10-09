@@ -74,3 +74,15 @@ class RunRecord(BaseModel):
         if missing:
             raise ValueError(f"model_ids is missing roles: {', '.join(missing)}")
         return self
+
+
+def is_comparable(a: RunRecord, b: RunRecord) -> bool:
+    """True if two run records were produced under the same conditions and may be pooled.
+
+    SPEC "Reproducibility fields": two runs are comparable only if model_ids,
+    safe_config_hash, ledger_hash, repo_sha and lockfile_hash match.
+    Open choices: must all three model_ids match, or only the roles a run used?
+    Should repo_sha be compared, given the repair loop deliberately re-runs on a patched branch?
+    """
+    # TODO(user): implement — about 5 lines.
+    raise NotImplementedError
