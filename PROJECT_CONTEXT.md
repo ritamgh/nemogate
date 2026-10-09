@@ -4,7 +4,7 @@ A map for agents starting a session. The rules are in `AGENTS.md`, the plan is i
 
 ## Status (2026-10-09)
 
-The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, pytest `pythonpath=["."]`) and the shared `schemas/` exist (PR #1, pending B's approval). Next: the day-0 spike (FACTS sections 1–5), then `common/llm.py`.
+The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, pytest `pythonpath=["."]`) and the shared `schemas/` exist (PR #5, pending B's approval). Next: the day-0 spike (FACTS sections 1–5), then `common/llm.py`.
 
 ## Files
 
