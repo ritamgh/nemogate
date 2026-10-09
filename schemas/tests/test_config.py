@@ -60,3 +60,41 @@ def test_unknown_response_format_is_rejected():
     data["safe_config"]["response_format"] = "free_text"
     with pytest.raises(ValidationError):
         AppConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("field", ["input_usd_per_mtok", "output_usd_per_mtok", "temperature"])
+@pytest.mark.parametrize("bad", [-0.5, float("inf"), float("nan")])
+def test_negative_or_non_finite_price_and_temperature_are_rejected(field, bad):
+    # Breaks if a negative or non-finite price slips in: the spend guard would then
+    # compute a negative or infinite cost and under- or over-count the credit.
+    data = _committed_config_data()
+    data["models"]["helper"][field] = bad
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_non_positive_context_window_is_rejected(bad):
+    data = _committed_config_data()
+    data["models"]["helper"]["context_window"] = bad
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")])
+def test_non_finite_total_budget_is_rejected(bad):
+    # Breaks if an infinite budget disables the 80% stop.
+    data = _committed_config_data()
+    data["budget"]["total_usd"] = bad
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+def test_zero_price_and_zero_temperature_are_accepted():
+    # Guards against over-tightening: free models and greedy decoding are legitimate.
+    data = _committed_config_data()
+    data["models"]["helper"].update(
+        input_usd_per_mtok=0, output_usd_per_mtok=0.0, temperature=0, context_window=1
+    )
+    helper = AppConfig.model_validate(data).models[Role.helper]
+    assert (helper.input_usd_per_mtok, helper.temperature, helper.context_window) == (0, 0, 1)

@@ -1,12 +1,14 @@
 """The repo-root `config.yaml`: model ids, prices, temperatures, safe config and budget."""
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
 from schemas.enums import STRICT, Role
+
+NonNegativeFinite = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
 class TokenFactoryConfig(BaseModel):
@@ -17,10 +19,10 @@ class TokenFactoryConfig(BaseModel):
 class ModelConfig(BaseModel):
     model_config = STRICT
     id: str | None = None
-    input_usd_per_mtok: float | None = None
-    output_usd_per_mtok: float | None = None
-    temperature: float | None = None
-    context_window: int | None = None
+    input_usd_per_mtok: NonNegativeFinite | None = None
+    output_usd_per_mtok: NonNegativeFinite | None = None
+    temperature: NonNegativeFinite | None = None
+    context_window: Annotated[int, Field(gt=0)] | None = None
 
 
 class SafeConfig(BaseModel):
@@ -32,7 +34,7 @@ class SafeConfig(BaseModel):
 
 class BudgetConfig(BaseModel):
     model_config = STRICT
-    total_usd: float = Field(gt=0)
+    total_usd: float = Field(gt=0, allow_inf_nan=False)
     stop_at_fraction: float = Field(gt=0, le=1)
 
 
