@@ -56,7 +56,7 @@ class RunRecord(BaseModel):
     operator: Operator
     constraint_id: ConstraintId
     boundary: BoundaryId
-    violations: list[ConstraintId]
+    violations: tuple[ConstraintId, ...]
     task_success: bool
     tokens: dict[Role, Annotated[int, Field(ge=0)]]
     cost_usd: float = Field(ge=0)

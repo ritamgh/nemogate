@@ -79,7 +79,7 @@ def test_fs_change_with_empty_path_is_rejected():
 def test_spec_run_record_loads_with_role_keyed_tokens():
     record = RunRecord.model_validate_json(SPEC_RUN_RECORD)
     assert record.tokens == {Role.helper: 1200, Role.sut: 18400, Role.planner: 0}
-    assert record.violations == ["C-001"]
+    assert record.violations == ("C-001",)
     assert record.task_success is False
     assert record.cost_usd == 0.011
     assert record.model_ids[Role.sut] == "nvidia/nemotron-3-super-120b-a12b"
@@ -146,3 +146,11 @@ def test_cross_owner_protocols_accept_functions_with_the_agreed_signatures():
     assert isinstance(run, RunFn)
     assert isinstance(make_middleware, MakeMiddlewareFn)
     assert not isinstance("not callable", EvaluateFn)
+
+
+def test_run_record_violations_cannot_be_mutated_in_place():
+    # Breaks if `violations` is a list again: a frozen record could then be edited unvalidated.
+    record = RunRecord.model_validate_json(SPEC_RUN_RECORD)
+    with pytest.raises(AttributeError):
+        record.violations.append("C-002")
+    assert '"violations":["C-001"]' in record.model_dump_json()

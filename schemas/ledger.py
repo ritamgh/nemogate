@@ -32,13 +32,13 @@ class PathForbidden(BaseModel):
     model_config = STRICT
     type: Literal["path_forbidden"] = "path_forbidden"
     glob: NonEmptyStr
-    ops: list[FileOp] = Field(min_length=1)
+    ops: tuple[FileOp, ...] = Field(min_length=1)
 
 
 class FilesFrozen(BaseModel):
     model_config = STRICT
     type: Literal["files_frozen"] = "files_frozen"
-    globs: list[str] = Field(min_length=1)
+    globs: tuple[str, ...] = Field(min_length=1)
 
 
 class ToolForbidden(BaseModel):
@@ -101,7 +101,7 @@ class Constraint(BaseModel):
     kind: ConstraintKind
     source: Source
     authority: Authority
-    scope: list[AgentName] = Field(min_length=1)
+    scope: tuple[AgentName, ...] = Field(min_length=1)
     origin: Origin
     check: Check | None = None  # None = not compilable, reported as unverified
 
@@ -109,7 +109,7 @@ class Constraint(BaseModel):
 class Ledger(BaseModel):
     model_config = STRICT
     version: Literal[1]
-    constraints: list[Constraint]
+    constraints: tuple[Constraint, ...]
 
     @model_validator(mode="after")
     def _ids_are_unique(self) -> "Ledger":

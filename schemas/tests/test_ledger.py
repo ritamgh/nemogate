@@ -63,11 +63,11 @@ def test_spec_yaml_example_loads_with_path_forbidden_check():
     assert entry.kind is ConstraintKind.constraint
     assert entry.source is Source.user
     assert entry.authority is Authority.binding
-    assert entry.scope == ["coder", "reviewer"]
+    assert entry.scope == ("coder", "reviewer")
     assert entry.origin is Origin.declared
     assert isinstance(entry.check, PathForbidden)
     assert entry.check.glob == "migrations/**"
-    assert entry.check.ops == [FileOp.write, FileOp.delete]
+    assert entry.check.ops == (FileOp.write, FileOp.delete)
 
 
 @pytest.mark.parametrize(
@@ -98,7 +98,7 @@ def test_files_frozen_and_tool_arg_bound_keep_their_values():
     frozen = Constraint.model_validate(
         constraint_dict(check={"type": "files_frozen", "globs": ["a", "b/**"]})
     )
-    assert frozen.check.globs == ["a", "b/**"]
+    assert frozen.check.globs == ("a", "b/**")
     bound = Constraint.model_validate(
         constraint_dict(
             check={"type": "tool_arg_bound", "tool": "t", "arg": "n", "op": ">=", "value": 2.5}
@@ -272,3 +272,28 @@ def test_ledger_get_returns_entry_and_raises_keyerror_for_unknown_id():
     assert ledger.get("C-002").text == "Second"
     with pytest.raises(KeyError):
         ledger.get("C-003")
+
+
+def test_frozen_ledger_has_no_mutable_lists():
+    # Breaks if a list field comes back: `.append`/`.clear` on a frozen model would
+    # change a validated ledger without re-validation (e.g. dropping every constraint).
+    ledger = load_ledger_yaml(SPEC_LEDGER_YAML)
+    entry = ledger.constraints[0]
+    with pytest.raises(AttributeError):
+        ledger.constraints.append(entry)
+    with pytest.raises(AttributeError):
+        entry.scope.clear()
+    with pytest.raises(AttributeError):
+        entry.check.ops.clear()
+    frozen = FilesFrozen(globs=["a"])
+    with pytest.raises(AttributeError):
+        frozen.globs.clear()
+
+
+def test_ledger_with_tuple_fields_still_dumps_json_arrays():
+    # Breaks if the tuple fields stop serialising as JSON arrays (a reload would then fail).
+    ledger = load_ledger_yaml(SPEC_LEDGER_YAML)
+    dumped = ledger.model_dump_json()
+    assert '"scope":["coder","reviewer"]' in dumped
+    assert '"ops":["write","delete"]' in dumped
+    assert Ledger.model_validate_json(dumped) == ledger
