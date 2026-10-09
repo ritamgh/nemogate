@@ -1,6 +1,8 @@
 # Lint and format config shared by A and B. ruff is added as a dev dependency with the repo skeleton.
 target-version = "py312"
 line-length = 100
+# Docs are prose; ruff 0.16 would reformat their illustrative code blocks.
+extend-exclude = ["docs"]
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]
