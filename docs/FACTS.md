@@ -29,22 +29,22 @@ Row format used in every table: **Fact | Value | Status | Evidence | Date | Who*
 
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
-| Python version | | NOT YET CHECKED | | | |
-| `uv` version | | NOT YET CHECKED | | | |
-| OS, each machine | | NOT YET CHECKED | | | |
-| Hash of `uv.lock` | | NOT YET CHECKED | | | |
+| Python version | 3.12.13 (`.python-version` pins 3.12) | VERIFIED | `uv run python --version` | 2026-10-10 | A |
+| `uv` version | 0.11.17 | VERIFIED | `uv --version` | 2026-10-10 | A |
+| OS, each machine | A: Arch Linux, kernel 7.2.8-arch1-2. B: not yet recorded | VERIFIED (A only) | `/etc/os-release`, `uname -r` | 2026-10-10 | A |
+| Hash of `uv.lock` | Not a fixed fact: every run record computes `lockfile_hash` itself. First 16 hex of sha256 at commit 4145d51: `c55889feba4a62e2` | VERIFIED | `sha256sum uv.lock` | 2026-10-10 | A |
 
-Pinned packages (exact versions, from the lockfile):
+Pinned packages (exact versions, from the lockfile; `uv pip list` on 2026-10-10):
 
 | Package | Pinned version | Notes |
 | --- | --- | --- |
-| `deepagents` | | |
-| `langgraph` | | |
-| LangGraph SQLite checkpointer package | | |
-| `langchain-openai` | | |
-| Contree SDK: `contree-sdk` (UNVERIFIED, from the Python quickstart docs) | docs pin `0.3.6` | Confirm in the spike |
-| `pydantic` | | |
-| `pytest` | | |
+| `deepagents` | 0.7.23 | |
+| `langgraph` | 1.2.14 | `langgraph-checkpoint` 4.2.0 comes with it |
+| LangGraph SQLite checkpointer package | `langgraph-checkpoint-sqlite` 3.1.1 | |
+| `langchain-openai` | 1.7.0 | Pulls `langchain-core` 1.6.9, `openai` 3.27.0 |
+| Contree SDK: `contree-sdk` | 0.3.6 | Pinned exactly (`==`) to the version the Python quickstart names |
+| `pydantic` | 2.14.0 | |
+| `pytest` | 9.1.1 | |
 
 ## 2. Token Factory
 
