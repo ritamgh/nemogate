@@ -192,10 +192,25 @@ Add a row whenever something surprises you. Newest first.
 
 | Date | What surprised us | Workaround | Who |
 | --- | --- | --- | --- |
-| | | | |
+| 2026-10-10 | contree-sdk: if `NEBIUS_API_KEY` or `NEBIUS_PROJECT_ID` is unset, construction still succeeds and the variable *name* is sent as the credential (§3). A stale `~/.config/contree/auth.ini` can also fill them silently | `common/` checks both env vars are present and non-empty before building a client | A |
+| 2026-10-10 | `ContreeSandbox(sync_session)` copies the session, so the caller's handle never advances, and there is no public accessor for the current image | Pass the async `ContreeSession`; track `session.uuid` ourselves at each boundary | A |
+| 2026-10-10 | Every sandbox write and execute creates a new image; the SDK has no image delete | Measure retention in the live check before any sweep | A |
+| 2026-10-10 | Middleware passed to `create_deep_agent` runs on the planner only, not inside subagents (§4) | Gate the delegation boundary from the planner; anything that must run in a subagent goes in that subagent spec's `middleware` | B |
+| 2026-10-10 | A middleware with only `wrap_tool_call` raises NotImplementedError under `ainvoke` | Implement both `wrap_tool_call` and `awrap_tool_call` | B |
+| 2026-10-10 | The `task` tool returns a `Command`, not a `ToolMessage`; the subagent's reply is the `ToolMessage` inside `Command.update["messages"]` | The return-boundary gate handles both result types | B |
+| 2026-10-10 | `execute` and `delete` are exposed to every agent on a `BaseSandbox` backend; restricting tools on the planner alone leaves subagents with them | Set `FilesystemMiddleware(tools=[...])` on the planner and in every subagent spec | A |
+| 2026-10-10 | Deep Agents auto-adds a `general-purpose` subagent with every tool, so the planner can delegate around `coder`/`reviewer` | Define a subagent named `general-purpose` or disable it, in `refapp/` | A |
+| 2026-10-10 | A `"openai:..."` model string defaults to the Responses API; the Nemotron profile applies only to string specs such as `nebius:...` | `get_model` returns a `ChatOpenAI` instance on Chat Completions; decide on the profile in the live check | A |
+| 2026-10-10 | Resuming the pre-`tools` checkpoint re-runs the `task` tool (the subagent runs again). Forks branch on the same `thread_id`; `SqliteSaver.copy_thread` is not implemented | Fork on the same thread with distinct checkpoint configs; keep the AIMessage and tool_call `id`s when rewriting | A |
+| 2026-10-10 | Inside `wrap_tool_call`, `configurable["checkpoint_id"]` is None; the boundary checkpoint is `configurable["checkpoint_map"][""]` | Use `checkpoint_map[""]`, or scan `get_state_history` after the run | A, B |
+| 2026-10-10 | `SqliteSaver` fails under `ainvoke`; `AsyncSqliteSaver` fails under sync `invoke` from the loop thread. One shared saver serialises writes | Pick one mode for the whole pipeline; one process or one saver per worker for sweeps | A |
 
 ## 10. Open questions
 
 | Question | Owner | Needed by |
 | --- | --- | --- |
-| | | |
+| Do Nemotron Super and Ultra on Token Factory emit valid `task` tool calls (`description`, `subagent_type`), and do they use `file_path` (not `path`) for file tools? | A | Live hello-world run |
+| Sandbox limits: fork latency, concurrency and rate limits, network access, command-timeout result, image retention, cost unit of `result.cost` (§3 live checks) | A | Before the first sweep |
+| Is the repo state at a boundary exactly `session.uuid`, and does a fork see files written in the sandbox after the fork point? | A | `replay/` fork |
+| With several `task` calls in one AIMessage, all share one pre-`tools` checkpoint; forking one needs its tool_call id. Untested | A, B | `replay/` and `gate/` |
+| Hide `execute` from the reference team, or leave it on? | A | `refapp/` |

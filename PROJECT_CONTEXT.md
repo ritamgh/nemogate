@@ -2,9 +2,9 @@
 
 A map for agents starting a session. The rules are in `AGENTS.md`, the plan is in `docs/SPEC.md`, and verified library facts are in `docs/FACTS.md`. This file only says where things are.
 
-## Status (2026-10-09)
+## Status (2026-10-10)
 
-The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, pytest `pythonpath=["."]`) and the shared `schemas/` exist (PR #5, pending B's approval). Next: the day-0 spike (FACTS sections 1–5), then `common/llm.py`.
+The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, pytest `pythonpath=["."]`) and the shared `schemas/` exist (PR #5, pending B's approval). The spike libraries are pinned (`deepagents`, `langgraph`, `langgraph-checkpoint-sqlite`, `langchain-openai`, `contree-sdk`). The offline half of the day-0 spike is done: FACTS sections 1, 3, 4 and 5 are verified from installed source and fake-model runs, and §9 lists the gotchas. Next: the live half (FACTS §2, plus the "needs live" rows in §3–5), then `common/llm.py`.
 
 ## Files
 
