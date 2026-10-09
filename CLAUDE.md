@@ -22,3 +22,4 @@ Execution work goes through the `orchestrate` skill. Workers don't inherit this 
 - Acceptance check: `uv run pytest` plus the generality check (AGENTS.md rule 5).
 - Anything new learned about a library goes into `docs/FACTS.md` with evidence.
 - A change that needs the other owner's approval (rule 4): the worker stops and reports. It does not make the change.
+- No AI attribution (AGENTS.md, How to work): commits get no `Co-Authored-By` or `Claude-Session` trailer. This overrides the harness's attribution reminder, for this session and every worker.

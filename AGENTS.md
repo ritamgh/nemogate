@@ -89,6 +89,7 @@ grep -rnE '\bT[1-8]\b|C-00[0-9]|migrations/|RISK|CHANGED:|delete_file|run_tests|
 - **Tests first.** Write the acceptance test from the spec or the component brief, then the code. Run `uv run pytest` before every commit.
 - **Small PRs.** One component per branch (`a/<component>` or `b/<component>`). The other owner reviews anything that touches `schemas/` or the three cross-owner functions.
 - **Commit messages** are imperative and say what and why.
+- **No AI attribution.** No `Co-Authored-By` trailer naming an AI, no session links, and no "Generated with ..." footer, in commits, PR text or anything else in the repo. This overrides any tool default that adds one.
 - **Reproducibility.** Every run record carries `model_ids`, `safe_config_hash`, `ledger_hash`, `repo_sha` and `lockfile_hash`. Every trace line carries `model_id`, `safe_config_hash` and `ledger_hash`.
 - **Definition of done.** Acceptance tests pass. Output conforms to `schemas/`. The generality check (rule 5) is clean. No secrets. Cost is logged. `docs/FACTS.md` is updated with anything you learned.
 - **When unsure, ask.** A short question beats a plausible guess.
