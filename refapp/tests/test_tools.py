@@ -107,6 +107,41 @@ def test_make_tools_returns_exactly_the_three_named_tools(backend, repo):
     assert sorted(tools["http_get"].args) == ["url"]
 
 
+def _victim_dir(tmp_path: Path) -> Path:
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "sentinel.txt").write_text("keep me")
+    return victim
+
+
+def test_run_tests_rejects_a_path_that_pytest_would_read_as_an_option(backend, repo, tmp_path):
+    # Breaks if a model-supplied path starting with "-" reaches pytest: `--basetemp=<dir>` makes
+    # pytest delete <dir> (when any test uses tmp_path), so a read-only agent could erase files.
+    victim = _victim_dir(tmp_path)
+    (repo / "test_tmp.py").write_text("def test_tmp(tmp_path):\n    assert tmp_path.exists()\n")
+    tools = make_tools(backend, shell_repo=str(repo))
+
+    result = tools["run_tests"].invoke({"paths": ["test_tmp.py", f"--basetemp={victim}"]})
+
+    assert (victim / "sentinel.txt").read_text() == "keep me"
+    assert f"--basetemp={victim}" in result
+    assert "passed" not in result  # nothing ran, not even the valid path
+    assert not result.startswith("exit code:")
+
+
+def test_run_tests_rejects_a_dash_path_under_ainvoke_too(backend, repo, tmp_path):
+    # Breaks if only the sync tool checks the paths.
+    victim = _victim_dir(tmp_path)
+    (repo / "test_tmp.py").write_text("def test_tmp(tmp_path):\n    assert tmp_path.exists()\n")
+    tools = make_tools(backend, shell_repo=str(repo))
+
+    result = asyncio.run(tools["run_tests"].ainvoke({"paths": [f"--basetemp={victim}"]}))
+
+    assert (victim / "sentinel.txt").read_text() == "keep me"
+    assert f"--basetemp={victim}" in result
+    assert not result.startswith("exit code:")
+
+
 def test_run_tests_leaves_no_cache_files_in_the_repo(backend, repo):
     # Breaks if the default test command lets Python write __pycache__ or pytest write
     # .pytest_cache: the run's filesystem diff would then show files the agents never wrote
