@@ -23,8 +23,12 @@ def test_committed_config_yaml_loads():
     assert config.models[Role.helper].temperature == 0
     assert config.models[Role.planner].temperature == 0
     assert config.models[Role.sut].temperature is None
-    assert config.models[Role.sut].id is None
-    assert config.token_factory.base_url is None
+    # Exact IDs from GET /v1/models (docs/FACTS.md §2); the casing differs per model on purpose.
+    assert config.models[Role.helper].id == "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B"
+    assert config.models[Role.sut].id == "nvidia/nemotron-3-super-120b-a12b"
+    assert config.models[Role.planner].id == "nvidia/Nemotron-3-Ultra-550b-a55b"
+    assert config.models[Role.planner].output_usd_per_mtok == 3.0
+    assert config.token_factory.base_url == "https://api.tokenfactory.nebius.com/v1"
     assert config.safe_config.response_format is None
 
 

@@ -50,20 +50,20 @@ Pinned packages (exact versions, from the lockfile; `uv pip list` on 2026-10-10)
 
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
-| Base URL | | NOT YET CHECKED | | | |
-| Env var that holds the key (name only) | `NEBIUS_API_KEY`; the same key serves Sandboxes | UNVERIFIED | docs.tokenfactory.nebius.com/sandboxes/start/set-up-access | 2026-10-09 | A |
-| Nano model ID, from `GET /v1/models` | | NOT YET CHECKED | | | |
-| Super model ID | | NOT YET CHECKED | | | |
-| Ultra model ID | | NOT YET CHECKED | | | |
-| Context window, each model | | NOT YET CHECKED | | | |
-| Input price per 1M tokens, each model, and the date copied | | NOT YET CHECKED | | | |
-| Output price per 1M tokens, each model | | NOT YET CHECKED | | | |
+| Base URL | `https://api.tokenfactory.nebius.com/v1` (OpenAI-compatible) | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) returned the model list | 2026-10-10 | A |
+| Env var that holds the key (name only) | `NEBIUS_API_KEY`; the same key serves Sandboxes | UNVERIFIED | `.env` defines it and `GET /v1/models?verbose=true` (output kept outside the repo) succeeded with it as the Bearer token (2026-10-10); not checked whether `/v1/models` needs auth, and the Sandboxes half is unchecked. docs.tokenfactory.nebius.com/sandboxes/start/set-up-access | 2026-10-09 | A |
+| Nano model ID, from `GET /v1/models` | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` (capitalised; the spec's lowercase form is wrong) | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) | 2026-10-10 | A |
+| Super model ID | `nvidia/nemotron-3-super-120b-a12b` | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) | 2026-10-10 | A |
+| Ultra model ID | `nvidia/Nemotron-3-Ultra-550b-a55b` (capital N and U) | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) | 2026-10-10 | A |
+| Context window, each model | Nano 262144, Super 262144, Ultra 1048576 | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo), `context_length` | 2026-10-10 | A |
+| Input price per 1M tokens, each model, and the date copied | Nano $0.06, Super $0.30, Ultra $1.00 (copied 2026-10-10) | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo), `pricing.prompt` is USD per token | 2026-10-10 | A |
+| Output price per 1M tokens, each model | Nano $0.24, Super $0.90, Ultra $3.00. `request` price is 0 and `input_cache_read` is null for all three | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo), `pricing.completion` | 2026-10-10 | A |
 | `json_schema` supported | | NOT YET CHECKED | | | |
 | `json_object` supported | | NOT YET CHECKED | | | |
 | Tool calls come back as native `tool_calls` | | NOT YET CHECKED | | | |
 | How thinking mode is switched on or off (parameter, default) | | NOT YET CHECKED | | | |
 | Is `seed` honoured | | NOT YET CHECKED | | | |
-| Rate limits | | NOT YET CHECKED | | | |
+| Rate limits | Per model: Nano 100 req/min and 800k tok/min; Super and Ultra 300 req/min and 200k tok/min each. Nano is served from eu-north1, Super and Ultra from us-central1 | VERIFIED (live, free) as advertised; not load-tested | `GET /v1/models?verbose=true` (output kept outside the repo), `per_request_limits`, `regions` | 2026-10-10 | A |
 | Credits: total, per person, whether they pool into the shared project | | NOT YET CHECKED | | | |
 
 ## 3. Sandboxes and Contree
@@ -192,6 +192,7 @@ Add a row whenever something surprises you. Newest first.
 
 | Date | What surprised us | Workaround | Who |
 | --- | --- | --- | --- |
+| 2026-10-10 | Model IDs are inconsistently cased: Nano and Ultra have capitals, Super is lowercase. The spec and the schema test fixture use all-lowercase IDs | Read IDs only from `config.yaml`; never hard-code or lowercase them | A |
 | 2026-10-10 | contree-sdk: if `NEBIUS_API_KEY` or `NEBIUS_PROJECT_ID` is unset, construction still succeeds and the variable *name* is sent as the credential (§3). A stale `~/.config/contree/auth.ini` can also fill them silently | `common/` checks both env vars are present and non-empty before building a client | A |
 | 2026-10-10 | `ContreeSandbox(sync_session)` copies the session, so the caller's handle never advances, and there is no public accessor for the current image | Pass the async `ContreeSession`; track `session.uuid` ourselves at each boundary | A |
 | 2026-10-10 | Every sandbox write and execute creates a new image; the SDK has no image delete | Measure retention in the live check before any sweep | A |
@@ -214,3 +215,5 @@ Add a row whenever something surprises you. Newest first.
 | Is the repo state at a boundary exactly `session.uuid`, and does a fork see files written in the sandbox after the fork point? | A | `replay/` fork |
 | With several `task` calls in one AIMessage, all share one pre-`tools` checkpoint; forking one needs its tool_call id. Untested | A, B | `replay/` and `gate/` |
 | Hide `execute` from the reference team, or leave it on? | A | `refapp/` |
+| `nvidia/Nemotron-3_5-Lightning` is also listed: same price as Nano, 1M context, 600 req/min, tools and reasoning. Use it as `helper` instead of Nano? | A, B | C0 preflight |
+| All four list `tools` and `reasoning` in `supported_features`; does that mean native `tool_calls` and a thinking switch on Chat Completions? (§2 rows still open) | A | Live hello-world run |
