@@ -67,6 +67,17 @@ Pinned packages (exact versions, from the lockfile; `uv pip list` on 2026-10-10)
 | Rate limits | Per model: Nano 100 req/min and 800k tok/min; Super and Ultra 300 req/min and 200k tok/min each. Nano is served from eu-north1, Super and Ultra from us-central1 | VERIFIED (live, free) as advertised; not load-tested | `GET /v1/models?verbose=true` (output kept outside the repo), `per_request_limits`, `regions` | 2026-10-10 | A |
 | Credits: total, per person, whether they pool into the shared project | | NOT YET CHECKED | | | |
 
+### langchain-core 1.6.9 and langchain-openai 1.7.0, as used by `common/llm.py`
+
+| Fact | Value | Status | Evidence | Date | Who |
+| --- | --- | --- | --- | --- | --- |
+| A callback that raises in `on_chat_model_start` | With `raise_error = True` on the handler it aborts the call before any HTTP request, for `invoke`, `ainvoke` and a `bind_tools` model. With the default `raise_error = False` the error is only logged at WARNING (as `repr(e)`) and the request is still sent | VERIFIED (offline run) | `common/tests/test_llm_live.py` cap tests with an `httpx.MockTransport` counting requests; flipping `raise_error` makes 3 tests fail | 2026-10-10 | A (worker L1/L1b) |
+| Callbacks passed to the `ChatOpenAI` constructor survive `bind_tools(...)` and `bind(...)` | Yes | VERIFIED (offline run) | `test_bind_tools_wrapped_model_still_logs` | 2026-10-10 | A (worker L1/L1b) |
+| Where usage lands on a Chat Completions result | `generation.message.usage_metadata` (`input_tokens`, `output_tokens`, `total_tokens`); a response without `usage` gives none. With `n>1` the single usage object is copied onto every candidate, so summing across generations bills it n times | VERIFIED (offline run) | `test_several_candidates_are_billed_once_not_per_candidate` | 2026-10-10 | A (worker L1/L1b) |
+| Which callbacks fire on failure | `on_chat_model_start` and `on_llm_end` get the same `run_id` UUID. An abandoned stream, an HTTP error, or a `with_structured_output(method="json_schema")` validation failure (raised inside `_generate`) never fires `on_llm_end` | VERIFIED (offline run) | `test_an_interrupted_stream_stays_counted_at_its_reserve`, `test_structured_output_that_fails_validation_stays_counted` | 2026-10-10 | A (worker L1/L1b) |
+| SDK retries | `ChatOpenAI(max_retries=2)` re-sends inside one model call without firing the callbacks again; `max_retries=0` sends one request | VERIFIED (offline run) | `test_http_error_leaves_the_reserve_counted_and_is_not_retried` (fails with `max_retries=2`) | 2026-10-10 | A (worker L1/L1b) |
+| Methods a `ChatOpenAI` subclass must override to see every provider error | `_generate`, `_agenerate`, `_stream`, `_astream` (`ChatOpenAI` overrides the two stream methods of `BaseChatOpenAI`) | VERIFIED (source) | `langchain_openai/chat_models/base.py`; `test_a_provider_error_that_echoes_the_key_is_redacted` | 2026-10-10 | A (worker L1/L1b) |
+
 ## 3. Sandboxes and Contree
 
 | Fact | Value | Status | Evidence | Date | Who |
@@ -193,6 +204,7 @@ Add a row whenever something surprises you. Newest first.
 
 | Date | What surprised us | Workaround | Who |
 | --- | --- | --- | --- |
+| 2026-10-10 | The spend log is per machine (`<main checkout>/runs/spend.jsonl`, shared by all worktrees), but A and B share one $30 budget, so each machine's 80% cap sees only its own spend | Check the Token Factory dashboard before any sweep; a per-person budget split is an open question | A |
 | 2026-10-10 | Model IDs are inconsistently cased: Nano and Ultra have capitals, Super is lowercase. The spec and the schema test fixture use all-lowercase IDs | Read IDs only from `config.yaml`; never hard-code or lowercase them | A |
 | 2026-10-10 | contree-sdk: if `NEBIUS_API_KEY` or `NEBIUS_PROJECT_ID` is unset, construction still succeeds and the variable *name* is sent as the credential (§3). A stale `~/.config/contree/auth.ini` can also fill them silently | `common/` checks both env vars are present and non-empty before building a client | A |
 | 2026-10-10 | `ContreeSandbox(sync_session)` copies the session, so the caller's handle never advances, and there is no public accessor for the current image | Pass the async `ContreeSession`; track `session.uuid` ourselves at each boundary | A |
@@ -216,5 +228,6 @@ Add a row whenever something surprises you. Newest first.
 | Is the repo state at a boundary exactly `session.uuid`, and does a fork see files written in the sandbox after the fork point? | A | `replay/` fork |
 | With several `task` calls in one AIMessage, all share one pre-`tools` checkpoint; forking one needs its tool_call id. Untested | A, B | `replay/` and `gate/` |
 | Hide `execute` from the reference team, or leave it on? | A | `refapp/` |
+| Split the $30 budget per person (each machine's cap = 80% of its share), or keep one total and rely on the dashboard? Needs a `config.yaml` change if split | A, B | Before the first sweep |
 | Helper is now Lightning (same size and price as Nano, 6× the request limit). Confirm in the live spike that it returns valid structured JSON at least as reliably as Nano on the same helper prompt; switch back if not, before the first sweep | A | Live spike |
 | All four list `tools` and `reasoning` in `supported_features`; does that mean native `tool_calls` and a thinking switch on Chat Completions? (§2 rows still open) | A | Live hello-world run |
