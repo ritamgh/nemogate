@@ -99,6 +99,18 @@ def test_the_reserve_counts_message_text_and_bound_tools(live, config_path, spen
     assert with_tool["est_input_tokens"] > 1000
 
 
+def test_the_reserve_covers_a_larger_max_tokens(live, config_path, spend_log):
+    # Breaks if the output reserve ignores max_tokens: a failed 20000-token call would stay
+    # counted at only the 4096-token default.
+    transport = Transport()
+    model = get_model("sut", config_path=config_path, **transport.clients)
+    model.bind(max_tokens=20000).invoke("hi")
+    model.invoke("hi")
+    big, default = read_kind(spend_log, "reserve")
+    assert big["est_output_tokens"] == 20000
+    assert default["est_output_tokens"] == 4096
+
+
 def test_ainvoke_logs_one_settle(live, config_path, spend_log):
     # Breaks if the handler only fires on the sync path (Deep Agents may call async).
     transport = Transport()

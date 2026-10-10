@@ -93,7 +93,8 @@ class SpendHandler(BaseCallbackHandler):
         self, serialized: Any, messages: Any, *, run_id: Any, **kwargs: Any
     ) -> None:
         chars = sum(len(str(m.content)) for batch in messages for m in batch)
-        tools = (kwargs.get("invocation_params") or {}).get("tools")
+        params = kwargs.get("invocation_params") or {}
+        tools = params.get("tools")
         if tools:
             chars += len(json.dumps(tools, default=str))
         admit(
@@ -102,7 +103,7 @@ class SpendHandler(BaseCallbackHandler):
             str(self.model_cfg.id),
             str(run_id),
             math.ceil(chars / CHARS_PER_TOKEN),
-            RESERVE_OUTPUT_TOKENS,
+            max(RESERVE_OUTPUT_TOKENS, params.get("max_tokens") or 0),
             self.model_cfg,
         )
 

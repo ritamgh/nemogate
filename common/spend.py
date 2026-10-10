@@ -38,15 +38,16 @@ def _default_log_path(repo_root: Path) -> Path:
     """`runs/spend.jsonl` of the main checkout, so every git worktree shares one log."""
     try:
         out = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            ["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
             cwd=repo_root,
             capture_output=True,
             text=True,
             timeout=5,
             check=True,
-        ).stdout.strip()
-        if out:
-            return Path(out).parent / "runs" / "spend.jsonl"
+        ).stdout.split("\n")
+        # Only trust git when repo_root is itself the checkout, not a folder inside another repo.
+        if len(out) >= 2 and Path(out[0]).resolve() == repo_root.resolve():
+            return Path(out[1]).parent / "runs" / "spend.jsonl"
     except (OSError, subprocess.SubprocessError):
         pass
     return repo_root / "runs" / "spend.jsonl"

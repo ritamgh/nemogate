@@ -73,6 +73,19 @@ def test_outside_a_checkout_the_log_falls_back_to_the_repo_root(monkeypatch, tmp
     assert spend_log_path() == plain / "runs" / "spend.jsonl"
 
 
+def test_a_plain_folder_inside_another_repo_does_not_borrow_its_log(monkeypatch, tmp_path):
+    # Breaks if a checkout without git metadata that sits inside an unrelated repo (e.g. a
+    # dotfiles repo in $HOME) routes spend to that repo's runs/ instead of its own.
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    _git(outer, "init", "-q")
+    plain = outer / "project"
+    plain.mkdir()
+    monkeypatch.delenv("NEMOGATE_SPEND_LOG")
+    monkeypatch.setattr(common.env, "REPO_ROOT", plain)
+    assert spend_log_path() == plain / "runs" / "spend.jsonl"
+
+
 def test_append_creates_parent_dir_and_writes_documented_fields(monkeypatch, tmp_path):
     # Breaks if the log line drops a field, or a missing runs/ dir crashes the first call.
     target = tmp_path / "deep" / "dir" / "spend.jsonl"
