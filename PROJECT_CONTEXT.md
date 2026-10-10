@@ -4,7 +4,7 @@ A map for agents starting a session. The rules are in `AGENTS.md`, the plan is i
 
 ## Status (2026-10-10)
 
-The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, pytest `pythonpath=["."]`) and the shared `schemas/` exist (PRs #5 and #7, merged). The spike libraries are pinned (`deepagents`, `langgraph`, `langgraph-checkpoint-sqlite`, `langchain-openai`, `contree-sdk`). The offline half of the day-0 spike is done: FACTS sections 1, 3, 4 and 5 are verified from installed source and fake-model runs, and §9 lists the gotchas. FACTS §2 has the model IDs, prices and limits from the free models list; the helper is Nemotron 3.5 Lightning (PR #10). `common/llm.py` and the spend cap exist (branch `ritgh/llm`). Next: the live spike through `get_model`.
+The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, pytest `pythonpath=["."]`) and the shared `schemas/` exist (PRs #5 and #7, merged). The spike libraries are pinned (`deepagents`, `langgraph`, `langgraph-checkpoint-sqlite`, `langchain-openai`, `contree-sdk`). The offline half of the day-0 spike is done: FACTS sections 1, 3, 4 and 5 are verified from installed source and fake-model runs, and §9 lists the gotchas. FACTS §2 has the model IDs, prices and limits from the free models list; the helper is Nemotron 3.5 Lightning (PR #10). `common/llm.py` and the spend cap exist (branch `ritgh/llm`). The live spike ran on 2026-10-10 ($0.024): FACTS §2–5 are now verified live (structured output, tool calls, thinking switch, sandbox limits, a planner + subagent run in Contree with both forks). Next: C0 preflight (safe config), the reference app, task check scripts, the minimal runner.
 
 ## Files
 
@@ -31,6 +31,7 @@ The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, py
 
 - Frozen pydantic models raise `ValidationError` (not `AttributeError`) on assignment. Dict fields inside them (`ToolCall.args`, `RunRecord.tokens`/`model_ids`, `AppConfig.models`) are still mutable: treat as read-only.
 - `RunRecord.tokens` is keyed by role (helper/sut/planner), unlike the spec example (nano/super/ultra).
+- Thinking is on by default on every Nemotron model and billed as output tokens; turn it off with `extra_body={"chat_template_kwargs": {"enable_thinking": False}}`. Use `json_schema`, not `json_object` (Super ignores the latter). A sandbox command that times out leaves the Contree session `FAILED`: rebuild from the last good `session.uuid`.
 - Spend: every live call first reserves an estimate (input chars/3 plus 4096 output tokens, or `max_tokens` if larger) and then settles at real usage. A failed, cut-off or usage-less call stays counted at its reserve, so the total runs slightly ahead of real spend. The log lives in the main checkout's `runs/spend.jsonl`, shared by all worktrees; `NEMOGATE_SPEND_LOG` overrides it (tests do).
 - Trace JSONL is split on `\n` only; never use `str.splitlines()` on it (it splits on U+2028 inside JSON strings).
 - ruff excludes `docs/` (ruff 0.16 would reformat code blocks in the spec).
