@@ -135,6 +135,21 @@ def test_run_record_blank_identity_field_is_rejected(field, blank):
         RunRecord.model_validate(_record_data(**{field: blank}))
 
 
+@pytest.mark.parametrize("field", ["checkpoint_id", "contree_image"])
+@pytest.mark.parametrize("blank", ["", " ", "\n"], ids=["empty", "space", "newline"])
+def test_run_record_blank_replay_handle_is_rejected(field, blank):
+    # Breaks if a blank handle is accepted: replay would try to fork from a checkpoint or
+    # sandbox snapshot that does not exist, instead of failing when the record is written.
+    with pytest.raises(ValidationError):
+        RunRecord.model_validate(_record_data(**{field: blank}))
+
+
+@pytest.mark.parametrize("field", ["checkpoint_id", "contree_image"])
+def test_run_record_replay_handle_may_be_none(field):
+    # Breaks if None stops being allowed: a run that was never forked has no handle.
+    assert getattr(RunRecord.model_validate(_record_data(**{field: None})), field) is None
+
+
 @pytest.mark.parametrize("field", ["run_id", "task_id", "ledger_path", "trace_path"])
 def test_run_config_blank_field_is_rejected(field):
     with pytest.raises(ValidationError):
