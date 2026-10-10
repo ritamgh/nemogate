@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from refapp.seedenv import SEED_DIR, materialize, run_seed_python, task_success
+from refapp.seedenv import (
+    SEED_DIR,
+    _write_overlay_file,
+    materialize,
+    run_seed_python,
+    task_success,
+)
 
 
 def seed_files() -> dict[str, str]:
@@ -194,6 +200,57 @@ def test_materialize_rejects_delete_of_a_missing_file(tmp_path):
         materialize(tmp_path / "repo", overlay)
 
 
+def test_materialize_refuses_a_dest_that_is_not_empty(tmp_path):
+    # Fails if materialize merges into a directory that already holds something.
+    dest = tmp_path / "repo"
+    dest.mkdir()
+    (dest / "stray.txt").write_text("keep")
+
+    with pytest.raises(ValueError, match="not an empty directory"):
+        materialize(dest)
+
+    assert tree(dest) == {"stray.txt"}
+
+
+def test_materialize_accepts_an_existing_empty_dest(tmp_path):
+    dest = tmp_path / "repo"
+    dest.mkdir()
+
+    assert tree(materialize(dest)) == set(seed_files())
+
+
+def test_materialize_never_writes_through_a_symlink_in_dest(tmp_path):
+    # Fails if an overlay file is written through dest/app -> sibling/app (outside dest).
+    sibling = tmp_path / "elsewhere"
+    (sibling / "app").mkdir(parents=True)
+    dest = tmp_path / "repo"
+    dest.mkdir()
+    (dest / "app").symlink_to(sibling / "app", target_is_directory=True)
+    overlay = write_overlay(tmp_path / "overlay", {"app/new_module.py": "VALUE = 1\n"})
+
+    with pytest.raises(ValueError):
+        materialize(dest, overlay)
+
+    assert list((sibling / "app").iterdir()) == []
+
+
+def test_write_overlay_file_refuses_a_symlinked_parent(tmp_path):
+    # Fails if the per-file parent check is dropped: it is what stops a write through a symlink
+    # that appears in dest after the emptiness check.
+    sibling = tmp_path / "elsewhere"
+    sibling.mkdir()
+    dest = tmp_path / "repo"
+    dest.mkdir()
+    (dest / "app").symlink_to(sibling, target_is_directory=True)
+    source = tmp_path / "new_module.py"
+    source.write_text("VALUE = 1\n")
+
+    with pytest.raises(ValueError, match="symlink"):
+        _write_overlay_file(source, dest, Path("app/new_module.py"))
+
+    assert list(sibling.iterdir()) == []
+
+
 # --- init_db and overlay migrations ----------------------------------------------------------
 
 
@@ -307,3 +364,23 @@ def test_task_success_runs_the_check_in_the_repo_directory(tmp_path):
     )
 
     assert task_success(repo, check) == (True, "")
+
+
+def test_task_success_leaves_no_python_caches_in_the_repo(tmp_path):
+    # Fails if pytest or the check writes .pytest_cache or __pycache__ into the repo under test.
+    repo = materialize(tmp_path / "repo")
+    check = tmp_path / "check_import.py"
+    check.write_text(
+        "import os, sys\nsys.path.insert(0, os.getcwd())\nimport app\nraise SystemExit(0)\n"
+    )
+
+    assert task_success(repo, check) == (True, "")
+
+    assert (
+        sorted(
+            p.relative_to(repo).as_posix()
+            for p in repo.rglob("*")
+            if p.name in {"__pycache__", ".pytest_cache"} or p.suffix == ".pyc"
+        )
+        == []
+    )

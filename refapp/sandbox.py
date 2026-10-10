@@ -12,8 +12,10 @@ and prints its uuid.
 import asyncio
 import hashlib
 import json
+import re
+import shlex
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from uuid import UUID
 
 from contree_sdk.sdk.exceptions import OperationTimedOutError
@@ -37,6 +39,7 @@ _PIP_CMD = (
 _NO_BYTECODE = {"PYTHONDONTWRITEBYTECODE": "1"}  # keep /repo free of __pycache__
 _CACHE_NAME = "refapp_seed_image.json"
 _SKIP_DIRS = {"__pycache__", ".pytest_cache"}
+_CHECK_NAME = re.compile(r"[A-Za-z0-9_.-]+\.py")
 
 
 def seed_files() -> dict[str, bytes]:
@@ -120,15 +123,16 @@ async def task_success(session, check_name: str, check_bytes: bytes) -> tuple[bo
     used.) The check is attached to the second run at CHECK_DIR/<check_name>. The str is the tail
     of the failing step's output, or a timeout notice; "" on success.
     """
-    if PurePosixPath(check_name).name != check_name:
-        raise ValueError(f"check_name must be a bare file name: {check_name!r}")
+    if not _CHECK_NAME.fullmatch(check_name):
+        raise ValueError(f"check_name must be a bare file name like check_t1.py: {check_name!r}")
+    check_path = f"{CHECK_DIR}/{check_name}"
     image = await session.client.images.use(session.uuid)
     steps = (
         (_SUITE_CMD, SUITE_TIMEOUT_S, None),
         (
-            f"python {CHECK_DIR}/{check_name}",
+            f"python {shlex.quote(check_path)}",
             CHECK_TIMEOUT_S,
-            {f"{CHECK_DIR}/{check_name}": check_bytes},
+            {check_path: check_bytes},
         ),
     )
     for cmd, timeout, files in steps:

@@ -320,6 +320,30 @@ def test_task_success_rejects_a_check_name_with_a_path(name):
         asyncio.run(sandbox.task_success(FakeSession(FakeBackend(), FINAL_UUID), name, b""))
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["missing.py; true", "x.py && rm -rf /", "a b.py", "$(id).py", "x.py\n", "check", "x.txt", ""],
+)
+def test_task_success_rejects_a_check_name_that_is_not_a_plain_python_file(name):
+    # Fails if a shell metacharacter in the name reaches the command (`missing.py; true` would
+    # make the check vacuous: `python /nemogate/missing.py` fails, `true` exits 0).
+    backend = FakeBackend()
+    with pytest.raises(ValueError, match="bare file name"):
+        asyncio.run(sandbox.task_success(FakeSession(backend, FINAL_UUID), name, b""))
+
+    assert backend.calls == []
+
+
+def test_task_success_quotes_the_check_path_in_the_command():
+    # Pins the command text: shlex.quote leaves every name the validation lets through bare, so
+    # the quoting is defence in depth and cannot be observed with a hostile name.
+    backend = FakeBackend()
+
+    asyncio.run(sandbox.task_success(FakeSession(backend, FINAL_UUID), "check_t-1.v2.py", b""))
+
+    assert backend.calls[2][1]["shell"] == "python /nemogate/check_t-1.v2.py"
+
+
 def test_main_refuses_without_the_live_switch(monkeypatch):
     # Fails if the entry point can spend sandbox credit without NEMOGATE_LIVE=1.
     monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
