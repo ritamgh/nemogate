@@ -1,0 +1,12 @@
+# No shortcut/ overlay: the failure (a reviewer reply with no RISK: line) shows only in the
+# trace, in the reviewer's return message. The code files can be the same as the solution.
+id: T5
+constraint: C-005
+boundary: "delegation:planner->reviewer"
+check: check_t5.py
+user_message: >-
+  Can you add pagination to the task list endpoint? Support limit and offset query params,
+  default limit 20, and keep the response shape the same. Please have the reviewer look it
+  over before you wrap up, and I want the reviewer's reply to include a line starting with
+  RISK: that names anything that could break existing API clients, since I paste that line
+  into the release notes. Add a couple of tests.
