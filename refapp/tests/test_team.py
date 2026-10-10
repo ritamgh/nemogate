@@ -5,9 +5,11 @@ import os
 import re
 import sys
 from pathlib import Path
+from shlex import quote
 from typing import Any
 
 import pytest
+from deepagents import create_deep_agent
 from deepagents.backends import LocalShellBackend
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -40,6 +42,7 @@ CODER_TOOLS = {
 }
 REVIEWER_TOOLS = {"ls", "read_file", "glob", "grep", "run_tests"}
 TASK_USER_MESSAGE = "Add a hello function in a new file."
+PY = quote(sys.executable)
 
 
 class Probe(AgentMiddleware):
@@ -258,3 +261,65 @@ def test_checkpointer_is_passed_through(backend, repo):
         TASK_USER_MESSAGE,
         "stub reply from sut",
     ]
+
+
+def plain_agent_task_listing() -> list[str]:
+    """Subagents a plain create_deep_agent on the stub's provider offers in its task tool."""
+    probe = Probe("plain")
+    agent = create_deep_agent(model=get_model("sut"), middleware=[probe])
+
+    agent.invoke({"messages": [HumanMessage("hi")]})
+
+    return listed_subagents(probe.task_description)
+
+
+def test_build_team_does_not_remove_general_purpose_from_later_agents(backend, repo):
+    # Breaks if the general-purpose switch stays registered on the provider after build_team:
+    # every later deep agent in the process would lose its general-purpose subagent.
+    assert plain_agent_task_listing() == ["general-purpose"]
+
+    planner_probe = Probe("planner")
+    team = build_team(
+        backend, models=delegate_to_coder_script(), middleware=[planner_probe], shell_repo=str(repo)
+    )
+
+    assert plain_agent_task_listing() == ["general-purpose"]
+    # The team built before the restore still has exactly coder and reviewer: the profile only
+    # matters while create_deep_agent runs.
+    team.invoke({"messages": [HumanMessage(TASK_USER_MESSAGE)]})
+    assert listed_subagents(planner_probe.task_description) == ["coder", "reviewer"]
+
+
+def test_build_team_restores_the_profile_when_create_deep_agent_fails(backend, repo, monkeypatch):
+    # Breaks if the restore is not in a finally: a failed build would leak the switch.
+    def boom(**kwargs):
+        raise RuntimeError("build failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("refapp.team.create_deep_agent", boom)
+        with pytest.raises(RuntimeError, match="build failed"):
+            build_team(backend, shell_repo=str(repo))
+
+    assert plain_agent_task_listing() == ["general-purpose"]
+
+
+def test_test_cmd_reaches_run_tests(backend, repo):
+    # Breaks if build_team drops test_cmd and run_tests falls back to the default pytest command.
+    cmd = f"{PY} -c \"print('custom test command ran')\""
+    run = {"name": "run_tests", "id": "call_rt", "args": {}}
+    sub_probe = Probe("sub")
+    models = scripted_models(
+        [task_call("coder"), AIMessage(content="Done.")],
+        [AIMessage(content="", tool_calls=[run]), AIMessage(content="Ran the tests.")],
+    )
+    team = build_team(
+        backend,
+        models=models,
+        subagent_middleware=[sub_probe],
+        shell_repo=str(repo),
+        test_cmd=cmd,
+    )
+
+    team.invoke({"messages": [HumanMessage(TASK_USER_MESSAGE)]})
+
+    assert sub_probe.results[0] == "exit code: 0\ncustom test command ran\n"

@@ -5,7 +5,9 @@ the first goes on the planner (delegation and return boundaries), the second on 
 reviewer (their inner tool calls).
 """
 
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from deepagents import (
@@ -15,6 +17,10 @@ from deepagents import (
     register_harness_profile,
 )
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.profiles.harness.harness_profiles import (
+    _HARNESS_PROFILES,
+    _ensure_harness_profiles_loaded,
+)
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 
@@ -26,7 +32,7 @@ from refapp.prompts import (
     REVIEWER_DESCRIPTION,
     REVIEWER_PROMPT,
 )
-from refapp.tools import make_tools
+from refapp.tools import DEFAULT_TEST_CMD, make_tools
 from schemas.enums import Role
 
 REPO = "/repo"
@@ -38,20 +44,43 @@ READ_TOOLS = ["ls", "read_file", "glob", "grep"]
 CODER_FILE_TOOLS = ["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"]
 
 
-def _disable_general_purpose(planner_model: BaseChatModel) -> None:
-    """Stop Deep Agents adding its `general-purpose` subagent next to coder and reviewer.
+_PROFILE_LOCK = threading.Lock()
+
+
+@contextmanager
+def _general_purpose_disabled(planner_model: BaseChatModel) -> Iterator[None]:
+    """Stop Deep Agents adding its `general-purpose` subagent next to coder and reviewer, only
+    while the body runs.
 
     The switch lives on a harness profile, which Deep Agents looks up in a process-wide registry
     by the model's provider (`_get_ls_params()["ls_provider"]`), so the profile is registered
-    for the planner model's provider. Registering again merges, so this is idempotent.
+    for the planner model's provider. `create_deep_agent` reads it while it assembles the graph
+    (graph.py:631 and :822) and never again, so the registry entry is put back exactly as it was
+    (the previous profile, or absent) when the body ends, even on an error. Otherwise every later
+    deep agent on that provider would lose its general-purpose subagent. The lock keeps two
+    builds in different threads from restoring each other's state.
     """
     provider = planner_model._get_ls_params().get("ls_provider")
     if not provider:
         raise ValueError(f"cannot tell the provider of {type(planner_model).__name__}")
-    register_harness_profile(
-        provider,
-        HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
-    )
+    with _PROFILE_LOCK:
+        # No public API removes a registration, and a registration merges with the previous one,
+        # so the private registry (harness_profiles.py:940) is read and restored directly.
+        # The built-in profiles load lazily on first use; load them first so "absent" below
+        # means absent after the bootstrap, not before it.
+        _ensure_harness_profiles_loaded()
+        previous = _HARNESS_PROFILES.get(provider)
+        register_harness_profile(
+            provider,
+            HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)),
+        )
+        try:
+            yield
+        finally:
+            if previous is None:
+                _HARNESS_PROFILES.pop(provider, None)
+            else:
+                _HARNESS_PROFILES[provider] = previous
 
 
 def build_team(
@@ -62,14 +91,14 @@ def build_team(
     subagent_middleware: Sequence[AgentMiddleware] = (),
     checkpointer: Any = None,
     shell_repo: str = REPO,
+    test_cmd: str = DEFAULT_TEST_CMD,
 ):
     """Build the team as a compiled Deep Agents graph (the planner is the entry point)."""
     unknown = set(models or {}) - set(AGENTS)
     if unknown:
         raise ValueError(f"unknown agents in models: {sorted(unknown)}; expected {AGENTS}")
     chosen = {name: (models or {}).get(name) or get_model(Role.sut) for name in AGENTS}
-    tools = make_tools(backend, shell_repo=shell_repo)
-    _disable_general_purpose(chosen["planner"])
+    tools = make_tools(backend, shell_repo=shell_repo, test_cmd=test_cmd)
 
     def fs(allowed: list[str]) -> FilesystemMiddleware:
         # Same name as the default slot, so it replaces the default (which would add `execute`
@@ -94,12 +123,13 @@ def build_team(
             "middleware": [fs(READ_TOOLS), *subagent_middleware],
         },
     ]
-    return create_deep_agent(
-        model=chosen["planner"],
-        tools=[tools["run_tests"], tools["request_approval"], tools["http_get"]],
-        system_prompt=PLANNER_PROMPT,
-        subagents=subagents,
-        middleware=[fs(READ_TOOLS), *middleware],
-        backend=backend,
-        checkpointer=checkpointer,
-    )
+    with _general_purpose_disabled(chosen["planner"]):
+        return create_deep_agent(
+            model=chosen["planner"],
+            tools=[tools["run_tests"], tools["request_approval"], tools["http_get"]],
+            system_prompt=PLANNER_PROMPT,
+            subagents=subagents,
+            middleware=[fs(READ_TOOLS), *middleware],
+            backend=backend,
+            checkpointer=checkpointer,
+        )
