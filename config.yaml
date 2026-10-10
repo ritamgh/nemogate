@@ -2,27 +2,27 @@
 # Unknown values are null until the day-0 spike fills them.
 
 token_factory:
-  base_url: null          # filled by the day-0 spike (docs/FACTS.md §2/§6)
+  base_url: https://api.tokenfactory.nebius.com/v1   # docs/FACTS.md §2
 
 models:
   helper:
-    id: null                    # filled by the day-0 spike (docs/FACTS.md §2/§6)
-    input_usd_per_mtok: null    # filled by the day-0 spike (docs/FACTS.md §2/§6)
-    output_usd_per_mtok: null   # filled by the day-0 spike (docs/FACTS.md §2/§6)
+    id: nvidia/Nemotron-3_5-Lightning   # docs/FACTS.md §2, GET /v1/models; chosen over Nano 2026-10-10
+    input_usd_per_mtok: 0.06    # copied 2026-10-10
+    output_usd_per_mtok: 0.24   # copied 2026-10-10
     temperature: 0
-    context_window: null        # filled by the day-0 spike (docs/FACTS.md §2/§6)
+    context_window: 1048576
   sut:
-    id: null                    # filled by the day-0 spike (docs/FACTS.md §2/§6)
-    input_usd_per_mtok: null    # filled by the day-0 spike (docs/FACTS.md §2/§6)
-    output_usd_per_mtok: null   # filled by the day-0 spike (docs/FACTS.md §2/§6)
+    id: nvidia/nemotron-3-super-120b-a12b   # docs/FACTS.md §2, GET /v1/models
+    input_usd_per_mtok: 0.30    # copied 2026-10-10
+    output_usd_per_mtok: 0.90   # copied 2026-10-10
     temperature: null           # model card's recommended value
-    context_window: null        # filled by the day-0 spike (docs/FACTS.md §2/§6)
+    context_window: 262144
   planner:
-    id: null                    # filled by the day-0 spike (docs/FACTS.md §2/§6)
-    input_usd_per_mtok: null    # filled by the day-0 spike (docs/FACTS.md §2/§6)
-    output_usd_per_mtok: null   # filled by the day-0 spike (docs/FACTS.md §2/§6)
+    id: nvidia/Nemotron-3-Ultra-550b-a55b   # docs/FACTS.md §2, GET /v1/models
+    input_usd_per_mtok: 1.00    # copied 2026-10-10
+    output_usd_per_mtok: 3.00   # copied 2026-10-10
     temperature: 0
-    context_window: null        # filled by the day-0 spike (docs/FACTS.md §2/§6)
+    context_window: 1048576
 
 safe_config:
   response_format: null   # json_schema | json_object; filled by the day-0 spike (docs/FACTS.md §2/§6)
@@ -30,5 +30,5 @@ safe_config:
   hash: null              # filled by the day-0 spike (docs/FACTS.md §2/§6)
 
 budget:
-  total_usd: 30
+  total_usd: 60   # per person: A and B each have their own $60 account (2026-10-10)
   stop_at_fraction: 0.8
