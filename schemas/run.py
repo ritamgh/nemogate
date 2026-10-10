@@ -67,8 +67,8 @@ class RunRecord(BaseModel):
     task_success: bool
     tokens: dict[Role, Annotated[int, Field(ge=0)]]
     cost_usd: float = Field(ge=0, allow_inf_nan=False)
-    checkpoint_id: str | None
-    contree_image: str | None
+    checkpoint_id: NonEmptyStr | None
+    contree_image: NonEmptyStr | None
     model_ids: dict[Role, NonEmptyStr]
     safe_config_hash: NonEmptyStr
     ledger_hash: NonEmptyStr
