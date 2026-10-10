@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "Tests whether rules survive agent handoffs in a Deep Agents system."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "contree-sdk==0.3.6",
+    "deepagents>=0.7.23",
+    "langchain-openai>=1.7.0",
+    "langgraph>=1.2.14",
+    "langgraph-checkpoint-sqlite>=3.1.1",
     "pydantic>=2.14.0",
     "pyyaml>=6.0.3",
 ]
