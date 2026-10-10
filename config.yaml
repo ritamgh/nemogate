@@ -30,5 +30,5 @@ safe_config:
   hash: null              # filled by the day-0 spike (docs/FACTS.md §2/§6)
 
 budget:
-  total_usd: 30
+  total_usd: 60   # per person: A and B each have their own $60 account (2026-10-10)
   stop_at_fraction: 0.8

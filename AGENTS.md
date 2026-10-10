@@ -50,7 +50,7 @@ config.yaml both  model IDs, prices, temperatures, safe config
 
 **2. Secrets.** Never read, print, log, echo or commit `.env` or any API key. Do not put keys in code, tests, fixtures, logs or PR text. If you see a key in any output, say so and stop. Code loads `.env` at runtime through `common/` and nowhere else.
 
-**3. Spend.** We have about $30 of credit in total.
+**3. Spend.** Each of us has $60 of credit on our own account (`budget.total_usd` in `config.yaml` is per person; the spend log and cap are per machine).
 - Unit tests use the stub model. Real model calls need an explicit opt-in (`NEMOGATE_LIVE=1`).
 - The wrapper in `common/llm.py` keeps a running cost total and refuses calls past the cap. Never bypass it or raise the cap.
 - Never launch a sweep without running the budget-check script and confirming the run count it prints.
