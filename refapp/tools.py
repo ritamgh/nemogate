@@ -10,7 +10,8 @@ from typing import Any
 from langchain_core.tools import BaseTool, StructuredTool
 
 DEFAULT_REPO = "/repo"
-DEFAULT_TEST_CMD = "python -m pytest -q"
+# No __pycache__ or .pytest_cache: the run's filesystem diff must show only what agents wrote.
+DEFAULT_TEST_CMD = "PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider"
 OUTPUT_TAIL_CHARS = 4000
 
 CANNED_PAGE = (

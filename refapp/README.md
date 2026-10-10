@@ -123,7 +123,7 @@ Check scripts:
 ```python
 REPO = "/repo"                       # where the agents see the repo (file tools, prompts)
 AGENTS = ("planner", "coder", "reviewer")
-def make_tools(backend, *, shell_repo: str = REPO, test_cmd: str = "python -m pytest -q") -> dict[str, BaseTool]
+def make_tools(backend, *, shell_repo: str = REPO, test_cmd: str = "PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider") -> dict[str, BaseTool]
     # run_tests(paths: list[str] | None = None): runs `cd <shell_repo> && <test_cmd> <paths>`
     #   through backend.execute / aexecute (sync and async), returns exit code + output tail.
     # request_approval(action: str, reason: str): always answers approved (the harness approves).

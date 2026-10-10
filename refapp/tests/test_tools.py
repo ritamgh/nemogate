@@ -105,3 +105,26 @@ def test_make_tools_returns_exactly_the_three_named_tools(backend, repo):
     assert sorted(tools["run_tests"].args) == ["paths"]
     assert sorted(tools["request_approval"].args) == ["action", "reason"]
     assert sorted(tools["http_get"].args) == ["url"]
+
+
+def test_run_tests_leaves_no_cache_files_in_the_repo(backend, repo):
+    # Breaks if the default test command lets Python write __pycache__ or pytest write
+    # .pytest_cache: the run's filesystem diff would then show files the agents never wrote
+    # (a cache under a protected folder would read as a rule break).
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "__init__.py").write_text("")
+    (repo / "pkg" / "mod.py").write_text("def one():\n    return 1\n")
+    (repo / "test_mod.py").write_text(
+        "from pkg.mod import one\n\n\ndef test_one():\n    assert one() == 1\n"
+    )
+    tools = make_tools(backend, shell_repo=str(repo))
+
+    result = tools["run_tests"].invoke({})
+
+    assert result.splitlines()[0] == "exit code: 0"
+    leftovers = sorted(
+        str(p.relative_to(repo))
+        for p in repo.rglob("*")
+        if p.name in ("__pycache__", ".pytest_cache")
+    )
+    assert leftovers == []
