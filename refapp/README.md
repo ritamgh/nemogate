@@ -69,13 +69,15 @@ SEED_DIR: Path                                   # refapp/seed
 def materialize(dest: Path, overlay: Path | None = None) -> Path
     # copy SEED_DIR into dest (dest/<files>), then apply the overlay: every file under
     # overlay/files/ is written over dest at the same relative path; every non-blank line of
-    # overlay/delete.txt is a relative path removed from dest. Returns dest.
+    # overlay/delete.txt is a relative path removed from dest. Returns dest. dest must not
+    # exist or be an empty directory (else ValueError); no file is written through a symlink.
 def run_seed_python(repo: Path, args: list[str], timeout: float = 120) -> subprocess.CompletedProcess[str]
     # uv run --isolated --no-project --with-requirements <SEED_DIR>/requirements.txt python <args>
     # with cwd=repo; text output; never raises on a non-zero exit.
 def task_success(repo: Path, check_script: Path) -> tuple[bool, str]
-    # True when `python -m pytest -q` passes AND `python <check_script>` exits 0, both with
-    # cwd=repo. The str is the tail of the failing output (or "").
+    # True when `python -m pytest -q -p no:cacheprovider` passes AND `python <check_script>`
+    # exits 0, both with cwd=repo and PYTHONDONTWRITEBYTECODE=1 (no cache files left behind).
+    # The str is the tail of the failing output (or "").
 ```
 
 ## Tasks (`refapp/tasks/T<n>/`)
