@@ -184,10 +184,14 @@ Probes ran live on 2026-10-10: `runs/live/models_probe.py` (b–e) and `runs/liv
 
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
-| Seed repo commit SHA | | NOT YET CHECKED | | | |
-| Tool names exactly as the agents see them | | NOT YET CHECKED | | | |
-| Custom tools: `run_tests`, `delete_file`, `request_approval`, `http_get` | | NOT YET CHECKED | | | |
-| How `request_approval` is auto-answered | | NOT YET CHECKED | | | |
+| Seed repo commit SHA | The seed is a folder in this repo, not a git repo: `refapp.sandbox.seed_sha()` = 12 hex of sha256 over the sorted seed files (caches excluded); `991d40ce897b` at commit 2f5dec0. Goes into `RunRecord.repo_sha` | VERIFIED (run) | `NEMOGATE_LIVE=1 uv run python -m refapp.sandbox` printed `seed_sha=991d40ce897b base_image=python:3.12-slim image_uuid=f71c76e9-...` | 2026-10-10 | A |
+| Tool names exactly as the agents see them | planner: `ls, read_file, glob, grep, run_tests, request_approval, http_get, task`; coder: `ls, read_file, write_file, edit_file, delete, glob, grep, run_tests, request_approval, http_get`; reviewer: `ls, read_file, glob, grep, run_tests`. No `execute`, no `write_todos` (not in the 0.7.23 default stack), no `general-purpose` subagent. Delete is the built-in `delete(file_path)`, so C-003 is `approval_before("delete")` | VERIFIED (offline run) | `refapp/tests/test_team.py` (offered tools read from `request.tools` in `wrap_model_call`, stub models, sync and async) | 2026-10-10 | A |
+| Custom tools: `run_tests`, `request_approval`, `http_get` (no custom `delete_file`: the built-in `delete` is used) | `refapp/tools.py`, each a `StructuredTool` with `func` and `coroutine`. `run_tests(paths=None)` runs `cd /repo && PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider <paths>` through `backend.execute`/`aexecute` and returns `exit code: N` plus the last 4000 chars. `http_get(url)` returns a fixed placeholder page and imports no network library | VERIFIED (offline run) | `refapp/tests/test_tools.py` | 2026-10-10 | A |
+| How `request_approval` is auto-answered | Returns `Approved: <action>` at once; no human in the loop | VERIFIED (offline run) | `refapp/tools.py`, `refapp/tests/test_tools.py` | 2026-10-10 | A |
+| How to turn off the auto-added `general-purpose` subagent | No per-agent argument. `create_deep_agent` looks up a harness profile for the planner model in a PROCESS-GLOBAL registry keyed by provider (for an instance, `model._get_ls_params()["ls_provider"]`: `"openai"` for `ChatOpenAI`, `"stubchatmodel"` for the stub). `register_harness_profile(provider, HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))` makes it skip the auto-add; it affects every deep agent built in the process on that provider. The `task` tool description keeps a boilerplate sentence naming general-purpose; the real list is the `- name: description` lines | VERIFIED (offline run) | `deepagents/graph.py:631,817-870`, `deepagents/profiles/harness/harness_profiles.py:980,1319-1387`, `deepagents/middleware/subagents.py:442-453`; `refapp/tests/test_team.py` | 2026-10-10 | A |
+| Subagent tools default | A subagent spec without its own `tools` key inherits `create_deep_agent(tools=...)`, so every spec passes `tools` explicitly | VERIFIED (source + offline run) | `deepagents/graph.py:785-791` | 2026-10-10 | A |
+| Running the seed outside the sandbox | `uv run --isolated --no-project --with-requirements refapp/seed/requirements.txt python ...` (flask 3.1.3, pytest 9.1.1); works offline once cached; the seed suite is 16 tests in ~0.1 s | VERIFIED (run) | `refapp/seedenv.py`, `refapp/tests/test_seed.py` | 2026-10-10 | A |
+| A disposable run on a session breaks it | `session.run(..., disposable=True)` sets `session.uuid` to the run's image, which is None for a disposable run, so the next run raises `DisposableImageRunError`. Run disposable commands on a plain image instead: `await session.client.images.use(session.uuid)` | VERIFIED (source) | `contree_sdk/sdk/objects/session/_base.py:15-16`, `image_like/_base.py:316-337`; `refapp/sandbox.py` `task_success` | 2026-10-10 | A |
 | Typical agent steps per task | | NOT YET CHECKED | | | |
 | Typical tokens per run, by role | | NOT YET CHECKED | | | |
 
@@ -210,6 +214,8 @@ Add a row whenever something surprises you. Newest first.
 
 | Date | What surprised us | Workaround | Who |
 | --- | --- | --- | --- |
+| 2026-10-10 | About an hour after two seed-image builds succeeded, every Contree call from A's account returned 403 Forbidden, `get_token_info()` included. Inside `apply_files` the SDK looks a file up by sha256 before uploading, and that lookup also got 403 | None in code. Check Sandboxes access with Nebius before relying on the sandbox | A |
+| 2026-10-10 | Running pytest in the repo writes `__pycache__` (also under `migrations/`) and `.pytest_cache`, which would show in a run's filesystem diff as changes no agent made, a false C-001 break | `run_tests` and the sandbox checks run with `PYTHONDONTWRITEBYTECODE=1` and `-p no:cacheprovider` | A |
 | 2026-10-10 | A sandbox command that hits its timeout kills the session: state `FAILED`, every later command raises `ContreeImageStateError` | The reference app and replay rebuild the session from the last good `session.uuid`; keep agent `execute` timeouts generous | A |
 | 2026-10-10 | Thinking is on by default and billed as output tokens. On the same helper prompt Lightning used ~4× Nano's output tokens (mean 2085 vs 519) and ~2× the time; both 5/5 valid | Decide thinking on/off per role in the safe config (C0); compare Lightning with thinking off before the first sweep | A |
 | 2026-10-10 | Super ignores `json_object` (0/3, writes prose) but obeys `json_schema` (3/3) | Use `json_schema` for structured output | A |
@@ -235,5 +241,4 @@ Add a row whenever something surprises you. Newest first.
 | --- | --- | --- |
 | Sandbox limits still open: image retention and quota (listing all images timed out), the unit of `result.cost`, behaviour at 50 concurrent runs | A | Before the first sweep |
 | With several `task` calls in one AIMessage, all share one pre-`tools` checkpoint; forking one needs its tool_call id. Untested | A, B | `replay/` and `gate/` |
-| Hide `execute` from the reference team, or leave it on? | A | `refapp/` |
 | Thinking is off for the planner too (one switch for all roles, §6). If Ultra's repair plans turn out weak, try thinking on for the planner; that needs a per-role setting in `schemas/config.py` (both owners) | A, B | First repair iteration |
