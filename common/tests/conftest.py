@@ -128,3 +128,22 @@ def read_log(path: Path) -> list[dict]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def read_kind(path: Path, kind: str) -> list[dict]:
+    return [line for line in read_log(path) if line.get("kind") == kind]
+
+
+def sse(*events: dict) -> httpx.Response:
+    """A streamed chat completion: one `data:` event per dict, then [DONE]."""
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
+    return httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+
+
+def chunk(content: str | None, finish: str | None = None, usage: dict | None = None) -> dict:
+    """One chat.completion.chunk event; `usage` set means the trailing usage-only chunk."""
+    event = {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 0, "model": "m"}
+    if usage is not None:
+        return {**event, "choices": [], "usage": usage}
+    delta = {} if content is None else {"role": "assistant", "content": content}
+    return {**event, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}

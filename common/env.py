@@ -4,6 +4,7 @@ This is the only place that reads `.env` (AGENTS.md rule 2). Values are never pr
 """
 
 import os
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -13,8 +14,22 @@ class MissingEnvError(RuntimeError):
     """A required environment variable is unset or blank. The message names it, never a value."""
 
 
+def _parse_value(raw: str) -> str:
+    """A `.env` value: the text between matching quotes, else everything before ` #`."""
+    text = raw.lstrip()
+    if text[:1] in ("'", '"'):
+        end = text.find(text[0], 1)
+        if end != -1:
+            return text[1:end]
+    return re.split(r"\s#", raw, maxsplit=1)[0].strip()
+
+
 def load_dotenv(path: Path | None = None) -> None:
-    """Load `KEY=VALUE` lines from the repo-root `.env` without overriding the environment."""
+    """Load `[export ]KEY=VALUE` lines from the repo-root `.env` without overriding the environment.
+
+    A quoted value ends at its closing quote (anything after is ignored); an unquoted value ends
+    at the first whitespace-then-`#`.
+    """
     env_file = REPO_ROOT / ".env" if path is None else Path(path)
     if not env_file.is_file():
         return
@@ -22,12 +37,11 @@ def load_dotenv(path: Path | None = None) -> None:
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        line = re.sub(r"^export\s+", "", line)
         name, _, value = line.partition("=")
-        name, value = name.strip(), value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+        name = name.strip()
         if name and name not in os.environ:
-            os.environ[name] = value
+            os.environ[name] = _parse_value(value)
 
 
 def require_env(*names: str) -> None:

@@ -31,6 +31,35 @@ def test_dotenv_parses_quotes_comments_and_blanks(tmp_path, monkeypatch):
     assert os.environ["MIX"] == '"open'
 
 
+def test_dotenv_handles_export_prefix_inline_comments_and_text_after_quotes(tmp_path, monkeypatch):
+    # Breaks if `export KEY=v` sets a variable named "export KEY", or a trailing ` # note` ends
+    # up inside the (credential) value.
+    env = tmp_path / ".env"
+    env.write_text(
+        "export EXPORTED=abc\n"
+        "export   SPACED = def \n"
+        "UNQUOTED=abc # a note\n"
+        'DQ="abc" # a note\n'
+        "SQ='a b' trailing\n"
+        'DQ_HASH="a # b"\n'
+        "NOSPACE=a#b\n"
+        "BLANK_THEN_NOTE= # only a note\n",
+        encoding="utf-8",
+    )
+    names = ["EXPORTED", "SPACED", "UNQUOTED", "DQ", "SQ", "DQ_HASH", "NOSPACE", "BLANK_THEN_NOTE"]
+    _forget(monkeypatch, *names, "export EXPORTED", "export   SPACED")
+    load_dotenv(env)
+    assert os.environ["EXPORTED"] == "abc"
+    assert os.environ["SPACED"] == "def"
+    assert os.environ["UNQUOTED"] == "abc"
+    assert os.environ["DQ"] == "abc"
+    assert os.environ["SQ"] == "a b"
+    assert os.environ["DQ_HASH"] == "a # b"
+    assert os.environ["NOSPACE"] == "a#b"
+    assert os.environ["BLANK_THEN_NOTE"] == ""
+    assert "export EXPORTED" not in os.environ
+
+
 def test_dotenv_never_overrides_existing_env(tmp_path, monkeypatch):
     # Breaks if a .env value replaces a variable the caller already exported.
     (tmp_path / ".env").write_text("KEEP_ME=from-file\n", encoding="utf-8")
