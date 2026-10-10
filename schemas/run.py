@@ -4,9 +4,16 @@ from typing import Annotated, Self
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
-from schemas.enums import STRICT, Arm, BoundaryId, ConstraintId, FsOp, Operator, Role
-
-NonEmptyStr = Annotated[str, Field(min_length=1)]
+from schemas.enums import (
+    STRICT,
+    Arm,
+    BoundaryId,
+    ConstraintId,
+    FsOp,
+    NonEmptyStr,
+    Operator,
+    Role,
+)
 
 
 class FsChange(BaseModel):
@@ -34,15 +41,15 @@ class RunConfig(BaseModel):
     """Written by A's runner, read by B's gate at startup."""
 
     model_config = STRICT
-    run_id: str
-    task_id: str
+    run_id: NonEmptyStr
+    task_id: NonEmptyStr
     arm: Arm
     operator: Operator
     target_boundary: BoundaryId
     target_constraint: ConstraintId
     repo_ref: str = "main"
-    ledger_path: str
-    trace_path: str
+    ledger_path: NonEmptyStr
+    trace_path: NonEmptyStr
     seed: int
 
 
@@ -50,8 +57,8 @@ class RunRecord(BaseModel):
     """One per run, written by A's replay engine."""
 
     model_config = STRICT
-    run_id: str
-    task_id: str
+    run_id: NonEmptyStr
+    task_id: NonEmptyStr
     arm: Arm
     operator: Operator
     constraint_id: ConstraintId
@@ -62,17 +69,18 @@ class RunRecord(BaseModel):
     cost_usd: float = Field(ge=0, allow_inf_nan=False)
     checkpoint_id: str | None
     contree_image: str | None
-    model_ids: dict[Role, str]
-    safe_config_hash: str
-    ledger_hash: str
-    repo_sha: str
-    lockfile_hash: str
+    model_ids: dict[Role, NonEmptyStr]
+    safe_config_hash: NonEmptyStr
+    ledger_hash: NonEmptyStr
+    repo_sha: NonEmptyStr
+    lockfile_hash: NonEmptyStr
 
     @model_validator(mode="after")
-    def _model_ids_cover_every_role(self) -> Self:
-        missing = sorted(role.value for role in Role if role not in self.model_ids)
-        if missing:
-            raise ValueError(f"model_ids is missing roles: {', '.join(missing)}")
+    def _per_role_fields_cover_every_role(self) -> Self:
+        for name, mapping in (("model_ids", self.model_ids), ("tokens", self.tokens)):
+            missing = sorted(role.value for role in Role if role not in mapping)
+            if missing:
+                raise ValueError(f"{name} is missing roles: {', '.join(missing)}")
         return self
 
 

@@ -13,11 +13,10 @@ from schemas.enums import (
     ConstraintId,
     ConstraintKind,
     FileOp,
+    NonEmptyStr,
     Origin,
     Source,
 )
-
-NonEmptyStr = Annotated[str, Field(min_length=1)]
 
 
 def _check_regex(value: str) -> str:
@@ -105,6 +104,15 @@ class Constraint(BaseModel):
     scope: tuple[AgentName, ...] = Field(min_length=1)
     origin: Origin
     check: Check | None = None  # None = not compilable, reported as unverified
+
+    @model_validator(mode="after")
+    def _check_agent_is_in_scope(self) -> "Constraint":
+        if (
+            isinstance(self.check, OutputMustInclude | OutputMustNotInclude)
+            and self.check.agent not in self.scope
+        ):
+            raise ValueError(f"check agent {self.check.agent!r} is not in scope {list(self.scope)}")
+        return self
 
 
 class Ledger(BaseModel):

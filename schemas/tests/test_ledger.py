@@ -90,7 +90,8 @@ def test_spec_yaml_example_loads_with_path_forbidden_check():
 )
 def test_each_predicate_type_parses_to_its_model(check, model):
     # Catches a broken discriminator or a missing union member.
-    ledger = Ledger.model_validate(ledger_dict(constraint_dict(check=check)))
+    data = constraint_dict(scope=["coder", "reviewer"], check=check)
+    ledger = Ledger.model_validate(ledger_dict(data))
     assert type(ledger.constraints[0].check) is model
 
 
@@ -152,7 +153,11 @@ def test_invalid_regex_is_rejected(kind, regex):
     # Catches an uncompilable regex reaching the oracle at evaluation time.
     with pytest.raises(ValidationError):
         Ledger.model_validate(
-            ledger_dict(constraint_dict(check={"type": kind, "regex": regex, "agent": "reviewer"}))
+            ledger_dict(
+                constraint_dict(
+                    scope=["reviewer"], check={"type": kind, "regex": regex, "agent": "reviewer"}
+                )
+            )
         )
 
 
@@ -167,8 +172,40 @@ def test_regex_that_crashes_the_compiler_is_a_validation_error(kind, regex):
     # for these, which would escape as a crash instead of a ValidationError.
     with pytest.raises(ValidationError, match="invalid regex"):
         Ledger.model_validate(
-            ledger_dict(constraint_dict(check={"type": kind, "regex": regex, "agent": "reviewer"}))
+            ledger_dict(
+                constraint_dict(
+                    scope=["reviewer"], check={"type": kind, "regex": regex, "agent": "reviewer"}
+                )
+            )
         )
+
+
+@pytest.mark.parametrize("kind", ["output_must_include", "output_must_not_include"])
+def test_output_check_agent_outside_scope_is_rejected(kind):
+    # Breaks if the gate could pin a rule on one agent while the oracle grades another.
+    check = {"type": kind, "regex": "^OK", "agent": "reviewer"}
+    with pytest.raises(ValidationError, match="not in scope"):
+        Constraint.model_validate(constraint_dict(scope=["coder"], check=check))
+
+
+def test_non_output_check_is_not_scope_checked():
+    # Breaks if the scope rule spreads past the output predicates the spec ties to scope.
+    check = {"type": "tool_arg_bound", "tool": "fetch", "arg": "retries", "op": "<=", "value": 3}
+    constraint = Constraint.model_validate(constraint_dict(scope=["coder"], check=check))
+    assert constraint.check.tool == "fetch"
+
+
+def test_constraint_text_with_surrounding_spaces_is_kept_verbatim():
+    # Breaks if the non-blank rule starts stripping (and so rewriting) stored values.
+    assert Constraint.model_validate(constraint_dict(text=" a rule ")).text == " a rule "
+
+
+def test_output_check_agent_inside_multi_agent_scope_is_valid():
+    check = {"type": "output_must_include", "regex": "^OK", "agent": "reviewer"}
+    constraint = Constraint.model_validate(
+        constraint_dict(scope=["coder", "reviewer"], check=check)
+    )
+    assert constraint.check.agent == "reviewer"
 
 
 def test_version_other_than_1_is_rejected():

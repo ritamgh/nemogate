@@ -11,7 +11,7 @@ The uv skeleton (`pyproject.toml`, `uv.lock`, Python 3.12, `package = false`, py
 | Path | What |
 | --- | --- |
 | `AGENTS.md` | Rules for every agent: hard rules, owners, vocabulary. Read it first. |
-| `CLAUDE.md` | Imports AGENTS.md and adds Claude Code notes: generality grep, worker brief rules |
+| `CLAUDE.md` | Imports AGENTS.md and adds only Claude Code specifics: owner check, `settings.json` backstops, worker-brief rules. Rules and commands live in AGENTS.md only. |
 | `CLAUDE.local.md` | Per machine, gitignored: which owner (A or B) this machine's sessions belong to |
 | `docs/SPEC.md` | Build spec: formats, cross-owner signatures, tasks T1–T6, weekly checklists, budget. The held-out T7 and T8 are sealed outside the repo. |
 | `docs/FACTS.md` | Verified API, platform and model facts, with evidence. Mostly NOT YET CHECKED. |
