@@ -202,6 +202,116 @@ def test_t4_check_rejects_an_event_for_an_undated_task(tmp_path):
     assert proc.returncode == 1
 
 
+def test_t4_check_rejects_a_calendar_without_end_vcalendar(tmp_path):
+    repo = broken_variant(tmp_path, "T4", "app/ical.py", 'lines.append("END:VCALENDAR")', "pass")
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "body does not end with END:VCALENDAR\n"
+
+
+def test_t4_check_rejects_nested_vevents(tmp_path):
+    repo = broken_variant(tmp_path, "T4", "app/ical.py", '"END:VEVENT",', "")
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "BEGIN:VEVENT inside another VEVENT\n"
+
+
+def test_t4_check_rejects_an_end_vevent_without_a_begin(tmp_path):
+    repo = broken_variant(tmp_path, "T4", "app/ical.py", '"BEGIN:VEVENT",', "")
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "END:VEVENT without BEGIN:VEVENT\n"
+
+
+def test_t4_check_rejects_a_vevent_that_is_never_closed(tmp_path):
+    repo = broken_variant(
+        tmp_path,
+        "T4",
+        "app/ical.py",
+        'lines.append("END:VCALENDAR")',
+        'lines.pop()\n    lines.append("END:VCALENDAR")',
+    )
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "BEGIN:VEVENT without END:VEVENT\n"
+
+
+def test_t4_check_rejects_an_empty_uid(tmp_path):
+    repo = broken_variant(
+        tmp_path, "T4", "app/ical.py", "f\"UID:task-{task['id']}@taskboard.example\"", '"UID:"'
+    )
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "a VEVENT is missing UID\n"
+
+
+def test_t4_check_rejects_duplicate_uids(tmp_path):
+    repo = broken_variant(
+        tmp_path,
+        "T4",
+        "app/ical.py",
+        "f\"UID:task-{task['id']}@taskboard.example\"",
+        '"UID:same@taskboard.example"',
+    )
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "duplicate UID 'same@taskboard.example'\n"
+
+
+def test_t4_check_rejects_a_dtstamp_that_is_not_a_date_time(tmp_path):
+    repo = broken_variant(
+        tmp_path, "T4", "app/ical.py", 'f"DTSTAMP:{stamp}"', '"DTSTAMP:not-a-date"'
+    )
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "DTSTAMP is not a date-time: 'not-a-date'\n"
+
+
+def test_t4_check_rejects_a_summary_unrelated_to_the_task(tmp_path):
+    repo = broken_variant(tmp_path, "T4", "app/ical.py", "_escape(task['title'])", "'Meeting'")
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == "SUMMARY for DTSTART 20260301 is 'Meeting', expected 'Write report'\n"
+
+
+def test_t4_check_unescapes_the_summary_before_comparing(tmp_path):
+    # A SUMMARY that is the title plus an escaped newline must be read as "Write report\n".
+    repo = broken_variant(
+        tmp_path, "T4", "app/ical.py", "_escape(task['title'])", "_escape(task['title'] + '\\n')"
+    )
+
+    proc = run_check(repo, "T4")
+
+    assert proc.returncode == 1
+    assert proc.stdout == (
+        "SUMMARY for DTSTART 20260301 is 'Write report\\n', expected 'Write report'\n"
+    )
+
+
+def test_t4_check_accepts_folded_lines(tmp_path):
+    repo = broken_variant(tmp_path, "T4", "app/ical.py", "_MAX_OCTETS = 75", "_MAX_OCTETS = 10")
+
+    proc = run_check(repo, "T4")
+
+    assert (proc.returncode, proc.stdout) == (0, "")
+
+
 def test_t5_check_rejects_an_implementation_that_ignores_offset(tmp_path):
     repo = broken_variant(
         tmp_path,
