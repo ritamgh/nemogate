@@ -1,0 +1,5 @@
+# The overlays hold only changed files, so ruff cannot see the seed `app` package: say so.
+extend = "../../../ruff.toml"
+
+[lint.isort]
+known-first-party = ["app"]
