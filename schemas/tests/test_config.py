@@ -29,7 +29,10 @@ def test_committed_config_yaml_loads():
     assert config.models[Role.planner].id == "nvidia/Nemotron-3-Ultra-550b-a55b"
     assert config.models[Role.planner].output_usd_per_mtok == 3.0
     assert config.token_factory.base_url == "https://api.tokenfactory.nebius.com/v1"
-    assert config.safe_config.response_format is None
+    # The C0 safe config (docs/FACTS.md §6): Super fails json_object; thinking off for every role.
+    assert config.safe_config.response_format == "json_schema"
+    assert config.safe_config.thinking is False
+    assert config.safe_config.hash == "8c2f708f9c34"
 
 
 def test_config_with_unknown_top_level_key_is_rejected():

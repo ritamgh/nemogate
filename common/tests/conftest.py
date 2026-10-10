@@ -54,7 +54,12 @@ def write_config(path: Path, **overrides) -> Path:
                 "context_window": 1000,
             },
         },
-        "safe_config": {"response_format": None, "thinking": None, "hash": None},
+        # hash = sha256('{"response_format":"json_schema","thinking":false}')[:12], by hand
+        "safe_config": {
+            "response_format": "json_schema",
+            "thinking": False,
+            "hash": "8c2f708f9c34",
+        },
         "budget": {"total_usd": 10, "stop_at_fraction": 0.8},
     }
     for dotted, value in overrides.items():

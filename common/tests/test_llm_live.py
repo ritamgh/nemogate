@@ -10,7 +10,8 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
 from common import ConfigError, MissingEnvError, SpendCapReached, UsageMissing
-from common.llm import get_model
+from common.env import REPO_ROOT
+from common.llm import get_model, safe_config_hash
 from common.spend import append_spend, run_scope, total_spent
 from common.tests.conftest import (
     FAKE_KEY,
@@ -22,6 +23,7 @@ from common.tests.conftest import (
     sse,
     write_config,
 )
+from schemas.config import SafeConfig, load_config
 
 # Reserve for the prompt "hi" on sut (1.00 in / 3.00 out per Mtok): 1 input token (2 chars / 3,
 # rounded up) + 4096 reserved output tokens = 1*1/1e6 + 4096*3/1e6.
@@ -57,13 +59,76 @@ def test_live_without_a_key_names_the_variable(monkeypatch, config_path, value):
         ("models__sut__input_usd_per_mtok", "input_usd_per_mtok"),
         ("models__sut__output_usd_per_mtok", "output_usd_per_mtok"),
         ("token_factory__base_url", "base_url"),
+        ("safe_config__response_format", "response_format"),
+        ("safe_config__thinking", "thinking"),
+        ("safe_config__hash", "hash"),
     ],
 )
 def test_live_with_a_null_field_raises_config_error_naming_it(live, tmp_path, override, field):
-    # Breaks if a null price silently becomes zero cost, or the error doesn't say which field.
+    # Breaks if a null price silently becomes zero cost, a live run starts without a safe
+    # config, or the error doesn't say which field.
     path = write_config(tmp_path / "null.yaml", **{override: None})
     with pytest.raises(ConfigError, match=field):
         get_model("sut", config_path=path)
+
+
+@pytest.mark.parametrize(("thinking", "digest"), [(False, "8c2f708f9c34"), (True, "b53f345869d0")])
+@pytest.mark.parametrize("role", ["helper", "sut", "planner"])
+def test_every_role_sends_the_safe_config_thinking_switch(live, tmp_path, role, thinking, digest):
+    # Breaks if the safe config's thinking setting is not sent, or not sent for every role
+    # (Token Factory has thinking on by default: docs/FACTS.md section 2).
+    path = write_config(
+        tmp_path / "c.yaml", safe_config__thinking=thinking, safe_config__hash=digest
+    )
+    transport = Transport()
+    get_model(role, config_path=path, **transport.clients).invoke("hi")
+    body = json.loads(transport.requests[0].content)
+    assert body["chat_template_kwargs"] == {"enable_thinking": thinking}
+
+
+def test_a_caller_extra_body_keeps_the_thinking_switch(live, config_path):
+    # Breaks if a bound extra_body replaces the switch (thinking would silently come back on
+    # while runs still carry the thinking-off hash), on the sync, async or structured path.
+    transport = Transport()
+    model = get_model("sut", config_path=config_path, **transport.clients)
+    model.bind(extra_body={"top_k": 20}).invoke("hi")
+    asyncio.run(
+        model.bind(extra_body={"chat_template_kwargs": {"enable_thinking": True, "x": 1}}).ainvoke(
+            "hi"
+        )
+    )
+    for request in transport.requests:
+        assert json.loads(request.content)["chat_template_kwargs"]["enable_thinking"] is False
+    first, second = (json.loads(r.content) for r in transport.requests)
+    assert first["top_k"] == 20
+    assert second["chat_template_kwargs"]["x"] == 1
+
+
+def test_a_stale_safe_config_hash_is_refused(live, tmp_path):
+    # Breaks if thinking or response_format can change while runs keep the old hash, which
+    # would make runs with different settings look comparable.
+    path = write_config(tmp_path / "stale.yaml", safe_config__thinking=True)  # hash is for False
+    transport = Transport()
+    with pytest.raises(ConfigError, match="hash"):
+        get_model("sut", config_path=path, **transport.clients)
+    assert transport.requests == []
+
+
+def test_safe_config_hash_is_sha256_of_the_two_settings():
+    # Breaks if the hash covers other fields, or its input format changes (old runs would stop
+    # matching). Literals from `printf '%s' '<json>' | sha256sum | cut -c1-12`.
+    assert safe_config_hash(SafeConfig(response_format="json_schema", thinking=False)) == (
+        "8c2f708f9c34"
+    )
+    assert safe_config_hash(
+        SafeConfig(response_format="json_schema", thinking=True, hash="ignored")
+    ) == ("b53f345869d0")
+
+
+def test_the_repo_config_hash_matches_its_safe_config():
+    # Breaks if someone edits safe_config in config.yaml without updating its hash.
+    safe = load_config(REPO_ROOT / "config.yaml").safe_config
+    assert safe.hash == safe_config_hash(safe)
 
 
 def test_one_call_logs_a_reserve_then_a_settle_with_the_same_call_id(live, config_path, spend_log):

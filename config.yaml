@@ -24,10 +24,10 @@ models:
     temperature: 0
     context_window: 1048576
 
-safe_config:
-  response_format: null   # json_schema | json_object; filled by the day-0 spike (docs/FACTS.md §2/§6)
-  thinking: null          # filled by the day-0 spike (docs/FACTS.md §2/§6)
-  hash: null              # filled by the day-0 spike (docs/FACTS.md §2/§6)
+safe_config:              # C0, 2026-10-10 (docs/FACTS.md §6)
+  response_format: json_schema   # Super answered json_object with prose (0/3)
+  thinking: false         # every role; on costs 3-16x the output tokens for no gain in validity
+  hash: "8c2f708f9c34"     # common.llm.safe_config_hash; get_model refuses a stale one
 
 budget:
   total_usd: 60   # per person: A and B each have their own $60 account (2026-10-10)

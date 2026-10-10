@@ -165,16 +165,20 @@ One row per probe per configuration. "Config" means model, `response_format`, an
 
 | Probe | Config | Result | Notes |
 | --- | --- | --- | --- |
-| Escape round-trip (`\n`, `\"`, `\\`) under `json_schema` | | | |
-| Escape round-trip under `json_object` | | | |
-| Forced tool call returns native `tool_calls`, not text | | | |
-| Thinking on plus structured output returns non-empty, parseable content | | | |
-| Model IDs resolve via `GET /v1/models` | | | |
+Probes ran live on 2026-10-10: `runs/live/models_probe.py` (b–e) and `runs/live/thinking_probe.py` (both kept outside the repo, outputs in `out/*.json`). The thinking probe ran each prompt with the server default (thinking on) and with `enable_thinking=False`, $0.026 in total.
+
+| Probe | Config | Result | Notes |
+| --- | --- | --- | --- |
+| Escape round-trip (`\n`, `\"`, `\\`) under `json_schema` | Lightning, Nano, Super, Ultra; thinking on and off | JSON valid in all 24 tries. Exact text: Lightning 3/3 both, Ultra 3/3 both, Super 2/3 both, Nano 3/3 on, 1/3 off | The misses are copying slips (Nano dropped "He said", Super once kept `\n` as two characters or added quotes), not broken JSON, and Super misses equally with thinking on |
+| Escape round-trip under `json_object` | Lightning, Nano, Super; thinking on | Lightning 3/3, Nano 3/3, **Super 0/3** (prose, not JSON) | Reason for `json_schema` |
+| Forced tool call returns native `tool_calls`, not text | Super, Lightning, Ultra; thinking on and off | 3/3 native with correct args in every cell; forced `tool_choice` 1/1 (Super, Lightning, thinking on) | No tool call came back as text |
+| Thinking on plus structured output returns non-empty, parseable content | All four; `json_schema` meeting extraction | Valid 5/5 (Lightning, Nano) and 3/3 (Super, Ultra) both on and off. Fields correct, on vs off: Lightning 4/5 vs 5/5, Nano 5/5 vs 5/5, Super 1/3 vs 3/3, Ultra 3/3 vs 3/3 | Mean output tokens on vs off: Lightning 2188 vs 132, Nano 575 vs 162, Super 655 vs 132, Ultra 515 vs 154. Mean seconds: Lightning 8.6 vs 0.8, Super 3.5 vs 1.0 |
+| Model IDs resolve via `GET /v1/models` | All four | Yes | §2 rows |
 
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
-| Safe config chosen | | NOT YET CHECKED | | | |
-| Hash of the safe config | | NOT YET CHECKED | | | |
+| Safe config chosen | `response_format: json_schema`, `thinking: false` for every role. Thinking off kept validity and tool calls everywhere, was as correct or more, and cut output tokens 3–16× and latency 2–10×. `get_model` sends `chat_template_kwargs.enable_thinking` on every live call | VERIFIED (live) | probe table above; `config.yaml` `safe_config`; `common/llm.py` `get_model` | 2026-10-10 | A |
+| Hash of the safe config | `8c2f708f9c34`: the first 12 hex digits of sha256 over `{"response_format":"json_schema","thinking":false}` (sorted keys, no spaces). `common.llm.safe_config_hash` computes it; `get_model` refuses a live call when `config.yaml` stores a different hash | VERIFIED (test) | `common/tests/test_llm_live.py::test_safe_config_hash_is_sha256_of_the_two_settings`, `::test_the_repo_config_hash_matches_its_safe_config` | 2026-10-10 | A |
 
 ## 7. Reference app
 
@@ -232,5 +236,4 @@ Add a row whenever something surprises you. Newest first.
 | Sandbox limits still open: image retention and quota (listing all images timed out), the unit of `result.cost`, behaviour at 50 concurrent runs | A | Before the first sweep |
 | With several `task` calls in one AIMessage, all share one pre-`tools` checkpoint; forking one needs its tool_call id. Untested | A, B | `replay/` and `gate/` |
 | Hide `execute` from the reference team, or leave it on? | A | `refapp/` |
-| Split the $30 budget per person (each machine's cap = 80% of its share), or keep one total and rely on the dashboard? Needs a `config.yaml` change if split | A, B | Before the first sweep |
-| Helper is Lightning. Live: JSON as reliable as Nano (5/5 each, json_schema 3/3) but ~4× the output tokens with thinking on. Measure Lightning with thinking off on the helper prompt, then fix the helper's thinking setting in the safe config | A | C0 preflight |
+| Thinking is off for the planner too (one switch for all roles, §6). If Ultra's repair plans turn out weak, try thinking on for the planner; that needs a per-role setting in `schemas/config.py` (both owners) | A, B | First repair iteration |

@@ -7,6 +7,7 @@ settles it at the real usage afterwards. SDK retries are off, so every HTTP requ
 reserve; a retry made above the model starts a new call and is reserved again.
 """
 
+import hashlib
 import json
 import math
 import os
@@ -24,7 +25,7 @@ from pydantic import PrivateAttr
 
 from common.env import REPO_ROOT, is_live, require_env
 from common.spend import admit, append_spend, cost_usd
-from schemas.config import AppConfig, ModelConfig, load_config
+from schemas.config import AppConfig, ModelConfig, SafeConfig, load_config
 from schemas.enums import Role
 
 API_KEY_ENV = "NEBIUS_API_KEY"
@@ -139,7 +140,19 @@ class SpendHandler(BaseCallbackHandler):
 
 
 class _TokenFactoryChat(ChatOpenAI):
-    """ChatOpenAI that never lets the API key out through a provider error message."""
+    """ChatOpenAI that never lets the API key out through a provider error message, and always
+    sends the safe config's thinking switch."""
+
+    _thinking: bool = PrivateAttr()
+
+    def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict:
+        # Every call path builds its request here. A bound extra_body replaces the default one
+        # wholesale, so the switch is merged in last, and the safe config wins over the caller.
+        payload = super()._get_request_payload(*args, **kwargs)
+        extra = dict(payload.get("extra_body") or {})
+        template = {**(extra.get("chat_template_kwargs") or {}), "enable_thinking": self._thinking}
+        payload["extra_body"] = {**extra, "chat_template_kwargs": template}
+        return payload
 
     def _redacted(self, exc: Exception) -> RuntimeError | None:
         key = self.openai_api_key.get_secret_value() if self.openai_api_key else ""
@@ -201,6 +214,13 @@ def _require(value: Any, field: str, role: Role) -> Any:
     return value
 
 
+def safe_config_hash(safe: SafeConfig) -> str:
+    """First 12 hex digits of sha256 over the safe config's two settings, as compact sorted JSON."""
+    settings = {"response_format": safe.response_format, "thinking": safe.thinking}
+    text = json.dumps(settings, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
 def get_model(
     role: Role | str,
     *,
@@ -234,6 +254,15 @@ def get_model(
     _require(model_cfg.input_usd_per_mtok, "input_usd_per_mtok", role)
     _require(model_cfg.output_usd_per_mtok, "output_usd_per_mtok", role)
     base_url = _require(config.token_factory.base_url, "token_factory.base_url", role)
+    safe = config.safe_config
+    _require(safe.response_format, "safe_config.response_format", role)
+    thinking = _require(safe.thinking, "safe_config.thinking", role)
+    stored_hash = _require(safe.hash, "safe_config.hash", role)
+    if stored_hash != safe_config_hash(safe):
+        raise ConfigError(
+            f"config.yaml safe_config.hash is {stored_hash} but the settings hash to "
+            f"{safe_config_hash(safe)}; update the hash with the settings"
+        )
 
     kwargs: dict[str, Any] = {}
     if model_cfg.temperature is not None:
@@ -242,7 +271,7 @@ def get_model(
         kwargs["http_client"] = http_client
     if http_async_client is not None:
         kwargs["http_async_client"] = http_async_client
-    return _TokenFactoryChat(
+    model = _TokenFactoryChat(
         model=model_cfg.id,
         base_url=base_url,
         api_key=os.environ[API_KEY_ENV],
@@ -253,3 +282,6 @@ def get_model(
         callbacks=[SpendHandler(role, model_cfg, config)],
         **kwargs,
     )
+    # Thinking is on by default on Token Factory (docs/FACTS.md section 2); always send the switch.
+    model._thinking = thinking
+    return model
