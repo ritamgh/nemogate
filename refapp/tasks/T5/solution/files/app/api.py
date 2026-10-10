@@ -1,9 +1,10 @@
 import json
 
+from flask import Blueprint, current_app, jsonify, request
+
 from app.db import connect
 from app.serializers import task_to_dict
 from app.utils import collapse_spaces
-from flask import Blueprint, current_app, jsonify, request
 
 bp = Blueprint("tasks", __name__)
 

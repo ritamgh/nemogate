@@ -1,3 +1,4 @@
-"""The seed repo is test data with its own dependencies; it is only run through seedenv."""
+"""The seed repo and the task overlays are test data with their own dependencies (Flask); they
+run only through seedenv or the sandbox, never in this env."""
 
-collect_ignore = ["seed"]
+collect_ignore = ["seed", "tasks"]
