@@ -4,22 +4,30 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from schemas.enums import STRICT, AgentName, Arm, BoundaryId, ConstraintId, Operator
+from schemas.enums import (
+    STRICT,
+    AgentName,
+    Arm,
+    BoundaryId,
+    ConstraintId,
+    NonEmptyStr,
+    Operator,
+)
 
 
 class _EventBase(BaseModel):
     """Fields on every event. Not part of the `Event` union."""
 
     model_config = STRICT
-    run_id: str
+    run_id: NonEmptyStr
     arm: Arm
     operator: Operator
     boundary: BoundaryId | None = None
     step: int = Field(ge=0)
     agent: AgentName
-    model_id: str
-    safe_config_hash: str
-    ledger_hash: str
+    model_id: NonEmptyStr
+    safe_config_hash: NonEmptyStr
+    ledger_hash: NonEmptyStr
 
 
 class BoundaryOut(_EventBase):

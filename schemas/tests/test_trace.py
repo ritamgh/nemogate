@@ -145,6 +145,15 @@ def test_boundary_with_empty_agent_is_rejected():
         )
 
 
+@pytest.mark.parametrize("field", ["run_id", "model_id", "safe_config_hash", "ledger_hash"])
+@pytest.mark.parametrize("blank", ["", " ", "\n"], ids=["empty", "space", "newline"])
+def test_blank_fingerprint_on_event_is_rejected(field, blank):
+    # Breaks if the gate can stamp an unset fingerprint onto a trace line.
+    data = {**COMMON, "type": "final_output", "content": "ok", field: blank}
+    with pytest.raises(ValidationError):
+        EVENT.validate_python(data)
+
+
 def test_negative_step_is_rejected():
     with pytest.raises(ValidationError):
         EVENT.validate_python({**COMMON, "step": -1, "type": "final_output", "content": "x"})

@@ -111,6 +111,42 @@ def test_run_record_negative_token_count_is_rejected():
         RunRecord.model_validate(_record_data(tokens={"helper": -1, "sut": 0, "planner": 0}))
 
 
+@pytest.mark.parametrize(
+    "tokens", [{}, {"sut": 100}, {"helper": 1, "sut": 2}], ids=["empty", "sut_only", "no_planner"]
+)
+def test_run_record_tokens_missing_a_role_is_rejected(tokens):
+    # Breaks if a record can omit a role's token count: spend per tier would undercount.
+    with pytest.raises(ValidationError, match="tokens is missing roles"):
+        RunRecord.model_validate(_record_data(tokens=tokens))
+
+
+def test_run_record_tokens_zero_for_an_unused_role_is_valid():
+    record = RunRecord.model_validate(_record_data(tokens={"helper": 0, "sut": 5, "planner": 0}))
+    assert record.tokens[Role.planner] == 0
+
+
+@pytest.mark.parametrize(
+    "field", ["run_id", "task_id", "safe_config_hash", "ledger_hash", "repo_sha", "lockfile_hash"]
+)
+@pytest.mark.parametrize("blank", ["", " ", "\n"], ids=["empty", "space", "newline"])
+def test_run_record_blank_identity_field_is_rejected(field, blank):
+    # Breaks if an unset fingerprint is accepted: is_comparable would pool unfingerprinted runs.
+    with pytest.raises(ValidationError):
+        RunRecord.model_validate(_record_data(**{field: blank}))
+
+
+@pytest.mark.parametrize("field", ["run_id", "task_id", "ledger_path", "trace_path"])
+def test_run_config_blank_field_is_rejected(field):
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate({**json.loads(SPEC_RUN_CONFIG), field: " "})
+
+
+def test_run_record_empty_model_id_is_rejected():
+    model_ids = {"helper": "", "sut": "s", "planner": "p"}
+    with pytest.raises(ValidationError):
+        RunRecord.model_validate(_record_data(model_ids=model_ids))
+
+
 def test_run_record_tokens_keyed_by_old_tier_names_is_rejected():
     # Breaks if tokens goes back to nano/super/ultra keys (ruling R3: keyed by role).
     with pytest.raises(ValidationError):
