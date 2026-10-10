@@ -386,7 +386,7 @@ The headline compares four arms on two numbers at once: how often the rule is br
 
 ## Budget
 
-We have about $30 of Token Factory credit. Per-token prices for the Nemotron tiers aren't pinned here; the C0 cost probe measures the real cost of one reference run, and every number below gets recomputed from that. Sandboxes are free during the beta, so the money is all model calls.
+Each of us has $60 of Token Factory credit on our own account (updated 2026-10-10; the plan below was written for $30 in total, so its shares hold and the amounts are per person ×2). Per-token prices for the Nemotron tiers aren't pinned here; the C0 cost probe measures the real cost of one reference run, and every number below gets recomputed from that. Sandboxes are free during the beta, so the money is all model calls.
 
 | Bucket | Share | Amount |
 | --- | --- | --- |

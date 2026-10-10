@@ -18,7 +18,7 @@ def test_committed_config_yaml_loads():
     # Breaks if config.yaml and AppConfig drift apart (a typo'd key, a wrong type).
     config = load_config(REPO_ROOT / "config.yaml")
     assert set(config.models) == {Role.helper, Role.sut, Role.planner}
-    assert config.budget.total_usd == 30
+    assert config.budget.total_usd == 60
     assert config.budget.stop_at_fraction == 0.8
     assert config.models[Role.helper].temperature == 0
     assert config.models[Role.planner].temperature == 0
