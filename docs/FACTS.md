@@ -53,6 +53,7 @@ Pinned packages (exact versions, from the lockfile; `uv pip list` on 2026-10-10)
 | Base URL | `https://api.tokenfactory.nebius.com/v1` (OpenAI-compatible) | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) returned the model list | 2026-10-10 | A |
 | Env var that holds the key (name only) | `NEBIUS_API_KEY`; the same key serves Sandboxes | UNVERIFIED | `.env` defines it and `GET /v1/models?verbose=true` (output kept outside the repo) succeeded with it as the Bearer token (2026-10-10); not checked whether `/v1/models` needs auth, and the Sandboxes half is unchecked. docs.tokenfactory.nebius.com/sandboxes/start/set-up-access | 2026-10-09 | A |
 | Nano model ID, from `GET /v1/models` | `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` (capitalised; the spec's lowercase form is wrong) | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) | 2026-10-10 | A |
+| Helper model ID (chosen 2026-10-10 instead of Nano) | `nvidia/Nemotron-3_5-Lightning`: 30B MoE, 3B active, bf16, 1M context, $0.06 in / $0.24 out per 1M tokens, 600 req/min and 400k tok/min, eu-north1 | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) | 2026-10-10 | A |
 | Super model ID | `nvidia/nemotron-3-super-120b-a12b` | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) | 2026-10-10 | A |
 | Ultra model ID | `nvidia/Nemotron-3-Ultra-550b-a55b` (capital N and U) | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo) | 2026-10-10 | A |
 | Context window, each model | Nano 262144, Super 262144, Ultra 1048576 | VERIFIED (live, free) | `GET /v1/models?verbose=true` (output kept outside the repo), `context_length` | 2026-10-10 | A |
@@ -215,5 +216,5 @@ Add a row whenever something surprises you. Newest first.
 | Is the repo state at a boundary exactly `session.uuid`, and does a fork see files written in the sandbox after the fork point? | A | `replay/` fork |
 | With several `task` calls in one AIMessage, all share one pre-`tools` checkpoint; forking one needs its tool_call id. Untested | A, B | `replay/` and `gate/` |
 | Hide `execute` from the reference team, or leave it on? | A | `refapp/` |
-| `nvidia/Nemotron-3_5-Lightning` is also listed: same price as Nano, 1M context, 600 req/min, tools and reasoning. Use it as `helper` instead of Nano? | A, B | C0 preflight |
+| Helper is now Lightning (same size and price as Nano, 6× the request limit). Confirm in the live spike that it returns valid structured JSON at least as reliably as Nano on the same helper prompt; switch back if not, before the first sweep | A | Live spike |
 | All four list `tools` and `reasoning` in `supported_features`; does that mean native `tool_calls` and a thinking switch on Chat Completions? (§2 rows still open) | A | Live hello-world run |

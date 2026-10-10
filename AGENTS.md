@@ -44,7 +44,7 @@ config.yaml both  model IDs, prices, temperatures, safe config
 ## Hard rules
 
 **1. Models only through `get_model(role)`.** Never construct a model client anywhere else. Roles and what they may do:
-- `helper` (Nano): constraint extraction, predicate compilation, mutations, summaries.
+- `helper` (Nemotron 3.5 Lightning; the spec says Nano): constraint extraction, predicate compilation, mutations, summaries.
 - `sut` (Super): the system under test, nothing else.
 - `planner` (Ultra): repair planning, at most 3 calls per repair iteration.
 

@@ -6,11 +6,11 @@ token_factory:
 
 models:
   helper:
-    id: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B   # docs/FACTS.md §2, GET /v1/models
+    id: nvidia/Nemotron-3_5-Lightning   # docs/FACTS.md §2, GET /v1/models; chosen over Nano 2026-10-10
     input_usd_per_mtok: 0.06    # copied 2026-10-10
     output_usd_per_mtok: 0.24   # copied 2026-10-10
     temperature: 0
-    context_window: 262144
+    context_window: 1048576
   sut:
     id: nvidia/nemotron-3-super-120b-a12b   # docs/FACTS.md §2, GET /v1/models
     input_usd_per_mtok: 0.30    # copied 2026-10-10
