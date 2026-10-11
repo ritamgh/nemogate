@@ -22,7 +22,11 @@ def test_committed_config_yaml_loads():
     assert config.budget.stop_at_fraction == 0.8
     assert config.models[Role.helper].temperature == 0
     assert config.models[Role.planner].temperature == 0
-    assert config.models[Role.sut].temperature is None
+    # The model card's sampling for Super (2026-10-11); helper and planner leave top_p unset.
+    assert config.models[Role.sut].temperature == 1.0
+    assert config.models[Role.sut].top_p == 0.95
+    assert config.models[Role.helper].top_p is None
+    assert config.models[Role.planner].top_p is None
     # Exact IDs from GET /v1/models (docs/FACTS.md §2); the casing differs per model on purpose.
     assert config.models[Role.helper].id == "nvidia/Nemotron-3_5-Lightning"
     assert config.models[Role.sut].id == "nvidia/nemotron-3-super-120b-a12b"
@@ -105,3 +109,51 @@ def test_zero_price_and_zero_temperature_are_accepted():
     )
     helper = AppConfig.model_validate(data).models[Role.helper]
     assert (helper.input_usd_per_mtok, helper.temperature, helper.context_window) == (0, 0, 1)
+
+
+@pytest.mark.parametrize("bad", [0, -0.1, 1.5, float("inf"), float("nan")])
+def test_top_p_outside_zero_exclusive_to_one_is_rejected(bad):
+    # Breaks if top_p loses its range: 0 or >1 would be sent to the API and fail late.
+    data = _committed_config_data()
+    data["models"]["sut"]["top_p"] = bad
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("good", [None, 0.95, 1])
+def test_top_p_accepts_none_and_values_up_to_one(good):
+    # Breaks if the range is over-tightened, or None (= not sent) stops being allowed.
+    data = _committed_config_data()
+    data["models"]["helper"]["top_p"] = good
+    assert AppConfig.model_validate(data).models[Role.helper].top_p == good
+
+
+BLANKABLE = pytest.mark.parametrize(
+    "path",
+    [("models", "sut", "id"), ("token_factory", "base_url"), ("safe_config", "hash")],
+    ids=["model_id", "base_url", "safe_config_hash"],
+)
+
+
+def _with_value(path, value):
+    data = _committed_config_data()
+    node = data
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    return data
+
+
+@BLANKABLE
+@pytest.mark.parametrize("blank", ["", " ", "\n"], ids=["empty", "space", "newline"])
+def test_blank_config_strings_are_rejected(path, blank):
+    # Breaks if these go back to plain `str`: a blank model id or URL would pass validation and
+    # only fail at the first live call.
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(_with_value(path, blank))
+
+
+@BLANKABLE
+def test_config_strings_may_still_be_null(path):
+    # Breaks if None stops being allowed: values stay null until the spike fills them.
+    AppConfig.model_validate(_with_value(path, None))

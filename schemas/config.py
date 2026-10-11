@@ -6,22 +6,24 @@ from typing import Annotated, Literal, Self
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from schemas.enums import STRICT, Role
+from schemas.enums import STRICT, NonEmptyStr, Role
 
 NonNegativeFinite = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+TopP = Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
 
 
 class TokenFactoryConfig(BaseModel):
     model_config = STRICT
-    base_url: str | None = None
+    base_url: NonEmptyStr | None = None
 
 
 class ModelConfig(BaseModel):
     model_config = STRICT
-    id: str | None = None
+    id: NonEmptyStr | None = None
     input_usd_per_mtok: NonNegativeFinite | None = None
     output_usd_per_mtok: NonNegativeFinite | None = None
     temperature: NonNegativeFinite | None = None
+    top_p: TopP | None = None  # None = not sent
     context_window: Annotated[int, Field(gt=0)] | None = None
 
 
@@ -29,7 +31,7 @@ class SafeConfig(BaseModel):
     model_config = STRICT
     response_format: Literal["json_schema", "json_object"] | None = None
     thinking: bool | None = None
-    hash: str | None = None
+    hash: NonEmptyStr | None = None
 
 
 class BudgetConfig(BaseModel):

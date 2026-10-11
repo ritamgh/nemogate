@@ -51,6 +51,13 @@ def test_run_config_repo_ref_defaults_to_main():
     assert RunConfig.model_validate(data).repo_ref == "main"
 
 
+@pytest.mark.parametrize("blank", ["", " ", "\n"], ids=["empty", "space", "newline"])
+def test_run_config_blank_repo_ref_is_rejected(blank):
+    # Breaks if repo_ref goes back to plain `str`: "" would reach the repair agent as a git ref.
+    with pytest.raises(ValidationError):
+        RunConfig.model_validate({**json.loads(SPEC_RUN_CONFIG), "repo_ref": blank})
+
+
 def test_run_config_with_unknown_key_is_rejected():
     with pytest.raises(ValidationError):
         RunConfig.model_validate({**json.loads(SPEC_RUN_CONFIG), "extra": 1})
@@ -148,6 +155,16 @@ def test_run_record_blank_replay_handle_is_rejected(field, blank):
 def test_run_record_replay_handle_may_be_none(field):
     # Breaks if None stops being allowed: a run that was never forked has no handle.
     assert getattr(RunRecord.model_validate(_record_data(**{field: None})), field) is None
+
+
+@pytest.mark.parametrize("field", ["checkpoint_id", "contree_image"])
+def test_run_record_requires_the_replay_handle_keys(field):
+    # Breaks if a handle gets a `= None` default: the replay engine could then omit it
+    # silently. It is nullable but not optional, like Violation.step.
+    data = _record_data()
+    del data[field]
+    with pytest.raises(ValidationError):
+        RunRecord.model_validate(data)
 
 
 @pytest.mark.parametrize("field", ["run_id", "task_id", "ledger_path", "trace_path"])

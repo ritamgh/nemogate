@@ -215,6 +215,29 @@ def test_role_picks_its_own_price_and_temperature(live, config_path, spend_log):
     assert helper_t.requests[0].headers["authorization"] == f"Bearer {FAKE_KEY}"
 
 
+def test_top_p_reaches_the_request_only_when_configured(live, config_path, tmp_path):
+    # Breaks if get_model stops passing top_p (Super would run at the provider default), or
+    # sends it when the config leaves it null.
+    sampled = write_config(
+        tmp_path / "sampled.yaml", models__sut__temperature=1.0, models__sut__top_p=0.95
+    )
+    sampled_t = Transport()
+    get_model("sut", config_path=sampled, **sampled_t.clients).invoke("hi")
+    body = json.loads(sampled_t.requests[0].content)
+    assert (body["temperature"], body["top_p"]) == (1.0, 0.95)
+    unset_t = Transport()
+    get_model("sut", config_path=config_path, **unset_t.clients).invoke("hi")
+    assert "top_p" not in json.loads(unset_t.requests[0].content)
+
+
+def test_committed_sut_sampling_reaches_the_request(live):
+    # Breaks if config.yaml's sut sampling is dropped on the way to the wire.
+    transport = Transport()
+    get_model("sut", config_path=REPO_ROOT / "config.yaml", **transport.clients).invoke("hi")
+    body = json.loads(transport.requests[0].content)
+    assert (body["temperature"], body["top_p"]) == (1.0, 0.95)
+
+
 def test_run_scope_tags_live_lines(live, config_path, spend_log):
     # Breaks if the handler loses the run_id context (including in the async path), on either
     # the reserve or the settle line.

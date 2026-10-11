@@ -47,7 +47,7 @@ class RunConfig(BaseModel):
     operator: Operator
     target_boundary: BoundaryId
     target_constraint: ConstraintId
-    repo_ref: str = "main"
+    repo_ref: NonEmptyStr = "main"
     ledger_path: NonEmptyStr
     trace_path: NonEmptyStr
     seed: int
