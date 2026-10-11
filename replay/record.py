@@ -51,8 +51,8 @@ def git_sha(ref: str, repo_dir: Path = ROOT) -> str:
 def require_checkout_at(ref: str, repo_dir: Path = ROOT, *, allow_dirty: bool = False) -> str:
     """The sha of `ref`, provided it is what is checked out (the code that runs is this checkout).
 
-    ValueError if `ref` is not HEAD, or if tracked files differ from HEAD and not `allow_dirty`.
-    Untracked files do not count as dirty.
+    ValueError if `ref` is not HEAD, or if tracked files differ from HEAD or there are untracked
+    files that .gitignore does not cover, and not `allow_dirty`. Ignored files never count.
     """
     sha = git_sha(ref, repo_dir)
     head = git_sha("HEAD", repo_dir)
@@ -62,12 +62,12 @@ def require_checkout_at(ref: str, repo_dir: Path = ROOT, *, allow_dirty: bool = 
             "a run can only claim the commit it runs from"
         )
     if not allow_dirty:
-        status = _git(repo_dir, "status", "--porcelain", "--untracked-files=no")
+        status = _git(repo_dir, "status", "--porcelain")
         if status.returncode != 0:
             raise ValueError(f"git status failed in {repo_dir}: {status.stderr.strip()}")
         if status.stdout.strip():
             raise ValueError(
-                f"tracked files differ from HEAD in {repo_dir}:\n{status.stdout.rstrip()}"
+                f"the working tree differs from HEAD in {repo_dir}:\n{status.stdout.rstrip()}"
             )
     return sha
 
