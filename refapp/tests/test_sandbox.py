@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
-from contree_sdk.sdk.exceptions import OperationTimedOutError
+from contree_sdk.sdk.exceptions import ApiTimeoutError, NotFoundError, OperationTimedOutError
 
 from refapp import sandbox, seedenv
 
@@ -33,17 +33,24 @@ class FakeRun:
 class FakeBackend:
     """Records SDK calls in order; `script` maps a substring of a shell command to its result."""
 
-    def __init__(self, script=None):
+    def __init__(self, script=None, missing=(), use_error=None):
         self.calls: list[tuple] = []
         self.script = script or {}
+        self.missing = {str(u) for u in missing}  # uuids `images.use(..., strict=True)` 404s on
+        self.use_error = use_error
         self.images = SimpleNamespace(oci=self._oci, use=self._use)
 
     async def _oci(self, ref):
         self.calls.append(("oci", ref))
         return FakeImage(self, START_UUID)
 
-    async def _use(self, uuid):
-        self.calls.append(("use", uuid))
+    async def _use(self, uuid, **kw):
+        self.calls.append(("use", uuid) + ((kw,) if kw else ()))
+        if kw.get("strict"):  # the SDK only asks the API when strict (FACTS section 7)
+            if self.use_error is not None:
+                raise self.use_error
+            if str(uuid) in self.missing:
+                raise NotFoundError()
         return FakeImage(self, str(uuid))
 
     def result_for(self, shell):
@@ -196,6 +203,68 @@ def test_seed_image_builds_once_then_reuses_the_cache(tmp_path, monkeypatch):
     assert saved["uuid"] == FINAL_UUID
     assert saved["base_image"] == "python:3.12-slim"
     assert re.fullmatch(r"[0-9a-f]{12}", saved["seed_sha"])
+
+
+def write_cache(cache, uuid):
+    cache.write_text(
+        json.dumps({"seed_sha": sandbox.seed_sha(), "base_image": sandbox.BASE_IMAGE, "uuid": uuid})
+    )
+
+
+def test_seed_image_reuses_a_cached_uuid_only_after_checking_it_exists(tmp_path, monkeypatch):
+    # Fails if the cached uuid is returned without asking Contree (the check is `strict=True`).
+    copy_seed(tmp_path, monkeypatch)
+    cache = tmp_path / "seed.json"
+    write_cache(cache, START_UUID)
+    backend = FakeBackend()
+
+    assert asyncio.run(sandbox.seed_image(backend, cache)) == START_UUID
+
+    assert backend.calls == [("use", UUID(START_UUID), {"strict": True})]
+
+
+def test_seed_image_rebuilds_and_rewrites_the_cache_when_the_image_is_gone(tmp_path, monkeypatch):
+    # Fails if a cached uuid that Contree no longer has is trusted: every run then dies in
+    # new_session after a cleanup or project switch.
+    copy_seed(tmp_path, monkeypatch)
+    cache = tmp_path / "seed.json"
+    write_cache(cache, START_UUID)
+    backend = FakeBackend(missing=[START_UUID])
+
+    assert asyncio.run(sandbox.seed_image(backend, cache)) == FINAL_UUID
+
+    assert [c[0] for c in backend.calls] == [
+        "use",
+        "oci",
+        "apply_files",
+        "session.run",
+        "session.run",
+    ]
+    assert json.loads(cache.read_text())["uuid"] == FINAL_UUID
+
+
+def test_seed_image_lets_other_errors_from_the_existence_check_through(tmp_path, monkeypatch):
+    # Fails if any error (here a timeout) is read as "image gone" and starts a rebuild.
+    copy_seed(tmp_path, monkeypatch)
+    cache = tmp_path / "seed.json"
+    write_cache(cache, START_UUID)
+    backend = FakeBackend(use_error=ApiTimeoutError(timeout_type="read"))
+    before = cache.read_text()
+
+    with pytest.raises(ApiTimeoutError):
+        asyncio.run(sandbox.seed_image(backend, cache))
+
+    assert [c[0] for c in backend.calls] == ["use"]
+    assert cache.read_text() == before
+
+
+def test_seed_image_rebuilds_when_the_cached_uuid_is_not_a_uuid(tmp_path, monkeypatch):
+    # Fails if a hand-edited cache crashes on UUID() instead of rebuilding.
+    copy_seed(tmp_path, monkeypatch)
+    cache = tmp_path / "seed.json"
+    write_cache(cache, "not-a-uuid")
+
+    assert asyncio.run(sandbox.seed_image(FakeBackend(), cache)) == FINAL_UUID
 
 
 def test_seed_image_rebuilds_when_the_seed_changed(tmp_path, monkeypatch):
