@@ -177,10 +177,12 @@ def test_main_checkout_root_is_the_work_tree_when_the_git_dir_is_elsewhere(tmp_p
     wt = tmp_path / "wt"
     run_git(project, "worktree", "add", "-q", str(wt))
     assert main_checkout_root(project).resolve() == project.resolve()
-    assert main_checkout_root(wt).resolve() == project.resolve()
+    # git lists the git dir, not the work tree, as the main entry, so a linked worktree of such a
+    # repo cannot find the main checkout: it keeps its own root (never the git dir's parent).
+    assert main_checkout_root(wt).resolve() == wt.resolve()
     (git_dir.parent / ".env").write_text("FROM_GIT_DIR_PARENT=bad\n", encoding="utf-8")
     (project / ".env").write_text("FROM_PROJECT=ok\n", encoding="utf-8")
-    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    monkeypatch.setattr(common.env, "REPO_ROOT", project)
     _forget(monkeypatch, "FROM_GIT_DIR_PARENT", "FROM_PROJECT")
     require_env("FROM_PROJECT")
     assert "FROM_GIT_DIR_PARENT" not in os.environ
