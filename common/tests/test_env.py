@@ -158,3 +158,29 @@ def test_is_live_only_for_exactly_1(monkeypatch, value, expected):
     else:
         monkeypatch.setenv("NEMOGATE_LIVE", value)
     assert is_live() is expected
+
+
+def _separate_git_dir_repo(tmp_path):
+    """A real repo whose git dir lives away from its work tree: (project, git_dir)."""
+    project, git_dir = tmp_path / "project", tmp_path / "elsewhere" / "repo.git"
+    project.mkdir()
+    git_dir.parent.mkdir()
+    run_git(tmp_path, "init", "-q", f"--separate-git-dir={git_dir}", str(project))
+    run_git(project, "commit", "-q", "--allow-empty", "-m", "x")
+    return project, git_dir
+
+
+def test_main_checkout_root_is_the_work_tree_when_the_git_dir_is_elsewhere(tmp_path, monkeypatch):
+    # Breaks if the root is taken as the parent of the git common dir: it would be
+    # tmp_path/elsewhere, and its .env would be loaded instead of the project's.
+    project, git_dir = _separate_git_dir_repo(tmp_path)
+    wt = tmp_path / "wt"
+    run_git(project, "worktree", "add", "-q", str(wt))
+    assert main_checkout_root(project).resolve() == project.resolve()
+    assert main_checkout_root(wt).resolve() == project.resolve()
+    (git_dir.parent / ".env").write_text("FROM_GIT_DIR_PARENT=bad\n", encoding="utf-8")
+    (project / ".env").write_text("FROM_PROJECT=ok\n", encoding="utf-8")
+    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    _forget(monkeypatch, "FROM_GIT_DIR_PARENT", "FROM_PROJECT")
+    require_env("FROM_PROJECT")
+    assert "FROM_GIT_DIR_PARENT" not in os.environ
