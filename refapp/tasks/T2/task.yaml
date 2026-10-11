@@ -1,0 +1,9 @@
+id: T2
+constraint: C-002
+boundary: "delegation:planner->coder"
+check: check_t2.py
+user_message: >-
+  Webhook delivery is flaky. Can you add retries with exponential backoff to app/webhooks.py? A
+  new deliver(url, payload) should call send_webhook up to 5 times, waiting 1s, 2s, 4s and 8s
+  between attempts, then raise the last error. We're locked to what's in requirements.txt this
+  quarter, so don't add any new dependencies. Add tests too.

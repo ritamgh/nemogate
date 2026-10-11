@@ -64,9 +64,9 @@ def test_first_write_to_the_default_log_creates_the_home_directory(monkeypatch, 
     assert default.parent.is_dir()
 
 
-def test_legacy_log_is_copied_once_and_left_untouched(monkeypatch, tmp_path):
+def test_legacy_log_is_merged_into_the_home_log_and_left_untouched(monkeypatch, tmp_path):
     # Breaks if the legacy runs/spend.jsonl is ignored (money already spent stops counting),
-    # re-copied on every read, moved, or edited.
+    # moved, or edited.
     default = _default_log(monkeypatch, tmp_path)
     main, _ = make_repo_with_worktree(tmp_path)
     legacy = _legacy_log(main, SETTLE_1_5 + SETTLE_0_25)
@@ -74,22 +74,48 @@ def test_legacy_log_is_copied_once_and_left_untouched(monkeypatch, tmp_path):
     assert total_spent() == 1.75
     assert default.read_text(encoding="utf-8") == SETTLE_1_5 + SETTLE_0_25
     assert [p.name for p in default.parent.iterdir()] == ["spend.jsonl"]  # no temp file left
-    append_spend("sut", "m", 1, 1, 0.5)
-    legacy.write_text(legacy.read_text(encoding="utf-8") + SETTLE_9, encoding="utf-8")
-    assert total_spent() == 2.25
-    assert legacy.read_text(encoding="utf-8") == SETTLE_1_5 + SETTLE_0_25 + SETTLE_9
+    assert legacy.read_text(encoding="utf-8") == SETTLE_1_5 + SETTLE_0_25
 
 
-def test_when_both_logs_exist_only_the_new_one_counts(monkeypatch, tmp_path):
-    # Breaks if the legacy log is merged into a log that already exists (double counting).
+def test_a_home_log_created_first_does_not_hide_the_legacy_log(monkeypatch, tmp_path):
+    # Breaks if the legacy log is merged only when the home log is absent: a fresh clone's
+    # home log would hide the money an older checkout already spent.
     default = _default_log(monkeypatch, tmp_path)
     default.parent.mkdir(parents=True)
     default.write_text(SETTLE_0_25, encoding="utf-8")
     main, _ = make_repo_with_worktree(tmp_path)
-    _legacy_log(main, SETTLE_9)
+    legacy = _legacy_log(main, SETTLE_9)
     monkeypatch.setattr(common.env, "REPO_ROOT", main)
-    assert total_spent() == 0.25
-    assert default.read_text(encoding="utf-8") == SETTLE_0_25
+    assert total_spent() == 9.25
+    assert default.read_text(encoding="utf-8") == SETTLE_0_25 + SETTLE_9
+    assert legacy.read_text(encoding="utf-8") == SETTLE_9
+
+
+def test_lines_appended_to_the_legacy_log_after_the_merge_still_count(monkeypatch, tmp_path):
+    # Breaks if the merge is one-shot: an older process still writing the legacy log after the
+    # first copy would have its spend lost.
+    default = _default_log(monkeypatch, tmp_path)
+    main, _ = make_repo_with_worktree(tmp_path)
+    legacy = _legacy_log(main, SETTLE_1_5)
+    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    assert total_spent() == 1.5
+    append_spend("sut", "m", 1, 1, 0.5)
+    legacy.write_text(legacy.read_text(encoding="utf-8") + SETTLE_9, encoding="utf-8")
+    assert total_spent() == 11.0
+    assert SETTLE_9 in default.read_text(encoding="utf-8")
+    assert legacy.read_text(encoding="utf-8") == SETTLE_1_5 + SETTLE_9
+
+
+def test_merging_the_legacy_log_twice_adds_nothing(monkeypatch, tmp_path):
+    # Breaks if a legacy line already in the home log is appended again (double counting).
+    default = _default_log(monkeypatch, tmp_path)
+    main, _ = make_repo_with_worktree(tmp_path)
+    _legacy_log(main, SETTLE_1_5 + SETTLE_0_25)
+    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    assert total_spent() == 1.75
+    first = default.read_text(encoding="utf-8")
+    assert total_spent() == 1.75
+    assert default.read_text(encoding="utf-8") == first == SETTLE_1_5 + SETTLE_0_25
 
 
 def test_a_worktree_carries_over_the_main_checkouts_legacy_log(monkeypatch, tmp_path):

@@ -18,18 +18,23 @@ class MissingEnvError(RuntimeError):
 
 @lru_cache
 def _main_checkout_root(repo_root: Path) -> Path:
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo_root, capture_output=True, text=True, timeout=5, check=True
+        ).stdout
+
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout.split("\n")
         # Only trust git when repo_root is itself the checkout, not a folder inside another repo.
-        if len(out) >= 2 and Path(out[0]).resolve() == repo_root.resolve():
-            return Path(out[1]).parent
+        if Path(git("rev-parse", "--show-toplevel").strip()).resolve() != repo_root.resolve():
+            return repo_root
+        # The first entry of the worktree list is the main worktree. With a separate git dir
+        # (`git init --separate-git-dir`) git lists the git dir itself there, which holds no
+        # `.git` entry: that is not a work tree, so keep repo_root rather than load its `.env`.
+        first = git("worktree", "list", "--porcelain").split("\n", 1)[0]
+        if first.startswith("worktree "):
+            main = Path(first.removeprefix("worktree "))
+            if (main / ".git").exists():
+                return main
     except (OSError, subprocess.SubprocessError):
         pass
     return repo_root

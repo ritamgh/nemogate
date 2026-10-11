@@ -90,6 +90,9 @@ def _message_chars(message: BaseMessage) -> int:
     if isinstance(message, AIMessage):
         for call in message.tool_calls:
             chars += len(call["name"]) + len(json.dumps(call["args"], default=str))
+        # ChatOpenAI sends these too, as the raw (unparsed) arguments string.
+        for bad in message.invalid_tool_calls:
+            chars += len(bad["name"] or "") + len(bad["args"] or "")
     return chars
 
 
@@ -127,6 +130,10 @@ class SpendHandler(BaseCallbackHandler):
             self.model_cfg,
         )
         self._reserved[str(run_id)] = (est_input, est_output)
+
+    def on_llm_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
+        # The on-disk reserve stays counted (never settled); only the in-memory entry goes.
+        self._reserved.pop(str(run_id), None)
 
     def on_llm_end(self, response: LLMResult, *, run_id: Any, **kwargs: Any) -> None:
         reserved = self._reserved.pop(str(run_id), None)
@@ -168,6 +175,10 @@ class SpendHandler(BaseCallbackHandler):
         return None
 
 
+# safe_config.response_format -> the name ChatOpenAI.with_structured_output calls that method
+_METHOD_FOR_RESPONSE_FORMAT = {"json_schema": "json_schema", "json_object": "json_mode"}
+
+
 class _TokenFactoryChat(ChatOpenAI):
     """ChatOpenAI that never lets the API key out through a provider error message, and always
     sends the safe config's thinking switch and structured-output method."""
@@ -180,18 +191,31 @@ class _TokenFactoryChat(ChatOpenAI):
     ) -> Runnable:
         # The base class defaults to function_calling, and a caller can ask for json_mode, which
         # Super answers with prose (docs/FACTS.md decision log). Only the safe config's method goes.
-        if method is not None and method != self._structured_method:
+        configured = _METHOD_FOR_RESPONSE_FORMAT[self._structured_method]
+        if method is not None and method != configured:
             raise ValueError(
                 f"with_structured_output(method={method!r}) conflicts with the safe config's "
-                f"{self._structured_method!r}; omit method to use it"
+                f"{self._structured_method!r} ({configured!r}); omit method to use it"
             )
-        return super().with_structured_output(schema, method=self._structured_method, **kwargs)
+        return super().with_structured_output(schema, method=configured, **kwargs)
 
     def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict:
         # Every call path builds its request here. A bound extra_body replaces the default one
         # wholesale, so the switch is merged in last, and the safe config wins over the caller.
         payload = super()._get_request_payload(*args, **kwargs)
         extra = dict(payload.get("extra_body") or {})
+        # A response_format in either place reaches the wire (extra_body overrides the field), and
+        # only the safe config's type may go. A request that sets none (chat, tools) is fine.
+        for sent in (payload.get("response_format"), extra.get("response_format")):
+            if sent is None:
+                continue
+            # A pydantic class here is turned into a json_schema format by the SDK.
+            kind = sent.get("type") if isinstance(sent, dict) else "json_schema"
+            if kind != self._structured_method:
+                raise ValueError(
+                    f"response_format type {kind!r} conflicts with the safe config's "
+                    f"{self._structured_method!r}; only the configured one may be sent"
+                )
         template = {**(extra.get("chat_template_kwargs") or {}), "enable_thinking": self._thinking}
         payload["extra_body"] = {**extra, "chat_template_kwargs": template}
         return payload

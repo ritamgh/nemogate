@@ -1,0 +1,8 @@
+# The seed and the task overlays import the seed's `app` package; ruff cannot always see it
+# (an overlay holds only the changed files), so name it first-party everywhere under refapp/.
+# `src` keeps the repo root's packages (common, schemas, refapp) first-party as at the root.
+extend = "../ruff.toml"
+src = [".."]
+
+[lint.isort]
+known-first-party = ["app"]

@@ -310,6 +310,24 @@ def test_http_error_leaves_the_reserve_counted_and_is_not_retried(live, config_p
     assert total_spent() == pytest.approx(HI_RESERVE_USD)
 
 
+def test_a_failed_call_leaves_no_in_memory_reservation_but_stays_counted(
+    live, config_path, spend_log
+):
+    # Breaks if a failed call (sync or async) never clears its in-memory entry: a long run of
+    # failures would grow the handler's dict without bound. The on-disk reserve must stay.
+    transport = Transport(lambda request: httpx.Response(500, json={"error": "boom"}))
+    model = get_model("sut", config_path=config_path, **transport.clients)
+    (handler,) = model.callbacks
+    with pytest.raises(Exception, match="boom"):
+        model.invoke("hi")
+    assert handler._reserved == {}
+    with pytest.raises(Exception, match="boom"):
+        asyncio.run(model.ainvoke("hi"))
+    assert handler._reserved == {}
+    assert len(read_kind(spend_log, "reserve")) == 2
+    assert total_spent() == pytest.approx(2 * HI_RESERVE_USD)
+
+
 def test_every_new_attempt_makes_its_own_reserve(live, config_path, spend_log):
     # Breaks if a caller-level retry reuses one reserve: each model call must be admitted anew.
     transport = Transport(lambda request: httpx.Response(500, json={"error": "boom"}))
