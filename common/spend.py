@@ -12,7 +12,6 @@ or bypass the cap.
 import fcntl
 import json
 import os
-import tempfile
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -37,47 +36,52 @@ def _legacy_log_path() -> Path:
     return env.main_checkout_root() / "runs" / "spend.jsonl"
 
 
-def _carry_over(legacy: Path, target: Path) -> None:
-    """Copy the legacy log to `target` once, atomically, so money already spent still counts.
+def _merge_legacy(legacy: Path, target: Path) -> None:
+    """Append to `target` every legacy line it does not already hold, so money already spent counts.
 
-    The copy is written to a temp file beside `target` and then hard-linked into place, which
-    fails instead of overwriting if another process created `target` first. The legacy file is
-    only read.
+    Lines are compared exactly, so merging again adds nothing and never double counts. The append
+    takes the same exclusive lock as `admit` and `append_spend`, so it cannot interleave with a
+    reserve. The legacy file is only read, under a shared lock.
     """
-    target.parent.mkdir(parents=True, exist_ok=True)
     with legacy.open("rb") as f:
         fcntl.flock(f, fcntl.LOCK_SH)
         try:
-            data = f.read()
+            legacy_lines = f.read().decode("utf-8").splitlines()
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
-    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "wb") as out:
-            out.write(data)
-            out.flush()
-            os.fsync(out.fileno())
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a+", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
         try:
-            os.link(tmp, target)
-        except FileExistsError:
-            pass
-    finally:
-        tmp.unlink(missing_ok=True)
+            f.seek(0)
+            text = f.read()
+            have = set(text.splitlines())
+            missing = []
+            for line in legacy_lines:
+                if line.strip() and line not in have:
+                    missing.append(line)
+                    have.add(line)
+            if missing:
+                lead = "\n" if text and not text.endswith("\n") else ""
+                f.write(lead + "\n".join(missing) + "\n")
+                f.flush()
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def spend_log_path() -> Path:
     """`NEMOGATE_SPEND_LOG` if set, else `~/.nemogate/spend.jsonl`, which survives `git clean`.
 
-    On first use of the default, a legacy `runs/spend.jsonl` in the main checkout is copied over.
+    Whenever a legacy `runs/spend.jsonl` exists in the main checkout, its lines are first merged
+    into the default log (an older checkout or process may still write there).
     """
     override = os.environ.get("NEMOGATE_SPEND_LOG")
     if override:
         return Path(override)
     target = Path.home() / ".nemogate" / "spend.jsonl"
     legacy = _legacy_log_path()
-    if not target.exists() and legacy != target and legacy.is_file():
-        _carry_over(legacy, target)
+    if legacy != target and legacy.is_file():
+        _merge_legacy(legacy, target)
     return target
 
 
