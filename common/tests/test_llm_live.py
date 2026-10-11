@@ -9,7 +9,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
-from common import ConfigError, MissingEnvError, SpendCapReached, UsageMissing
+from common import ConfigError, MissingEnvError, SpendCapReached
 from common.env import REPO_ROOT
 from common.llm import get_model, safe_config_hash
 from common.spend import append_spend, run_scope, total_spent
@@ -266,15 +266,13 @@ def test_well_below_the_cap_the_call_goes_through(live, config_path, spend_log):
 
 def test_response_without_usage_stays_counted_at_its_reserve(live, config_path, spend_log):
     # Breaks if a response with no token counts leaves the ledger empty (fail-open): the paid
-    # call must stay counted at its reserve, and a retry must see it.
+    # call must stay counted at its reserve, and a retry must see it. Pinned the old behaviour
+    # (UsageMissing raised, reply lost); the reply is now returned and the call settled.
     transport = Transport(completion(prompt_tokens=None))
     model = get_model("sut", config_path=config_path, **transport.clients)
-    with pytest.raises(UsageMissing):
-        model.invoke("hi")
-    assert [line["kind"] for line in read_log(spend_log)] == ["reserve"]
+    assert model.invoke("hi").content == "hello"
     assert total_spent() == pytest.approx(HI_RESERVE_USD)
-    with pytest.raises(UsageMissing):
-        model.invoke("hi")
+    assert model.invoke("hi").content == "hello"
     assert total_spent() == pytest.approx(2 * HI_RESERVE_USD)
 
 
