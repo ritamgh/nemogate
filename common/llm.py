@@ -168,6 +168,10 @@ class SpendHandler(BaseCallbackHandler):
         return None
 
 
+# safe_config.response_format -> the name ChatOpenAI.with_structured_output calls that method
+_METHOD_FOR_RESPONSE_FORMAT = {"json_schema": "json_schema", "json_object": "json_mode"}
+
+
 class _TokenFactoryChat(ChatOpenAI):
     """ChatOpenAI that never lets the API key out through a provider error message, and always
     sends the safe config's thinking switch and structured-output method."""
@@ -180,12 +184,13 @@ class _TokenFactoryChat(ChatOpenAI):
     ) -> Runnable:
         # The base class defaults to function_calling, and a caller can ask for json_mode, which
         # Super answers with prose (docs/FACTS.md decision log). Only the safe config's method goes.
-        if method is not None and method != self._structured_method:
+        configured = _METHOD_FOR_RESPONSE_FORMAT[self._structured_method]
+        if method is not None and method != configured:
             raise ValueError(
                 f"with_structured_output(method={method!r}) conflicts with the safe config's "
-                f"{self._structured_method!r}; omit method to use it"
+                f"{self._structured_method!r} ({configured!r}); omit method to use it"
             )
-        return super().with_structured_output(schema, method=self._structured_method, **kwargs)
+        return super().with_structured_output(schema, method=configured, **kwargs)
 
     def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict:
         # Every call path builds its request here. A bound extra_body replaces the default one
