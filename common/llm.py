@@ -309,6 +309,8 @@ def get_model(
     kwargs: dict[str, Any] = {}
     if model_cfg.temperature is not None:
         kwargs["temperature"] = model_cfg.temperature
+    if model_cfg.top_p is not None:
+        kwargs["top_p"] = model_cfg.top_p
     if http_client is not None:
         kwargs["http_client"] = http_client
     if http_async_client is not None:

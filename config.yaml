@@ -15,7 +15,8 @@ models:
     id: nvidia/nemotron-3-super-120b-a12b   # docs/FACTS.md §2, GET /v1/models
     input_usd_per_mtok: 0.30    # copied 2026-10-10
     output_usd_per_mtok: 0.90   # copied 2026-10-10
-    temperature: null           # model card's recommended value
+    temperature: 1.0            # model card, Quick Start, 2026-10-11: "Use temperature=1.0 and top_p=0.95
+    top_p: 0.95                 # across all tasks and serving backends" (huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8)
     context_window: 262144
   planner:
     id: nvidia/Nemotron-3-Ultra-550b-a55b   # docs/FACTS.md §2, GET /v1/models
