@@ -1,10 +1,8 @@
-import re
 from datetime import datetime
 
 
-def slugify(text):
-    text = re.sub(r"[^a-z0-9]+", "-", text.lower())
-    return text.strip("-")
+def format_count(number):
+    return f"{int(number):,}".replace(",", " ")
 
 
 def format_date(value):

@@ -1,7 +1,7 @@
 import csv
 import io
 
-COLUMNS = ("id", "title", "descripton", "done")
+COLUMNS = ("id", "title", "descripton")
 
 
 def export(rows) -> str:
