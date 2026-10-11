@@ -175,6 +175,17 @@ Probes ran live on 2026-10-10: `runs/live/models_probe.py` (b–e) and `runs/liv
 | Thinking on plus structured output returns non-empty, parseable content | All four; `json_schema` meeting extraction | Valid 5/5 (Lightning, Nano) and 3/3 (Super, Ultra) both on and off. Fields correct, on vs off: Lightning 4/5 vs 5/5, Nano 5/5 vs 5/5, Super 1/3 vs 3/3, Ultra 3/3 vs 3/3 | Mean output tokens on vs off: Lightning 2188 vs 132, Nano 575 vs 162, Super 655 vs 132, Ultra 515 vs 154. Mean seconds: Lightning 8.6 vs 0.8, Super 3.5 vs 1.0 |
 | Model IDs resolve via `GET /v1/models` | All four | Yes | §2 rows |
 
+Those probes left Super's temperature unset (the provider default, not recorded). Re-run on 2026-10-12 at the pinned sampling with `runs/live/sampling_probe.py` (outside the repo, output `out/sampling_probe.json`): Super through `get_model("sut")` unchanged, so temperature 1.0 and top_p 0.95 were sent (read back from the client), thinking off, `json_schema`. 5 tries per probe, $0.002.
+
+| Probe | Config | Result | Notes |
+| --- | --- | --- | --- |
+| Meeting extraction under `json_schema` | Super, temperature 1.0, top_p 0.95, thinking off | Valid 5/5, fields correct 5/5 | Mean 132 output tokens, 1.2 s, the same as at the default temperature |
+| Native tool call (`bind_tools`) | same | 5/5 native `tool_calls` with correct args | No tool call came back as text |
+| Escape round-trip, `response_format` bound by hand | same | JSON valid 5/5, exact text 1/5 | Same kind of miss as before, more often: dropped the `\n` (2), wrapped the text in extra quotes or doubled the backslash (2). Never broken JSON |
+| Escape round-trip through `with_structured_output(Escape)` | same (the guard pins it to `json_schema`) | Parsed 5/5, exact text 4/5 | The miss is a copying slip too |
+
+So the safe config holds at the pinned sampling: JSON stayed valid and tool calls stayed native in every try. Exact copying of escape-heavy text is noisy at temperature 1.0 (5/10 across both escape probes, against 2/3 before; the samples are too small to call it a drop). That is a property of the system under test that the natural arm measures, not a serving failure.
+
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
 | Safe config chosen | `response_format: json_schema`, `thinking: false` for every role. Thinking off kept validity and tool calls everywhere, was as correct or more, and cut output tokens 3–16× and latency 2–10×. `get_model` sends `chat_template_kwargs.enable_thinking` on every live call | VERIFIED (live) | probe table above; `config.yaml` `safe_config`; `common/llm.py` `get_model` | 2026-10-10 | A |
