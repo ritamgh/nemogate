@@ -12,13 +12,12 @@ or bypass the cap.
 import fcntl
 import json
 import os
-import subprocess
+import tempfile
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -33,29 +32,53 @@ class SpendCapReached(RuntimeError):
     """Total spend has reached the cap. Stop and tell a human."""
 
 
-@lru_cache
-def _default_log_path(repo_root: Path) -> Path:
-    """`runs/spend.jsonl` of the main checkout, so every git worktree shares one log."""
+def _legacy_log_path() -> Path:
+    """Where the log lived before it moved home: `runs/spend.jsonl` of the main checkout."""
+    return env.main_checkout_root() / "runs" / "spend.jsonl"
+
+
+def _carry_over(legacy: Path, target: Path) -> None:
+    """Copy the legacy log to `target` once, atomically, so money already spent still counts.
+
+    The copy is written to a temp file beside `target` and then hard-linked into place, which
+    fails instead of overwriting if another process created `target` first. The legacy file is
+    only read.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with legacy.open("rb") as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        try:
+            data = f.read()
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+    fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+    tmp = Path(tmp_name)
     try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout.split("\n")
-        # Only trust git when repo_root is itself the checkout, not a folder inside another repo.
-        if len(out) >= 2 and Path(out[0]).resolve() == repo_root.resolve():
-            return Path(out[1]).parent / "runs" / "spend.jsonl"
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return repo_root / "runs" / "spend.jsonl"
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        try:
+            os.link(tmp, target)
+        except FileExistsError:
+            pass
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def spend_log_path() -> Path:
+    """`NEMOGATE_SPEND_LOG` if set, else `~/.nemogate/spend.jsonl`, which survives `git clean`.
+
+    On first use of the default, a legacy `runs/spend.jsonl` in the main checkout is copied over.
+    """
     override = os.environ.get("NEMOGATE_SPEND_LOG")
-    return Path(override) if override else _default_log_path(env.REPO_ROOT)
+    if override:
+        return Path(override)
+    target = Path.home() / ".nemogate" / "spend.jsonl"
+    legacy = _legacy_log_path()
+    if not target.exists() and legacy != target and legacy.is_file():
+        _carry_over(legacy, target)
+    return target
 
 
 def cost_usd(input_tokens: int, output_tokens: int, model_cfg: ModelConfig) -> float:
