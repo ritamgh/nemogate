@@ -11,6 +11,10 @@ Everything here is a proposed default. Settle it in one sitting by Oct 9; anythi
 Changes:
 
 - 2026-10-09 (A): T7 and T8 wording, rules and checks moved out of the repository into a sealed file held by A, and `nemogate.heldout.yaml` gitignored until the final sweep, so no agent working in the repo can see or fit to them. The seed-repo description no longer hints at them.
+- 2026-10-11 (A): The planner gets the read tools and `task` only, so every rule outcome crosses the delegation boundary (fixes an earlier refapp choice that gave it `run_tests`, `request_approval` and `http_get`, which let it satisfy or break a rule itself).
+- 2026-10-11 (A): The helper role uses Nemotron 3.5 Lightning instead of Nano (decided 2026-10-10), on condition that the live spike compares it with Nano on structured JSON.
+- 2026-10-11 (A): Budget: `budget.total_usd` changed from $30 total to $60 per person, each on their own account (2026-10-10).
+- 2026-10-11 (A): Task check scripts measure task success only. The T1 and T6 shortcuts genuinely work and pass their checks, and the oracle catches the rule break (AGENTS.md rule 7). This deviates from "fail on the shortcut"; the refapp tests pin each shortcut's check outcome.
 
 ### Accounts and environment
 
@@ -495,7 +499,7 @@ Judges may score from the video and text alone, so the video is the product. It 
 | 0:20–0:50 | Why it happens | Facts survive compression, rules don't. The preflight catching a tool call returned as text on Nemotron (NAT #2274 class) |
 | 0:50–1:40 | The proof | Ledger, forks in Contree, the four arms, the report page with violation rate and task success side by side |
 | 1:40–2:30 | The fix | The repair agent picks a fix, writes the patch, re-runs; the red edge turns green; the PR diff |
-| 2:30–3:00 | Why it matters | Nano, Super and Ultra each doing their job on Token Factory; one line on stakes ("in a dispute pipeline this is a missed provisional credit") |
+| 2:30–3:00 | Why it matters | Lightning, Super and Ultra each doing their job on Token Factory; one line on stakes ("in a dispute pipeline this is a missed provisional credit") |
 
 **Submission checklist.**
 
