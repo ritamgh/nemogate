@@ -73,6 +73,52 @@ def test_with_a_json_object_config_only_json_mode_is_an_accepted_method(live, js
     assert len(transport.requests) == 1
 
 
+JSON_OBJECT = {"response_format": {"type": "json_object"}}
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(
+            lambda m: m.with_structured_output(Answer, extra_body=JSON_OBJECT), id="structured"
+        ),
+        pytest.param(lambda m: m.bind(extra_body=JSON_OBJECT), id="bound-extra-body"),
+        pytest.param(lambda m: m.bind(response_format={"type": "json_object"}), id="bound-field"),
+        pytest.param(lambda m: m.bind(response_format={"type": "text"}), id="bound-text"),
+    ],
+)
+def test_a_response_format_other_than_the_safe_configs_is_refused_before_sending(
+    live, config_path, build
+):
+    # Breaks if a caller can put a different response_format on the wire (extra_body replaces or
+    # adds to the configured one; Super answers json_object with prose, the C0 result).
+    transport = Transport(_json_reply())
+    model = build(get_model("sut", config_path=config_path, **transport.clients))
+    with pytest.raises(ValueError, match="response_format.*json_schema"):
+        model.invoke("hi")
+    assert transport.requests == []
+
+
+def test_a_json_object_config_refuses_a_json_schema_response_format(live, json_object_config):
+    # Breaks if the check only knows json_schema as the allowed value, not the configured one.
+    transport = Transport(_json_reply())
+    model = get_model("sut", config_path=json_object_config, **transport.clients)
+    bound = model.bind(response_format=Answer)
+    with pytest.raises(ValueError, match="response_format.*json_object"):
+        bound.invoke("hi")
+    assert transport.requests == []
+
+
+def test_requests_without_a_response_format_and_with_the_configured_one_are_sent(live, config_path):
+    # Breaks if the check also blocks ordinary chat, or the configured response_format itself.
+    transport = Transport(_json_reply())
+    model = get_model("sut", config_path=config_path, **transport.clients)
+    assert model.invoke("hi").content == '{"value": 7}'
+    assert "response_format" not in _body(transport)
+    model.bind(extra_body={"response_format": {"type": "json_schema"}}).invoke("hi")
+    assert len(transport.requests) == 2
+
+
 def test_a_conflicting_structured_output_method_is_refused(live, config_path):
     # Breaks if a caller can pick json_mode (json_object), which Super answers with prose
     # (the C0 result), instead of the configured json_schema.

@@ -197,6 +197,18 @@ class _TokenFactoryChat(ChatOpenAI):
         # wholesale, so the switch is merged in last, and the safe config wins over the caller.
         payload = super()._get_request_payload(*args, **kwargs)
         extra = dict(payload.get("extra_body") or {})
+        # A response_format in either place reaches the wire (extra_body overrides the field), and
+        # only the safe config's type may go. A request that sets none (chat, tools) is fine.
+        for sent in (payload.get("response_format"), extra.get("response_format")):
+            if sent is None:
+                continue
+            # A pydantic class here is turned into a json_schema format by the SDK.
+            kind = sent.get("type") if isinstance(sent, dict) else "json_schema"
+            if kind != self._structured_method:
+                raise ValueError(
+                    f"response_format type {kind!r} conflicts with the safe config's "
+                    f"{self._structured_method!r}; only the configured one may be sent"
+                )
         template = {**(extra.get("chat_template_kwargs") or {}), "enable_thinking": self._thinking}
         payload["extra_body"] = {**extra, "chat_template_kwargs": template}
         return payload
