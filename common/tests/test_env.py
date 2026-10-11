@@ -4,7 +4,8 @@ import pytest
 
 import common.env
 from common import MissingEnvError
-from common.env import is_live, load_dotenv, require_env
+from common.env import is_live, load_dotenv, main_checkout_root, require_env
+from common.tests.conftest import make_repo_with_worktree, run_git
 
 
 def _forget(monkeypatch, *names):
@@ -98,6 +99,44 @@ def test_require_env_reads_the_repo_root_dotenv(tmp_path, monkeypatch):
     require_env("FROM_DOTENV_ONLY")
 
 
+def test_require_env_finds_the_main_checkouts_dotenv_from_a_worktree(tmp_path, monkeypatch):
+    # Breaks if .env is read from the current checkout: a live command in a worktree (which has
+    # no untracked .env) fails with MissingEnvError.
+    main, wt = make_repo_with_worktree(tmp_path)
+    (main / ".env").write_text("FROM_MAIN_ONLY=ok\n", encoding="utf-8")
+    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    _forget(monkeypatch, "FROM_MAIN_ONLY")
+    require_env("FROM_MAIN_ONLY")
+    assert os.environ["FROM_MAIN_ONLY"] == "ok"
+
+
+def test_main_checkout_root_is_shared_by_every_worktree(monkeypatch, tmp_path):
+    # Breaks if a worktree resolves to itself, so .env and the legacy log split per worktree.
+    main, wt = make_repo_with_worktree(tmp_path)
+    assert main_checkout_root(main).resolve() == main.resolve()
+    assert main_checkout_root(wt).resolve() == main.resolve()
+    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    assert main_checkout_root().resolve() == main.resolve()
+
+
+def test_main_checkout_root_falls_back_outside_a_checkout(tmp_path):
+    # Breaks if a tree without git metadata (a tarball) crashes instead of using its own root.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert main_checkout_root(plain) == plain
+
+
+def test_a_plain_folder_inside_another_repo_does_not_borrow_its_root(tmp_path):
+    # Breaks if a checkout without git metadata that sits inside an unrelated repo (e.g. a
+    # dotfiles repo in $HOME) resolves to that repo and reads its .env.
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    run_git(outer, "init", "-q")
+    plain = outer / "project"
+    plain.mkdir()
+    assert main_checkout_root(plain) == plain
+
+
 def test_dotenv_value_never_reaches_output(tmp_path, monkeypatch, capsys, caplog):
     # Breaks if the parser prints or logs what it loads.
     (tmp_path / ".env").write_text("LEAKY_KEY=sentinel-value-9981\n", encoding="utf-8")
@@ -119,3 +158,31 @@ def test_is_live_only_for_exactly_1(monkeypatch, value, expected):
     else:
         monkeypatch.setenv("NEMOGATE_LIVE", value)
     assert is_live() is expected
+
+
+def _separate_git_dir_repo(tmp_path):
+    """A real repo whose git dir lives away from its work tree: (project, git_dir)."""
+    project, git_dir = tmp_path / "project", tmp_path / "elsewhere" / "repo.git"
+    project.mkdir()
+    git_dir.parent.mkdir()
+    run_git(tmp_path, "init", "-q", f"--separate-git-dir={git_dir}", str(project))
+    run_git(project, "commit", "-q", "--allow-empty", "-m", "x")
+    return project, git_dir
+
+
+def test_main_checkout_root_is_the_work_tree_when_the_git_dir_is_elsewhere(tmp_path, monkeypatch):
+    # Breaks if the root is taken as the parent of the git common dir: it would be
+    # tmp_path/elsewhere, and its .env would be loaded instead of the project's.
+    project, git_dir = _separate_git_dir_repo(tmp_path)
+    wt = tmp_path / "wt"
+    run_git(project, "worktree", "add", "-q", str(wt))
+    assert main_checkout_root(project).resolve() == project.resolve()
+    # git lists the git dir, not the work tree, as the main entry, so a linked worktree of such a
+    # repo cannot find the main checkout: it keeps its own root (never the git dir's parent).
+    assert main_checkout_root(wt).resolve() == wt.resolve()
+    (git_dir.parent / ".env").write_text("FROM_GIT_DIR_PARENT=bad\n", encoding="utf-8")
+    (project / ".env").write_text("FROM_PROJECT=ok\n", encoding="utf-8")
+    monkeypatch.setattr(common.env, "REPO_ROOT", project)
+    _forget(monkeypatch, "FROM_GIT_DIR_PARENT", "FROM_PROJECT")
+    require_env("FROM_PROJECT")
+    assert "FROM_GIT_DIR_PARENT" not in os.environ

@@ -12,13 +12,11 @@ or bypass the cap.
 import fcntl
 import json
 import os
-import subprocess
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -33,29 +31,58 @@ class SpendCapReached(RuntimeError):
     """Total spend has reached the cap. Stop and tell a human."""
 
 
-@lru_cache
-def _default_log_path(repo_root: Path) -> Path:
-    """`runs/spend.jsonl` of the main checkout, so every git worktree shares one log."""
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout.split("\n")
-        # Only trust git when repo_root is itself the checkout, not a folder inside another repo.
-        if len(out) >= 2 and Path(out[0]).resolve() == repo_root.resolve():
-            return Path(out[1]).parent / "runs" / "spend.jsonl"
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return repo_root / "runs" / "spend.jsonl"
+def _legacy_log_path() -> Path:
+    """Where the log lived before it moved home: `runs/spend.jsonl` of the main checkout."""
+    return env.main_checkout_root() / "runs" / "spend.jsonl"
+
+
+def _merge_legacy(legacy: Path, target: Path) -> None:
+    """Append to `target` every legacy line it does not already hold, so money already spent counts.
+
+    Lines are compared exactly, so merging again adds nothing and never double counts. The append
+    takes the same exclusive lock as `admit` and `append_spend`, so it cannot interleave with a
+    reserve. The legacy file is only read, under a shared lock.
+    """
+    with legacy.open("rb") as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        try:
+            legacy_lines = f.read().decode("utf-8").splitlines()
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a+", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            text = f.read()
+            have = set(text.splitlines())
+            missing = []
+            for line in legacy_lines:
+                if line.strip() and line not in have:
+                    missing.append(line)
+                    have.add(line)
+            if missing:
+                lead = "\n" if text and not text.endswith("\n") else ""
+                f.write(lead + "\n".join(missing) + "\n")
+                f.flush()
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def spend_log_path() -> Path:
+    """`NEMOGATE_SPEND_LOG` if set, else `~/.nemogate/spend.jsonl`, which survives `git clean`.
+
+    Whenever a legacy `runs/spend.jsonl` exists in the main checkout, its lines are first merged
+    into the default log (an older checkout or process may still write there).
+    """
     override = os.environ.get("NEMOGATE_SPEND_LOG")
-    return Path(override) if override else _default_log_path(env.REPO_ROOT)
+    if override:
+        return Path(override)
+    target = Path.home() / ".nemogate" / "spend.jsonl"
+    legacy = _legacy_log_path()
+    if legacy != target and legacy.is_file():
+        _merge_legacy(legacy, target)
+    return target
 
 
 def cost_usd(input_tokens: int, output_tokens: int, model_cfg: ModelConfig) -> float:

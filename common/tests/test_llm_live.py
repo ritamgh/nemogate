@@ -9,7 +9,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
-from common import ConfigError, MissingEnvError, SpendCapReached, UsageMissing
+from common import ConfigError, MissingEnvError, SpendCapReached
 from common.env import REPO_ROOT
 from common.llm import get_model, safe_config_hash
 from common.spend import append_spend, run_scope, total_spent
@@ -266,15 +266,13 @@ def test_well_below_the_cap_the_call_goes_through(live, config_path, spend_log):
 
 def test_response_without_usage_stays_counted_at_its_reserve(live, config_path, spend_log):
     # Breaks if a response with no token counts leaves the ledger empty (fail-open): the paid
-    # call must stay counted at its reserve, and a retry must see it.
+    # call must stay counted at its reserve, and a retry must see it. Pinned the old behaviour
+    # (UsageMissing raised, reply lost); the reply is now returned and the call settled.
     transport = Transport(completion(prompt_tokens=None))
     model = get_model("sut", config_path=config_path, **transport.clients)
-    with pytest.raises(UsageMissing):
-        model.invoke("hi")
-    assert [line["kind"] for line in read_log(spend_log)] == ["reserve"]
+    assert model.invoke("hi").content == "hello"
     assert total_spent() == pytest.approx(HI_RESERVE_USD)
-    with pytest.raises(UsageMissing):
-        model.invoke("hi")
+    assert model.invoke("hi").content == "hello"
     assert total_spent() == pytest.approx(2 * HI_RESERVE_USD)
 
 
@@ -287,6 +285,24 @@ def test_http_error_leaves_the_reserve_counted_and_is_not_retried(live, config_p
         model.invoke("hi")
     assert len(transport.requests) == 1
     assert total_spent() == pytest.approx(HI_RESERVE_USD)
+
+
+def test_a_failed_call_leaves_no_in_memory_reservation_but_stays_counted(
+    live, config_path, spend_log
+):
+    # Breaks if a failed call (sync or async) never clears its in-memory entry: a long run of
+    # failures would grow the handler's dict without bound. The on-disk reserve must stay.
+    transport = Transport(lambda request: httpx.Response(500, json={"error": "boom"}))
+    model = get_model("sut", config_path=config_path, **transport.clients)
+    (handler,) = model.callbacks
+    with pytest.raises(Exception, match="boom"):
+        model.invoke("hi")
+    assert handler._reserved == {}
+    with pytest.raises(Exception, match="boom"):
+        asyncio.run(model.ainvoke("hi"))
+    assert handler._reserved == {}
+    assert len(read_kind(spend_log, "reserve")) == 2
+    assert total_spent() == pytest.approx(2 * HI_RESERVE_USD)
 
 
 def test_every_new_attempt_makes_its_own_reserve(live, config_path, spend_log):
