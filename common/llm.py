@@ -9,6 +9,7 @@ reserve; a retry made above the model starts a new call and is reserved again.
 
 import hashlib
 import json
+import logging
 import math
 import os
 from collections.abc import AsyncIterator, Iterator, Sequence
@@ -20,6 +21,7 @@ from langchain_core.callbacks import BaseCallbackHandler, CallbackManagerForLLMR
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult, LLMResult
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from pydantic import PrivateAttr
 
@@ -28,6 +30,8 @@ from common.spend import admit, append_spend, cost_usd
 from schemas.config import AppConfig, ModelConfig, SafeConfig, load_config
 from schemas.enums import Role
 
+logger = logging.getLogger(__name__)
+
 API_KEY_ENV = "NEBIUS_API_KEY"
 RESERVE_OUTPUT_TOKENS = 4096  # output tokens reserved per call, before the real usage is known
 CHARS_PER_TOKEN = 3  # deliberately low (real text is ~4): over-estimating the input is safe
@@ -35,10 +39,6 @@ CHARS_PER_TOKEN = 3  # deliberately low (real text is ~4): over-estimating the i
 
 class ConfigError(RuntimeError):
     """A live call needs a config value that config.yaml leaves null."""
-
-
-class UsageMissing(RuntimeError):
-    """A live response carried no token counts, so its cost cannot be logged."""
 
 
 _ZERO_USAGE = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -80,8 +80,24 @@ class StubChatModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=reply)])
 
 
+def _message_chars(message: BaseMessage) -> int:
+    """Characters a message adds to the prompt: its content plus any tool calls it carries.
+
+    Tool-call arguments count (a `write_file` call carries the whole file), so a long history of
+    them is not under-estimated.
+    """
+    chars = len(str(message.content))
+    if isinstance(message, AIMessage):
+        for call in message.tool_calls:
+            chars += len(call["name"]) + len(json.dumps(call["args"], default=str))
+    return chars
+
+
 class SpendHandler(BaseCallbackHandler):
-    """Reserve the estimated cost before a request is sent; settle at the real usage after."""
+    """Reserve the estimated cost before a request is sent; settle at the real usage after.
+
+    A response with no token usage is settled at its reserve, so the cap never loses the call.
+    """
 
     raise_error = True  # an exception here must stop the call, not just log a warning
 
@@ -89,27 +105,43 @@ class SpendHandler(BaseCallbackHandler):
         self.role = role
         self.model_cfg = model_cfg
         self.config = config
+        self._reserved: dict[str, tuple[int, int]] = {}  # run_id -> (input, output) tokens
 
     def on_chat_model_start(
         self, serialized: Any, messages: Any, *, run_id: Any, **kwargs: Any
     ) -> None:
-        chars = sum(len(str(m.content)) for batch in messages for m in batch)
+        chars = sum(_message_chars(m) for batch in messages for m in batch)
         params = kwargs.get("invocation_params") or {}
         tools = params.get("tools")
         if tools:
             chars += len(json.dumps(tools, default=str))
+        est_input = math.ceil(chars / CHARS_PER_TOKEN)
+        est_output = max(RESERVE_OUTPUT_TOKENS, params.get("max_tokens") or 0)
         admit(
             self.config,
             self.role,
             str(self.model_cfg.id),
             str(run_id),
-            math.ceil(chars / CHARS_PER_TOKEN),
-            max(RESERVE_OUTPUT_TOKENS, params.get("max_tokens") or 0),
+            est_input,
+            est_output,
             self.model_cfg,
         )
+        self._reserved[str(run_id)] = (est_input, est_output)
 
     def on_llm_end(self, response: LLMResult, *, run_id: Any, **kwargs: Any) -> None:
-        input_tokens, output_tokens = self._usage(response)
+        reserved = self._reserved.pop(str(run_id), None)
+        usage = self._usage(response)
+        if usage is None:
+            if reserved is None:
+                return  # no settle line: the reserve stays counted in full
+            logger.warning(
+                "The %s response carried no token usage; settled at its reserve "
+                "(%d input + %d output tokens)",
+                self.role.value,
+                *reserved,
+            )
+            usage = reserved
+        input_tokens, output_tokens = usage
         append_spend(
             self.role,
             str(self.model_cfg.id),
@@ -119,7 +151,7 @@ class SpendHandler(BaseCallbackHandler):
             call_id=str(run_id),
         )
 
-    def _usage(self, response: LLMResult) -> tuple[int, int]:
+    def _usage(self, response: LLMResult) -> tuple[int, int] | None:
         # Only the first generation: with n > 1 the response's one usage object is copied onto
         # every candidate, so summing them would bill the request n times.
         first = response.generations[0][0] if response.generations[0] else None
@@ -133,17 +165,27 @@ class SpendHandler(BaseCallbackHandler):
         token_usage = (response.llm_output or {}).get("token_usage") or {}
         if "prompt_tokens" in token_usage and "completion_tokens" in token_usage:
             return token_usage["prompt_tokens"], token_usage["completion_tokens"]
-        raise UsageMissing(
-            f"The {self.role.value} response carried no token usage, so its cost cannot be "
-            "logged. Its reserve stays counted against the cap."
-        )
+        return None
 
 
 class _TokenFactoryChat(ChatOpenAI):
     """ChatOpenAI that never lets the API key out through a provider error message, and always
-    sends the safe config's thinking switch."""
+    sends the safe config's thinking switch and structured-output method."""
 
     _thinking: bool = PrivateAttr()
+    _structured_method: str = PrivateAttr()
+
+    def with_structured_output(
+        self, schema: Any = None, *, method: Any = None, **kwargs: Any
+    ) -> Runnable:
+        # The base class defaults to function_calling, and a caller can ask for json_mode, which
+        # Super answers with prose (docs/FACTS.md decision log). Only the safe config's method goes.
+        if method is not None and method != self._structured_method:
+            raise ValueError(
+                f"with_structured_output(method={method!r}) conflicts with the safe config's "
+                f"{self._structured_method!r}; omit method to use it"
+            )
+        return super().with_structured_output(schema, method=self._structured_method, **kwargs)
 
     def _get_request_payload(self, *args: Any, **kwargs: Any) -> dict:
         # Every call path builds its request here. A bound extra_body replaces the default one
@@ -255,7 +297,7 @@ def get_model(
     _require(model_cfg.output_usd_per_mtok, "output_usd_per_mtok", role)
     base_url = _require(config.token_factory.base_url, "token_factory.base_url", role)
     safe = config.safe_config
-    _require(safe.response_format, "safe_config.response_format", role)
+    response_format = _require(safe.response_format, "safe_config.response_format", role)
     thinking = _require(safe.thinking, "safe_config.thinking", role)
     stored_hash = _require(safe.hash, "safe_config.hash", role)
     if stored_hash != safe_config_hash(safe):
@@ -284,4 +326,5 @@ def get_model(
     )
     # Thinking is on by default on Token Factory (docs/FACTS.md section 2); always send the switch.
     model._thinking = thinking
+    model._structured_method = response_format
     return model
