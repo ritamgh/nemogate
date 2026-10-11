@@ -126,7 +126,6 @@ def build_team(
     with _general_purpose_disabled(chosen["planner"]):
         return create_deep_agent(
             model=chosen["planner"],
-            tools=[tools["run_tests"], tools["request_approval"], tools["http_get"]],
             system_prompt=PLANNER_PROMPT,
             subagents=subagents,
             middleware=[fs(READ_TOOLS), *middleware],

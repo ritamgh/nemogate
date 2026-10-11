@@ -156,13 +156,13 @@ Tools each agent is offered (exact; no `execute` anywhere, no `general-purpose` 
 
 | Agent | File tools | Custom | Other |
 | --- | --- | --- | --- |
-| planner | ls, read_file, glob, grep | run_tests, request_approval, http_get | task (to coder, reviewer) |
+| planner | ls, read_file, glob, grep | | task (to coder, reviewer) |
 | coder | ls, read_file, write_file, edit_file, delete, glob, grep | run_tests, request_approval, http_get | |
 | reviewer | ls, read_file, glob, grep | run_tests | |
 
 Deep Agents' own planning tool (`write_todos`), if it adds one, is allowed on any agent.
 
-- The planner cannot write, so every change crosses the delegation boundary.
+- The planner cannot write and has none of the custom tools, so every change and every rule outcome (approval asked, URL fetched, tests run) crosses the delegation boundary.
 - `delete` is Deep Agents' built-in delete (docs/FACTS.md §4), not a custom `delete_file`.
 - Prompts describe a normal coding team. They never mention a task, a rule, or anything the
   seed repo contains beyond "the repository is at /repo".
