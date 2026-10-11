@@ -1,10 +1,12 @@
-"""Environment access: the repo-root `.env`, required variables, and the live switch.
+"""Environment access: the main checkout's `.env`, required variables, and the live switch.
 
 This is the only place that reads `.env` (AGENTS.md rule 2). Values are never printed or logged.
 """
 
 import os
 import re
+import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +14,33 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 class MissingEnvError(RuntimeError):
     """A required environment variable is unset or blank. The message names it, never a value."""
+
+
+@lru_cache
+def _main_checkout_root(repo_root: Path) -> Path:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        ).stdout.split("\n")
+        # Only trust git when repo_root is itself the checkout, not a folder inside another repo.
+        if len(out) >= 2 and Path(out[0]).resolve() == repo_root.resolve():
+            return Path(out[1]).parent
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return repo_root
+
+
+def main_checkout_root(repo_root: Path | None = None) -> Path:
+    """The main checkout of this repo, so every git worktree shares its `.env` and legacy spend log.
+
+    Falls back to `repo_root` (default `REPO_ROOT`) outside a git checkout.
+    """
+    return _main_checkout_root(REPO_ROOT if repo_root is None else repo_root)
 
 
 def _parse_value(raw: str) -> str:
@@ -25,12 +54,12 @@ def _parse_value(raw: str) -> str:
 
 
 def load_dotenv(path: Path | None = None) -> None:
-    """Load `[export ]KEY=VALUE` lines from the repo-root `.env` without overriding the environment.
+    """Load `[export ]KEY=VALUE` lines from the main checkout's `.env` without overriding the env.
 
     A quoted value ends at its closing quote (anything after is ignored); an unquoted value ends
     at the first whitespace-then-`#`.
     """
-    env_file = REPO_ROOT / ".env" if path is None else Path(path)
+    env_file = main_checkout_root() / ".env" if path is None else Path(path)
     if not env_file.is_file():
         return
     for raw in env_file.read_text(encoding="utf-8").splitlines():

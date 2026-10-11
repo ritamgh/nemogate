@@ -1,7 +1,6 @@
 import fcntl
 import json
 import multiprocessing
-import subprocess
 import threading
 import time
 
@@ -19,7 +18,7 @@ from common.spend import (
     spend_log_path,
     total_spent,
 )
-from common.tests.conftest import read_kind, read_log, write_config
+from common.tests.conftest import make_repo_with_worktree, read_kind, read_log, write_config
 from schemas.config import ModelConfig, load_config
 from schemas.enums import Role
 
@@ -31,59 +30,91 @@ def test_cost_usd_uses_per_million_prices():
     assert cost_usd(2_000_000, 0, cfg) == pytest.approx(2.0)
 
 
-def test_log_path_default_and_override(monkeypatch, tmp_path):
-    # Breaks if the env override is ignored or the default leaves runs/spend.jsonl.
+SETTLE_1_5 = '{"kind": "settle", "call_id": "a", "role": "sut", "cost_usd": 1.5}\n'
+SETTLE_0_25 = '{"kind": "settle", "call_id": "b", "role": "sut", "cost_usd": 0.25}\n'
+SETTLE_9 = '{"kind": "settle", "call_id": "c", "role": "sut", "cost_usd": 9.0}\n'
+
+
+def _default_log(monkeypatch, tmp_path):
+    """Drop the test override so spend_log_path() resolves the real default (under fake HOME)."""
+    monkeypatch.delenv("NEMOGATE_SPEND_LOG")
+    return tmp_path / "home" / ".nemogate" / "spend.jsonl"
+
+
+def _legacy_log(root, text):
+    legacy = root / "runs" / "spend.jsonl"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(text, encoding="utf-8")
+    return legacy
+
+
+def test_log_path_default_is_under_home_and_override_wins(monkeypatch, tmp_path):
+    # Breaks if the default stays in the checkout's runs/ (a clean or fresh clone resets spend
+    # to $0), or the env override stops winning.
     assert spend_log_path() == tmp_path / "spend.jsonl"
-    monkeypatch.delenv("NEMOGATE_SPEND_LOG")
-    assert spend_log_path().parts[-2:] == ("runs", "spend.jsonl")
+    assert _default_log(monkeypatch, tmp_path) == spend_log_path()
 
 
-def _git(cwd, *args):
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
-        cwd=cwd,
-        check=True,
-        capture_output=True,
-    )
+def test_first_write_to_the_default_log_creates_the_home_directory(monkeypatch, tmp_path):
+    # Breaks if ~/.nemogate is not created on first write, so the very first live call crashes.
+    default = _default_log(monkeypatch, tmp_path)
+    assert not default.parent.exists()
+    append_spend("sut", "m", 1, 1, 1.5)
+    assert total_spent() == 1.5
+    assert default.parent.is_dir()
 
 
-def test_a_worktree_shares_the_main_checkouts_log(monkeypatch, tmp_path):
-    # Breaks if each worktree gets its own runs/spend.jsonl: spend in one checkout would be
-    # invisible to the others and the shared credit cap could be spent several times over.
-    main = tmp_path / "main"
-    main.mkdir()
-    _git(main, "init", "-q")
-    _git(main, "commit", "-q", "--allow-empty", "-m", "x")
-    _git(main, "worktree", "add", "-q", str(tmp_path / "wt"))
-    monkeypatch.delenv("NEMOGATE_SPEND_LOG")
+def test_legacy_log_is_copied_once_and_left_untouched(monkeypatch, tmp_path):
+    # Breaks if the legacy runs/spend.jsonl is ignored (money already spent stops counting),
+    # re-copied on every read, moved, or edited.
+    default = _default_log(monkeypatch, tmp_path)
+    main, _ = make_repo_with_worktree(tmp_path)
+    legacy = _legacy_log(main, SETTLE_1_5 + SETTLE_0_25)
     monkeypatch.setattr(common.env, "REPO_ROOT", main)
-    from_main = spend_log_path()
-    monkeypatch.setattr(common.env, "REPO_ROOT", tmp_path / "wt")
-    from_worktree = spend_log_path()
-    assert from_main == from_worktree
-    assert from_main.resolve() == (main / "runs" / "spend.jsonl").resolve()
+    assert total_spent() == 1.75
+    assert default.read_text(encoding="utf-8") == SETTLE_1_5 + SETTLE_0_25
+    assert [p.name for p in default.parent.iterdir()] == ["spend.jsonl"]  # no temp file left
+    append_spend("sut", "m", 1, 1, 0.5)
+    legacy.write_text(legacy.read_text(encoding="utf-8") + SETTLE_9, encoding="utf-8")
+    assert total_spent() == 2.25
+    assert legacy.read_text(encoding="utf-8") == SETTLE_1_5 + SETTLE_0_25 + SETTLE_9
 
 
-def test_outside_a_checkout_the_log_falls_back_to_the_repo_root(monkeypatch, tmp_path):
-    # Breaks if a missing checkout (a tarball without metadata) crashes instead of using REPO_ROOT.
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    monkeypatch.delenv("NEMOGATE_SPEND_LOG")
-    monkeypatch.setattr(common.env, "REPO_ROOT", plain)
-    assert spend_log_path() == plain / "runs" / "spend.jsonl"
+def test_when_both_logs_exist_only_the_new_one_counts(monkeypatch, tmp_path):
+    # Breaks if the legacy log is merged into a log that already exists (double counting).
+    default = _default_log(monkeypatch, tmp_path)
+    default.parent.mkdir(parents=True)
+    default.write_text(SETTLE_0_25, encoding="utf-8")
+    main, _ = make_repo_with_worktree(tmp_path)
+    _legacy_log(main, SETTLE_9)
+    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    assert total_spent() == 0.25
+    assert default.read_text(encoding="utf-8") == SETTLE_0_25
 
 
-def test_a_plain_folder_inside_another_repo_does_not_borrow_its_log(monkeypatch, tmp_path):
-    # Breaks if a checkout without git metadata that sits inside an unrelated repo (e.g. a
-    # dotfiles repo in $HOME) routes spend to that repo's runs/ instead of its own.
-    outer = tmp_path / "outer"
-    outer.mkdir()
-    _git(outer, "init", "-q")
-    plain = outer / "project"
-    plain.mkdir()
-    monkeypatch.delenv("NEMOGATE_SPEND_LOG")
-    monkeypatch.setattr(common.env, "REPO_ROOT", plain)
-    assert spend_log_path() == plain / "runs" / "spend.jsonl"
+def test_a_worktree_carries_over_the_main_checkouts_legacy_log(monkeypatch, tmp_path):
+    # Breaks if the legacy path is read from the current worktree instead of the main checkout.
+    _default_log(monkeypatch, tmp_path)
+    main, wt = make_repo_with_worktree(tmp_path)
+    _legacy_log(main, SETTLE_1_5)
+    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    assert total_spent() == 1.5
+
+
+def test_without_a_legacy_log_nothing_is_created_by_reading(monkeypatch, tmp_path):
+    # Breaks if a read creates an empty log, or a missing legacy file crashes the carry-over.
+    default = _default_log(monkeypatch, tmp_path)
+    assert total_spent() == 0.0
+    assert not default.exists()
+
+
+def test_the_override_ignores_the_legacy_log(monkeypatch, tmp_path):
+    # Breaks if the carry-over also runs for NEMOGATE_SPEND_LOG, leaking real spend into tests.
+    main, _ = make_repo_with_worktree(tmp_path)
+    _legacy_log(main, SETTLE_9)
+    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    assert total_spent() == 0.0
+    assert not (tmp_path / "home" / ".nemogate").exists()
 
 
 def test_append_creates_parent_dir_and_writes_documented_fields(monkeypatch, tmp_path):

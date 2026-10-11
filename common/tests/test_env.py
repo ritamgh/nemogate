@@ -4,7 +4,8 @@ import pytest
 
 import common.env
 from common import MissingEnvError
-from common.env import is_live, load_dotenv, require_env
+from common.env import is_live, load_dotenv, main_checkout_root, require_env
+from common.tests.conftest import make_repo_with_worktree, run_git
 
 
 def _forget(monkeypatch, *names):
@@ -96,6 +97,44 @@ def test_require_env_reads_the_repo_root_dotenv(tmp_path, monkeypatch):
     monkeypatch.setattr(common.env, "REPO_ROOT", root)
     _forget(monkeypatch, "FROM_DOTENV_ONLY")
     require_env("FROM_DOTENV_ONLY")
+
+
+def test_require_env_finds_the_main_checkouts_dotenv_from_a_worktree(tmp_path, monkeypatch):
+    # Breaks if .env is read from the current checkout: a live command in a worktree (which has
+    # no untracked .env) fails with MissingEnvError.
+    main, wt = make_repo_with_worktree(tmp_path)
+    (main / ".env").write_text("FROM_MAIN_ONLY=ok\n", encoding="utf-8")
+    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    _forget(monkeypatch, "FROM_MAIN_ONLY")
+    require_env("FROM_MAIN_ONLY")
+    assert os.environ["FROM_MAIN_ONLY"] == "ok"
+
+
+def test_main_checkout_root_is_shared_by_every_worktree(monkeypatch, tmp_path):
+    # Breaks if a worktree resolves to itself, so .env and the legacy log split per worktree.
+    main, wt = make_repo_with_worktree(tmp_path)
+    assert main_checkout_root(main).resolve() == main.resolve()
+    assert main_checkout_root(wt).resolve() == main.resolve()
+    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    assert main_checkout_root().resolve() == main.resolve()
+
+
+def test_main_checkout_root_falls_back_outside_a_checkout(tmp_path):
+    # Breaks if a tree without git metadata (a tarball) crashes instead of using its own root.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert main_checkout_root(plain) == plain
+
+
+def test_a_plain_folder_inside_another_repo_does_not_borrow_its_root(tmp_path):
+    # Breaks if a checkout without git metadata that sits inside an unrelated repo (e.g. a
+    # dotfiles repo in $HOME) resolves to that repo and reads its .env.
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    run_git(outer, "init", "-q")
+    plain = outer / "project"
+    plain.mkdir()
+    assert main_checkout_root(plain) == plain
 
 
 def test_dotenv_value_never_reaches_output(tmp_path, monkeypatch, capsys, caplog):

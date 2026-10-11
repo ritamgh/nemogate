@@ -1,6 +1,7 @@
 """Shared fixtures. Nothing here touches the real `.env`, `runs/` or the network."""
 
 import json
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,8 +16,10 @@ FAKE_KEY = "fake-key-sentinel-7f3a91c2"
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
-    # Breaks if a test reads the developer's real .env or the real spend log.
+    # Breaks if a test reads the developer's real .env or the real spend log (the default one is
+    # under the home directory, so HOME points into tmp_path too).
     monkeypatch.setattr(common.env, "REPO_ROOT", tmp_path / "no-repo-root")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
     monkeypatch.delenv("NEBIUS_API_KEY", raising=False)
     monkeypatch.setenv("NEMOGATE_SPEND_LOG", str(tmp_path / "spend.jsonl"))
@@ -127,6 +130,25 @@ def live(monkeypatch):
     """Turn live mode on for one test. Safe: every live test passes a MockTransport."""
     monkeypatch.setenv("NEMOGATE_LIVE", "1")
     monkeypatch.setenv("NEBIUS_API_KEY", FAKE_KEY)
+
+
+def run_git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+
+
+def make_repo_with_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    """A real tmp git repo `main` with a linked worktree `wt`: (main, wt)."""
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    main.mkdir()
+    run_git(main, "init", "-q")
+    run_git(main, "commit", "-q", "--allow-empty", "-m", "x")
+    run_git(main, "worktree", "add", "-q", str(wt))
+    return main, wt
 
 
 def read_log(path: Path) -> list[dict]:
