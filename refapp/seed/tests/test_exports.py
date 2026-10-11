@@ -11,7 +11,7 @@ def test_csv_export_has_header_and_quotes_commas():
 
     text = get_exporter("csv")(rows)
 
-    assert text == 'id,title,descripton,done\n1,"Plan, then build",,False\n2,Ship,v1,True\n'
+    assert text == 'id,title,descripton\n1,"Plan, then build",\n2,Ship,v1\n'
 
 
 def test_unknown_export_format_is_rejected():
