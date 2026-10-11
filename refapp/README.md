@@ -174,8 +174,10 @@ def repo_relative(path: str, repo: str = REPO) -> str   # refapp/paths.py
 ```
 
 Agents' tool args carry absolute paths (`/repo/migrations/0003_x.py`) while a filesystem diff
-is repo-relative (`migrations/0003_x.py`). `repo_relative` normalises with `posixpath` first
-(`.`, `..`, repeated slashes), then:
+is repo-relative (`migrations/0003_x.py`). `repo_relative` normalises both `path` and `repo` first: backslashes
+become `/` (Deep Agents' file tools do the same before acting, so `/repo\migrations\x.py`
+writes `/repo/migrations/x.py`), a leading `//` collapses, then `posixpath.normpath` resolves
+`.`, `..` and repeated slashes. Then:
 
 | Input | Result |
 | --- | --- |
