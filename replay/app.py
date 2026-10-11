@@ -9,6 +9,8 @@ from typing import Any, Protocol
 
 from langchain.agents.middleware import AgentMiddleware
 
+from schemas.enums import Arm, Operator
+
 
 class AppTask(Protocol):
     """One task: the user message that states the rule, and which rule and boundary it targets."""
@@ -55,3 +57,11 @@ class App(Protocol):
         """Did the run get the task done, judged in `session`'s current image without changing
         it. The str is the tail of the failing output, or ""."""
         ...
+
+
+def pairs(arms: Sequence[Arm], operators: Sequence[Operator]) -> list[tuple[Arm, Operator]]:
+    """Every (arm, operator) to run: natural only unmutated, every other arm only mutated.
+
+    Arms outer, both in the order given.
+    """
+    return [(a, o) for a in arms for o in operators if (a == Arm.natural) == (o == Operator.none)]

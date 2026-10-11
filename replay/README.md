@@ -14,7 +14,7 @@ its reproducibility fields. Forks at boundaries, per-boundary images and statist
 
 ```
 replay/
-  app.py        App and AppTask Protocols (what the runner needs from an app)
+  app.py        App and AppTask Protocols, and pairs(arms, operators) (committed with this file)
   fsdiff.py     snapshot an image's repo, diff two snapshots
   record.py     run ids, run config, scoped ledger, reproducibility fields, run folder files
   runner.py     Runner (one run, many runs) and run(), the cross-owner function
@@ -44,9 +44,6 @@ def diff(base: dict[str, str], final: dict[str, str]) -> list[FsChange]
 
 ```python
 ROOT = Path(__file__).resolve().parents[1]   # the checkout this code runs from
-def pairs(arms, operators) -> list[tuple[Arm, Operator]]
-    # every arm x operator where (arm == Arm.natural) == (operator == Operator.none), arms
-    # outer, in the order given: natural runs only unmutated, the other arms only mutated.
 def new_run_id() -> str                      # "r-<UTC %Y%m%dT%H%M%S>-<6 lowercase hex>"
 def git_sha(ref: str, repo_dir: Path = ROOT) -> str
     # full 40-hex commit sha of `git rev-parse --verify <ref>^{commit}`; ValueError if unknown
@@ -135,7 +132,7 @@ def runs_per_cell(bucket_usd: float, cost_per_run: float, n_pairs: int, n_tasks:
 def plan(*, bucket: str, cost_per_run: float, arms, operators, n_tasks: int, config: AppConfig,
          spent_usd: float) -> Plan
     # Plan(bucket, bucket_usd, cost_per_run, pairs, n_tasks, n, planned_usd, spent_usd,
-    #      stop_usd, capped): n from runs_per_cell with n_pairs = len(record.pairs(...));
+    #      stop_usd, capped): n from runs_per_cell with n_pairs = len(app.pairs(...));
     # stop_usd = stop_at_fraction * total_usd; if spent + planned would pass stop_usd, n is
     # lowered to the largest value that fits and capped=True.
 def mean_cost(records: Iterable[RunRecord]) -> float     # ValueError on none
