@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 from uuid import UUID
 
-from contree_sdk.sdk.exceptions import OperationTimedOutError
+from contree_sdk.sdk.exceptions import NotFoundError, OperationTimedOutError
 
 from common import env
 from common.spend import spend_log_path
@@ -54,7 +54,12 @@ def seed_files() -> dict[str, bytes]:
 
 
 def seed_sha() -> str:
-    """12 hex chars identifying the seed's content; goes into `RunRecord.repo_sha`."""
+    """12 hex chars identifying the seed's content: the key of the cached seed image.
+
+    Not `RunRecord.repo_sha`: that is the commit `repo_ref` resolved to (SPEC, Reproducibility
+    fields), because a repair also patches files outside `seed/` (team, prompts, middleware), which
+    this hash would not see.
+    """
     digest = hashlib.sha256()
     for path, data in sorted(seed_files().items()):
         digest.update(path.encode() + b"\0" + data + b"\0")
@@ -94,15 +99,27 @@ def _default_cache() -> Path:
 
 
 async def seed_image(client, cache: Path | None = None) -> str:
-    """The seed image's uuid: from `cache` when its seed sha and base image match, else rebuilt."""
+    """The seed image's uuid: from `cache` when its seed sha and base image match and Contree
+    still has the image, else rebuilt (and the cache rewritten).
+
+    The existence check is `images.use(uuid, strict=True)`, which fetches the image and raises
+    `NotFoundError` on a 404 (FACTS section 7). Any other error from it propagates.
+    """
     cache = _default_cache() if cache is None else Path(cache)
     sha = seed_sha()
+    cached = None
     try:
         saved = json.loads(cache.read_text())
         if saved["seed_sha"] == sha and saved["base_image"] == BASE_IMAGE:
-            return str(saved["uuid"])
+            cached = UUID(str(saved["uuid"]))
     except (OSError, ValueError, KeyError, TypeError):
         pass  # no usable cache: build
+    if cached is not None:
+        try:
+            await client.images.use(cached, strict=True)
+            return str(cached)
+        except NotFoundError:
+            pass  # the image was deleted (cleanup, other project): build
     uuid = await build_seed_image(client)
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps({"seed_sha": sha, "base_image": BASE_IMAGE, "uuid": uuid}))
