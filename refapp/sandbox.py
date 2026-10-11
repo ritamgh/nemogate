@@ -94,7 +94,7 @@ async def build_seed_image(client) -> str:
 
 
 def _default_cache() -> Path:
-    """`runs/refapp_seed_image.json` of the main checkout, next to the shared spend log."""
+    """`refapp_seed_image.json` next to the shared spend log (`~/.nemogate/` by default)."""
     return spend_log_path().parent / _CACHE_NAME
 
 
