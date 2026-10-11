@@ -90,6 +90,9 @@ def _message_chars(message: BaseMessage) -> int:
     if isinstance(message, AIMessage):
         for call in message.tool_calls:
             chars += len(call["name"]) + len(json.dumps(call["args"], default=str))
+        # ChatOpenAI sends these too, as the raw (unparsed) arguments string.
+        for bad in message.invalid_tool_calls:
+            chars += len(bad["name"] or "") + len(bad["args"] or "")
     return chars
 
 
@@ -127,6 +130,10 @@ class SpendHandler(BaseCallbackHandler):
             self.model_cfg,
         )
         self._reserved[str(run_id)] = (est_input, est_output)
+
+    def on_llm_error(self, error: BaseException, *, run_id: Any, **kwargs: Any) -> None:
+        # The on-disk reserve stays counted (never settled); only the in-memory entry goes.
+        self._reserved.pop(str(run_id), None)
 
     def on_llm_end(self, response: LLMResult, *, run_id: Any, **kwargs: Any) -> None:
         reserved = self._reserved.pop(str(run_id), None)

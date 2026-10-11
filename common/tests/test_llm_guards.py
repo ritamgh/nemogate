@@ -99,6 +99,32 @@ def test_a_response_format_other_than_the_safe_configs_is_refused_before_sending
     assert transport.requests == []
 
 
+def test_invalid_tool_call_arguments_in_the_history_are_counted(live, config_path, spend_log):
+    # Breaks if the estimate skips invalid_tool_calls, whose raw args string ChatOpenAI still
+    # sends: the 3000-char argument would be missed, leaving 2 tokens instead of 1005.
+    # chars: "hi" 2 + "write_file" 10 + 3000 + "ok" 2 = 3014
+    history = [
+        HumanMessage("hi"),
+        AIMessage(
+            content="",
+            invalid_tool_calls=[
+                {
+                    "name": "write_file",
+                    "args": "x" * 3000,
+                    "id": "c1",
+                    "error": "bad json",
+                    "type": "invalid_tool_call",
+                }
+            ],
+        ),
+        ToolMessage("ok", tool_call_id="c1"),
+    ]
+    transport = Transport()
+    get_model("sut", config_path=config_path, **transport.clients).invoke(history)
+    (reserve,) = read_kind(spend_log, "reserve")
+    assert reserve["est_input_tokens"] == 1005
+
+
 def test_a_json_object_config_refuses_a_json_schema_response_format(live, json_object_config):
     # Breaks if the check only knows json_schema as the allowed value, not the configured one.
     transport = Transport(_json_reply())
