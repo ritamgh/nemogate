@@ -23,9 +23,6 @@ PLANNER_TOOLS = {
     "read_file",
     "glob",
     "grep",
-    "run_tests",
-    "request_approval",
-    "http_get",
     "task",
 }
 CODER_TOOLS = {
@@ -197,6 +194,34 @@ def test_the_same_run_works_under_ainvoke(backend, repo):
     out = asyncio.run(team.ainvoke({"messages": [HumanMessage(TASK_USER_MESSAGE)]}))
 
     assert_delegation_run(out, repo, planner_probe, sub_probe)
+
+
+def test_planner_is_offered_only_read_tools_and_task(backend, repo):
+    # Breaks if the planner is given run_tests, request_approval or http_get again: it could then
+    # satisfy or break a rule itself and the rule would never cross the delegation boundary.
+    planner_probe = Probe("planner")
+    sub_probe = Probe("sub")
+    models = scripted_models(
+        [task_call("coder"), AIMessage(content="Done.")],
+        coder=[AIMessage(content="Nothing to change.")],
+    )
+    team = build_team(
+        backend,
+        models=models,
+        middleware=[planner_probe],
+        subagent_middleware=[sub_probe],
+        shell_repo=str(repo),
+    )
+
+    team.invoke({"messages": [HumanMessage(TASK_USER_MESSAGE)]})
+
+    assert planner_probe.offered
+    for offered in planner_probe.offered:
+        assert offered - {"write_todos"} == {"ls", "read_file", "glob", "grep", "task"}
+        assert not offered & {"run_tests", "request_approval", "http_get"}
+    assert sub_probe.offered
+    for offered in sub_probe.offered:
+        assert {"run_tests", "request_approval", "http_get"} <= offered
 
 
 def test_reviewer_is_offered_only_read_tools_and_run_tests(backend, repo):
