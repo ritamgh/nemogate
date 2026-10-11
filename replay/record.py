@@ -62,7 +62,8 @@ def require_checkout_at(ref: str, repo_dir: Path = ROOT, *, allow_dirty: bool = 
             "a run can only claim the commit it runs from"
         )
     if not allow_dirty:
-        status = _git(repo_dir, "status", "--porcelain")
+        # Explicit, so a user's status.showUntrackedFiles=no cannot hide new files.
+        status = _git(repo_dir, "status", "--porcelain", "--untracked-files=normal")
         if status.returncode != 0:
             raise ValueError(f"git status failed in {repo_dir}: {status.stderr.strip()}")
         if status.stdout.strip():

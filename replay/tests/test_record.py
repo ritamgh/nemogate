@@ -118,6 +118,15 @@ def test_untracked_file_that_is_not_ignored_is_dirty(repo: Path):
     assert record.require_checkout_at("HEAD", repo, allow_dirty=True) == head
 
 
+def test_untracked_file_is_dirty_even_when_git_config_hides_untracked_files(repo: Path):
+    # Breaks if the check relies on `git status` defaults: status.showUntrackedFiles=no would
+    # hide the new file and let the run claim a repo_sha that does not describe it.
+    _git(repo, "config", "status.showUntrackedFiles", "no")
+    (repo / "new_source.py").write_text("x = 1\n")
+    with pytest.raises(ValueError, match="new_source.py"):
+        record.require_checkout_at("HEAD", repo)
+
+
 def test_untracked_file_in_a_new_directory_is_dirty(repo: Path):
     (repo / "newpkg").mkdir()
     (repo / "newpkg" / "mod.py").write_text("x = 1\n")
