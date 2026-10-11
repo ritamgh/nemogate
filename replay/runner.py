@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from common import env
 from common.env import is_live
 from common.spend import run_scope, run_totals
 from replay import record
@@ -35,6 +36,10 @@ RUNS_DIR = ROOT / "runs"
 def _default_client() -> Any:
     from contree_sdk import Contree  # imported here so tests never need the SDK client
 
+    # contree-sdk resolves its credentials when `Contree()` is built and sends an unset
+    # variable's name as the credential (FACTS §3, §9), so load `.env` and check first.
+    env.load_dotenv()
+    env.require_env("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID")
     return Contree()
 
 
@@ -81,11 +86,12 @@ class Runner:
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
 
-        # The gate pins and the oracle checks only the target constraint, but the hash covers the
-        # whole ledger so runs on different target constraints stay comparable.
+        # The gate loads the FULL ledger from this file (and pins run_config.target_constraint
+        # itself), so the hash of the file is the hash the record carries. The oracle checks only
+        # the target constraint, so it gets the scoped ledger.
         scoped = record.scoped_ledger(self.ledger, task.constraint)
         ledger_path = run_dir / "ledger.yaml"
-        record.write_ledger(scoped, ledger_path)
+        record.write_ledger(self.ledger, ledger_path)
         ledger_hash = self.ledger_hash_fn(self.ledger)
         run_config = record.make_run_config(
             run_id=run_id,
@@ -119,13 +125,8 @@ class Runner:
         if not task_success:
             (run_dir / "task_check.txt").write_text(tail, encoding="utf-8")
 
-        trace_path = Path(run_config.trace_path)
-        if not trace_path.is_file():
-            raise RuntimeError(
-                f"no trace file at {trace_path}: the gate did not run, and evaluating an empty "
-                "trace would report zero violations"
-            )
-        trace = parse_trace_jsonl(trace_path.read_text(encoding="utf-8"))
+        safe_config_hash = self.config.safe_config.hash
+        trace = self._read_trace(run_config, safe_config_hash, ledger_hash)
 
         violations = self.evaluate(scoped, trace, fs_diff)
         record.write_json(run_dir / "violations.json", violations)
@@ -145,13 +146,43 @@ class Runner:
             checkpoint_id=checkpoint_id,
             contree_image=final,
             model_ids=record.model_ids(self.config),
-            safe_config_hash=self.config.safe_config.hash,
+            safe_config_hash=safe_config_hash,
             ledger_hash=ledger_hash,
             repo_sha=repo_sha,
             lockfile_hash=record.lockfile_hash(self.repo_dir / "uv.lock"),
         )
         record.write_json(run_dir / "record.json", run_record)
         return run_record
+
+    @staticmethod
+    def _read_trace(run_config: Any, safe_config_hash: str, ledger_hash: str) -> list[Any]:
+        """The run's trace; RuntimeError unless the gate ran and hashed what the record carries."""
+        trace_path = Path(run_config.trace_path)
+        if not trace_path.is_file():
+            raise RuntimeError(
+                f"no trace file at {trace_path}: the gate did not run, and evaluating an empty "
+                "trace would report zero violations"
+            )
+        trace = parse_trace_jsonl(trace_path.read_text(encoding="utf-8"))
+        if not trace:
+            raise RuntimeError(
+                f"trace file {trace_path} has no events: the gate did not run, and evaluating an "
+                "empty trace would report zero violations"
+            )
+        expected = {
+            "run_id": run_config.run_id,
+            "ledger_hash": ledger_hash,
+            "safe_config_hash": safe_config_hash,
+        }
+        for event in trace:
+            for field, want in expected.items():
+                got = getattr(event, field)
+                if got != want:
+                    raise RuntimeError(
+                        f"trace {trace_path}: {field} is {got!r} at step {event.step}, but the "
+                        f"run record carries {want!r}"
+                    )
+        return trace
 
     async def _invoke(
         self, client: Any, session: Any, task: AppTask, run_config: Any, run_dir: Path
@@ -162,24 +193,27 @@ class Runner:
         # connection and closes it on exit); FACTS §5 ("SQLite checkpointer import path").
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-        middleware = self.make_middleware(run_config)
         config = {
             "configurable": {"thread_id": run_config.run_id},
             "recursion_limit": self.recursion_limit,
         }
-        async with AsyncSqliteSaver.from_conn_string(str(run_dir / "checkpoints.sqlite")) as saver:
-            graph = self.app.build(
-                self.backend_factory(session),
-                middleware=middleware,
-                subagent_middleware=middleware,  # the SAME list: the gate tells the agents apart
-                checkpointer=saver,
-            )
-            # SpendHandler (common/llm.py:99) is a sync, non-inline callback handler. In async
-            # runs langchain_core calls it through `run_in_executor(None, copy_context().run,
-            # ...)` (langchain_core/callbacks/manager.py:404-421, :453-484), so it sees the
-            # ContextVar that `run_scope` sets here. Nodes and sync tools get a copied context the
-            # same way (langchain_core/runnables/config.py:627, :678-709).
-            with run_scope(run_config.run_id):
+        # SpendHandler (common/llm.py:99) is a sync, non-inline callback handler. In async runs
+        # langchain_core calls it through `run_in_executor(None, copy_context().run, ...)`
+        # (langchain_core/callbacks/manager.py:404-421, :453-484), so it sees the ContextVar that
+        # `run_scope` sets here. Nodes and sync tools get a copied context the same way
+        # (langchain_core/runnables/config.py:627, :678-709). Building the gate and the graph is
+        # inside the scope too, so a helper-model call made during setup is charged to the run.
+        with run_scope(run_config.run_id):
+            middleware = self.make_middleware(run_config)
+            async with AsyncSqliteSaver.from_conn_string(
+                str(run_dir / "checkpoints.sqlite")
+            ) as saver:
+                graph = self.app.build(
+                    self.backend_factory(session),
+                    middleware=middleware,
+                    subagent_middleware=middleware,  # the SAME list: the gate tells agents apart
+                    checkpointer=saver,
+                )
                 await graph.ainvoke(
                     {"messages": [{"role": "user", "content": task.user_message}]}, config=config
                 )

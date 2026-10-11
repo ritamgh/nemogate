@@ -108,8 +108,30 @@ def test_require_checkout_refuses_modified_tracked_file_unless_allowed(repo: Pat
     assert record.require_checkout_at("HEAD", repo, allow_dirty=True) == head
 
 
-def test_untracked_file_alone_is_not_dirty(repo: Path):
+def test_untracked_file_that_is_not_ignored_is_dirty(repo: Path):
+    # Changed from "untracked file alone is not dirty": the run executes this checkout, so a
+    # new, unignored source file is code the recorded repo_sha does not describe.
     (repo / "scratch.txt").write_text("x\n")
+    with pytest.raises(ValueError, match="scratch.txt"):
+        record.require_checkout_at("HEAD", repo)
+    head = _git(repo, "rev-parse", "HEAD")
+    assert record.require_checkout_at("HEAD", repo, allow_dirty=True) == head
+
+
+def test_untracked_file_in_a_new_directory_is_dirty(repo: Path):
+    (repo / "newpkg").mkdir()
+    (repo / "newpkg" / "mod.py").write_text("x = 1\n")
+    with pytest.raises(ValueError, match="newpkg"):
+        record.require_checkout_at("HEAD", repo)
+
+
+def test_ignored_files_are_not_dirty(repo: Path):
+    (repo / ".gitignore").write_text("runs/\n*.sqlite\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "ignore")
+    (repo / "runs").mkdir()
+    (repo / "runs" / "r-1.json").write_text("{}\n")
+    (repo / "cache.sqlite").write_text("x")
     assert record.require_checkout_at("HEAD", repo) == _git(repo, "rev-parse", "HEAD")
 
 

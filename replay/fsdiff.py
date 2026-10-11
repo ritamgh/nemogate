@@ -13,8 +13,10 @@ SKIP_SUFFIXES = frozenset({".pyc"})
 # Runs inside the image under its own `python3`, so it sticks to the standard library and
 # syntax any python3 has. argv[1] is the root. Output is one JSON object, ASCII only
 # (`ensure_ascii`), so any file name (spaces, newlines, unicode) survives the SDK's strict
-# UTF-8 decode of stdout (FACTS §3, "Output decoding"). Symlinks are recorded, never followed.
-# Only regular files are hashed (a fifo would block); a missing or unreadable root raises.
+# UTF-8 decode of stdout (FACTS §3, "Output decoding"). Symlinks are recorded, never followed
+# (os.walk lists a symlink to a directory among `dirs`; it is recorded by the lstat check, not
+# entered). Only regular files are hashed (a fifo would block); a missing or unreadable root
+# raises.
 _TEMPLATE = """
 import hashlib, json, os, stat, sys
 
@@ -29,27 +31,29 @@ def fail(err):
     raise err
 
 
-def skipped(name):
-    return name in SKIP_DIRS or name.endswith(SKIP_SUFFIXES)
-
-
 out = {}
 for here, dirs, files in os.walk(root, onerror=fail, followlinks=False):
-    dirs[:] = sorted(d for d in dirs if not skipped(d))
+    dirs.sort()
+    prune = set()
     for name in dirs + files:
-        if skipped(name):
-            continue
         path = os.path.join(here, name)
-        rel = os.path.relpath(path, root).replace(os.sep, "/")
         mode = os.lstat(path).st_mode
+        if stat.S_ISDIR(mode):
+            # SKIP_DIRS name real directories only; the walk never enters a skipped one
+            if name in SKIP_DIRS:
+                prune.add(name)
+            continue
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
         if stat.S_ISLNK(mode):
             out[rel] = "symlink:" + os.readlink(path)
-        elif stat.S_ISREG(mode):
+        elif stat.S_ISREG(mode) and not name.endswith(SKIP_SUFFIXES):
+            # SKIP_SUFFIXES name regular files only
             h = hashlib.sha256()
             with open(path, "rb") as f:
                 for chunk in iter(lambda: f.read(1 << 20), b""):
                     h.update(chunk)
             out[rel] = "sha256:" + h.hexdigest()
+    dirs[:] = [d for d in dirs if d not in prune]
 print(json.dumps(out))
 """
 SCRIPT = _TEMPLATE.replace("@DIRS@", repr(tuple(sorted(SKIP_DIRS)))).replace(

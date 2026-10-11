@@ -39,6 +39,13 @@ def build_tree(root):
         path.write_bytes(data)
     os.symlink("notes with space.txt", root / "link_to_file")
     os.symlink("app/core", root / "link_to_dir")
+    # Skip names apply to one kind of entry each: SKIP_DIRS to directories, SKIP_SUFFIXES to
+    # regular files. The same names on other kinds of entries are real content.
+    (root / "odd" / "pkg.pyc").mkdir(parents=True)
+    (root / "odd" / "pkg.pyc" / "mod.py").write_bytes(b"x = 1\n")
+    (root / "odd" / "__pycache__").write_bytes(b"a file, not a cache")
+    os.symlink("../app/core", root / "odd" / ".pytest_cache")
+    os.symlink("../empty.txt", root / "odd" / "x.pyc")
 
 
 EXPECTED = {
@@ -49,6 +56,10 @@ EXPECTED = {
     "empty.txt": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "link_to_file": "symlink:notes with space.txt",
     "link_to_dir": "symlink:app/core",
+    "odd/pkg.pyc/mod.py": sha(b"x = 1\n"),
+    "odd/__pycache__": sha(b"a file, not a cache"),
+    "odd/.pytest_cache": "symlink:../app/core",
+    "odd/x.pyc": "symlink:../empty.txt",
 }
 
 

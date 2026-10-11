@@ -243,3 +243,6 @@ CLAUDE.local.md
 
 # Held-out tasks stay out of git until the final sweep (remove this line then, so results are reproducible)
 *heldout*
+
+# Local tool cache
+.playwright-mcp/

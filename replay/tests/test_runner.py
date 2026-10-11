@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from uuid import UUID
 
 import pytest
 
+from common import env
 from common.spend import append_spend
 from replay import record, runner
 from replay.runner import Runner
@@ -89,8 +91,14 @@ class FakeGraph:
         await self.checkpointer.setup()  # creates the real sqlite file
         if self.behaviour.get("raises"):
             raise ValueError(self.behaviour["raises"])
-        if self.behaviour.get("write_trace", True):
-            events = trace_events(self.run_config)
+        if "trace_text" in self.behaviour:
+            Path(self.run_config.trace_path).write_text(self.behaviour["trace_text"])
+        elif self.behaviour.get("write_trace", True):
+            events = trace_events(
+                self.run_config,
+                ledger_hash=self.behaviour.get("trace_ledger_hash", LEDGER_HASH),
+                bad=self.behaviour.get("bad_event"),
+            )
             Path(self.run_config.trace_path).write_text(
                 "\n".join(dump_event_jsonl(e) for e in events) + "\n", encoding="utf-8"
             )
@@ -104,22 +112,32 @@ class FakeGraph:
         return SimpleNamespace(config={"configurable": {"checkpoint_id": "ckpt-7"}})
 
 
-def trace_events(rc: RunConfig) -> list:
-    return [
-        ToolCall(
-            run_id=rc.run_id,
-            arm=rc.arm,
-            operator=rc.operator,
-            step=step,
-            agent="coder",
-            model_id="m-sut",
-            safe_config_hash="s",
-            ledger_hash="l",
-            tool="write_file",
-            args={"path": f"f{step}.py"},
+def trace_events(rc: RunConfig, *, ledger_hash: str | None = None, bad=None) -> list:
+    """Two events carrying the hashes a correct gate writes. `bad` = (step, field, value) swaps
+    one field of one event, as a gate hashing another ledger or config would."""
+    fields = {
+        "run_id": rc.run_id,
+        "safe_config_hash": SAFE_CONFIG_HASH,
+        "ledger_hash": ledger_hash or LEDGER_HASH,
+    }
+    events = []
+    for step in (0, 1):
+        own = dict(fields)
+        if bad and bad[0] == step:
+            own[bad[1]] = bad[2]
+        events.append(
+            ToolCall(
+                arm=rc.arm,
+                operator=rc.operator,
+                step=step,
+                agent="coder",
+                model_id="m-sut",
+                tool="write_file",
+                args={"path": f"f{step}.py"},
+                **own,
+            )
         )
-        for step in (0, 1)
-    ]
+    return events
 
 
 class FakeTask:
@@ -169,6 +187,8 @@ def constraint(cid: str) -> Constraint:
 
 
 LEDGER = Ledger(version=1, constraints=(constraint("C-001"), constraint("C-002")))
+LEDGER_HASH = record.ledger_hash(LEDGER)
+SAFE_CONFIG_HASH = load_config(ROOT / "config.yaml").safe_config.hash
 
 
 def violation(cid: str, step: int) -> Violation:
@@ -204,6 +224,8 @@ class Harness:
         return [violation("C-002", 1), violation("C-001", 0), violation("C-002", 2)]
 
     def _make_middleware(self, run_config):
+        if self.app.behaviour.get("spend_in_middleware"):
+            append_spend(Role.helper, "m-helper", 7, 3, 0.04)
         mw = [FakeMiddleware(run_config)]
         self.middleware_lists.append(mw)
         return mw
@@ -281,13 +303,13 @@ def test_run_one_success_writes_every_file_and_a_complete_record(tmp_path):
     ]
 
 
-def test_run_one_hands_the_gate_and_oracle_the_scoped_ledger_and_the_full_hash(tmp_path):
+def test_run_one_gives_the_gate_the_full_ledger_file_and_the_oracle_only_the_target(tmp_path):
     h = Harness(tmp_path)
     rec = asyncio.run(h.run_one("X2", Arm.mutated, Operator.hedge, seed=5))
     run_dir = h.run_dir()
 
-    scoped_on_disk = load_ledger_yaml((run_dir / "ledger.yaml").read_text())
-    assert [c.id for c in scoped_on_disk.constraints] == ["C-002"]
+    on_disk = load_ledger_yaml((run_dir / "ledger.yaml").read_text())
+    assert on_disk == LEDGER  # the gate pins run_config.target_constraint from the full ledger
 
     (mw_list,) = h.middleware_lists
     rc = mw_list[0].run_config
@@ -312,6 +334,8 @@ def test_run_one_hands_the_gate_and_oracle_the_scoped_ledger_and_the_full_hash(t
     scoped = record.scoped_ledger(LEDGER, "C-002")
     assert rec.ledger_hash == record.ledger_hash(LEDGER)
     assert rec.ledger_hash != record.ledger_hash(scoped)
+    # the hash of the ledger file the gate loads is the hash the record carries
+    assert record.ledger_hash(load_ledger_yaml(Path(rc.ledger_path).read_text())) == rec.ledger_hash
 
 
 def test_run_one_takes_the_ledger_hash_from_the_injected_function_over_the_full_ledger(
@@ -323,7 +347,7 @@ def test_run_one_takes_the_ledger_hash_from_the_injected_function_over_the_full_
         seen.append(ledger)
         return "h-" + ",".join(c.id for c in ledger.constraints)
 
-    h = Harness(tmp_path, ledger_hash_fn=fake_hash)
+    h = Harness(tmp_path, {"trace_ledger_hash": "h-C-001,C-002"}, ledger_hash_fn=fake_hash)
     rec = asyncio.run(h.run_one("X1"))
     assert rec.ledger_hash == "h-C-001,C-002"
     assert seen == [LEDGER]
@@ -403,6 +427,79 @@ def test_run_one_refuses_a_ref_that_is_not_the_checkout(tmp_path):
     with pytest.raises(ValueError, match="checkout"):
         asyncio.run(h.runner.run_one(task, Arm.gated, Operator.drop, seed=0, repo_ref="HEAD~1"))
     assert not h.runs_dir.exists()
+
+
+def test_run_one_with_an_empty_trace_file_fails_and_writes_no_record(tmp_path):
+    h = Harness(tmp_path, {"trace_text": "\n"})
+    with pytest.raises(RuntimeError, match="no events") as info:
+        asyncio.run(h.run_one())
+    assert "trace.jsonl" in str(info.value)
+    assert h.evaluated == []
+    assert not (h.run_dir() / "record.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong", "expected"),
+    [
+        ("run_id", "r-other", None),
+        ("ledger_hash", "000000000000", LEDGER_HASH),
+        ("safe_config_hash", "ffffffffffff", SAFE_CONFIG_HASH),
+    ],
+)
+def test_run_one_rejects_a_trace_whose_hashes_or_run_id_differ_from_the_record(
+    tmp_path, field, wrong, expected
+):
+    h = Harness(tmp_path, {"bad_event": (1, field, wrong)})
+    with pytest.raises(RuntimeError) as info:
+        asyncio.run(h.run_one())
+    message = str(info.value)
+    assert field in message
+    assert repr(wrong) in message
+    assert repr(expected or h.run_dir().name) in message
+    assert "step 1" in message
+    assert h.evaluated == []
+    assert not (h.run_dir() / "record.json").exists()
+
+
+def test_run_one_charges_a_model_call_made_while_building_the_gate_to_the_run(tmp_path):
+    h = Harness(tmp_path, {"spend_in_middleware": True})
+    rec = asyncio.run(h.run_one())
+    assert rec.tokens == {Role.helper: 10, Role.sut: 150, Role.planner: 15}
+    assert rec.cost_usd == pytest.approx(0.07)
+
+
+# ---- default client -------------------------------------------------------------------------
+
+
+def _fake_contree(monkeypatch, seen: list):
+    class Contree:
+        def __init__(self):
+            seen.append((os.environ.get("NEBIUS_API_KEY"), os.environ.get("NEBIUS_PROJECT_ID")))
+
+    monkeypatch.setitem(sys.modules, "contree_sdk", _module("contree_sdk", Contree=Contree))
+
+
+def test_default_client_loads_the_env_file_before_constructing_contree(monkeypatch):
+    def fake_load_dotenv(path=None):  # stands for a `.env` that holds both variables
+        monkeypatch.setenv("NEBIUS_API_KEY", "k-from-file")
+        monkeypatch.setenv("NEBIUS_PROJECT_ID", "p-from-file")
+
+    monkeypatch.delenv("NEBIUS_PROJECT_ID", raising=False)
+    monkeypatch.setattr(env, "load_dotenv", fake_load_dotenv)
+    seen: list = []
+    _fake_contree(monkeypatch, seen)
+    runner._default_client()
+    assert seen == [("k-from-file", "p-from-file")]
+
+
+def test_default_client_refuses_missing_credentials_without_constructing_contree(monkeypatch):
+    monkeypatch.setattr(env, "load_dotenv", lambda path=None: None)  # never read a real `.env`
+    monkeypatch.delenv("NEBIUS_PROJECT_ID", raising=False)
+    seen: list = []
+    _fake_contree(monkeypatch, seen)
+    with pytest.raises(env.MissingEnvError, match="NEBIUS_API_KEY.*NEBIUS_PROJECT_ID"):
+        runner._default_client()
+    assert seen == []
 
 
 # ---- arun / run -----------------------------------------------------------------------------
