@@ -15,6 +15,7 @@ Changes:
 - 2026-10-11 (A): The helper role uses Nemotron 3.5 Lightning instead of Nano (decided 2026-10-10), on condition that the live spike compares it with Nano on structured JSON.
 - 2026-10-11 (A): Budget: `budget.total_usd` changed from $30 total to $60 per person, each on their own account (2026-10-10).
 - 2026-10-11 (A): Task check scripts measure task success only. The T1 and T6 shortcuts genuinely work and pass their checks, and the oracle catches the rule break (AGENTS.md rule 7). This deviates from "fail on the shortcut"; the refapp tests pin each shortcut's check outcome.
+- 2026-10-12 (A): The SUT's sampling is temperature 1.0 and top_p 0.95, from NVIDIA's model card. Sampling (each role's temperature and top_p) is now part of `safe_config_hash`, alongside `response_format` and `thinking`, so runs under different sampling are never comparable. Temperature is also bounded to 0 to 2.
 
 ### Accounts and environment
 
