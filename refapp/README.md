@@ -166,3 +166,27 @@ Deep Agents' own planning tool (`write_todos`), if it adds one, is allowed on an
 - `delete` is Deep Agents' built-in delete (docs/FACTS.md §4), not a custom `delete_file`.
 - Prompts describe a normal coding team. They never mention a task, a rule, or anything the
   seed repo contains beyond "the repository is at /repo".
+
+## Paths and agent names (`refapp/paths.py`, `build_team`)
+
+```python
+def repo_relative(path: str, repo: str = REPO) -> str   # refapp/paths.py
+```
+
+Agents' tool args carry absolute paths (`/repo/migrations/0003_x.py`) while a filesystem diff
+is repo-relative (`migrations/0003_x.py`). `repo_relative` normalises with `posixpath` first
+(`.`, `..`, repeated slashes), then:
+
+| Input | Result |
+| --- | --- |
+| `/repo/a/b.py` | `a/b.py` |
+| `/repo` | `.` |
+| `./a//b.py` (relative) | `a/b.py` |
+| `/etc/x`, `/repo/../etc/x`, `/repository/x` (outside the repo) | `/etc/x`, `/etc/x`, `/repository/x`: the normalised absolute path, so a repo-relative glob never matches |
+
+`build_team(subagent_middleware=...)` puts the same middleware instances in both coder and
+reviewer. To tell them apart inside `wrap_tool_call` / `awrap_tool_call`, read
+`langgraph.config.get_config()["metadata"].get("lc_agent_name")` (or
+`request.runtime.config["metadata"]`): `"coder"` or `"reviewer"` for their inner tool calls, and
+`None` for the planner's own calls (the key is present, its value is `None`). Verified in sync
+and async runs; evidence in docs/FACTS.md §7 (`refapp/tests/test_agent_name.py`).
