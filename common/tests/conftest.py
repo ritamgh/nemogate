@@ -57,11 +57,13 @@ def write_config(path: Path, **overrides) -> Path:
                 "context_window": 1000,
             },
         },
-        # hash = sha256('{"response_format":"json_schema","thinking":false}')[:12], by hand
+        # hash = sha256 of the compact sorted JSON of this config's settings and sampling,
+        # first 12 hex digits, computed by hand (see test_safe_config_hash_is_sha256_... in
+        # test_llm_live.py)
         "safe_config": {
             "response_format": "json_schema",
             "thinking": False,
-            "hash": "8c2f708f9c34",
+            "hash": "0602bb99cc09",
         },
         "budget": {"total_usd": 10, "stop_at_fraction": 0.8},
     }

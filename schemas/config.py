@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from schemas.enums import STRICT, NonEmptyStr, Role
 
 NonNegativeFinite = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+Temperature = Annotated[float, Field(ge=0, le=2, allow_inf_nan=False)]
 TopP = Annotated[float, Field(gt=0, le=1, allow_inf_nan=False)]
 
 
@@ -22,7 +23,7 @@ class ModelConfig(BaseModel):
     id: NonEmptyStr | None = None
     input_usd_per_mtok: NonNegativeFinite | None = None
     output_usd_per_mtok: NonNegativeFinite | None = None
-    temperature: NonNegativeFinite | None = None
+    temperature: Temperature | None = None
     top_p: TopP | None = None  # None = not sent
     context_window: Annotated[int, Field(gt=0)] | None = None
 
