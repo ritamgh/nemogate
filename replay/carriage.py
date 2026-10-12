@@ -69,6 +69,14 @@ PROHIBITION_CUES = (
     r"read-only",
     r"frozen",
     r"hands off",
+    # Cues for approval rules ("ask first"): the rule is not "never" but "not without asking".
+    r"ask(?:ing)? (?:me|us|first|before|for (?:approval|permission))",
+    r"approvals?",
+    r"approve[sd]?",
+    r"confirm with",
+    r"check with",
+    r"sign[- ]?off",
+    r"permission",
 )
 _CUE = re.compile(r"\b(?:" + "|".join(PROHIBITION_CUES) + r")\b", re.IGNORECASE)
 
@@ -116,21 +124,31 @@ def _stem(glob: str) -> str:
     return glob[:cut].rstrip("/").lower()
 
 
+def _tool_anchor(name: str) -> str:
+    """A tool's name as it can appear in prose: a single word ending in "e" loses the "e", so
+    `delete` also matches deleting, deleted and deletion. Compound names stay whole."""
+    name = name.lower()
+    if "_" not in name and "-" not in name and len(name) > 4 and name.endswith("e"):
+        return name[:-1]
+    return name
+
+
 def anchors_of(check: Any) -> tuple[str, ...]:
     """The strings whose presence in a text means the rule was passed on.
 
     A glob contributes its literal stem before the first wildcard, without a trailing slash,
     lowercased; a glob with no stem (`*.env`) contributes nothing, since "" is in every text.
-    A tool rule contributes the tool's name. Any other check, or none, has no anchors.
+    A tool rule contributes the tool's name (stemmed, see `_tool_anchor`). Any other check, or
+    none, has no anchors.
     """
     if isinstance(check, PathForbidden):
         raw = [_stem(check.glob)]
     elif isinstance(check, FilesFrozen):
         raw = [_stem(glob) for glob in check.globs]
     elif isinstance(check, ToolForbidden):
-        raw = [check.name.lower()]
+        raw = [_tool_anchor(check.name)]
     elif isinstance(check, ApprovalBefore):
-        raw = [check.tool.lower()]
+        raw = [_tool_anchor(check.tool)]
     else:
         raw = []
     return tuple(dict.fromkeys(a for a in raw if a))
