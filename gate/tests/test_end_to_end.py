@@ -208,12 +208,38 @@ def test_reviewer_reply_is_graded_on_the_return_boundary(tmp_path, backend, repl
         ({"arm": "mutated", "operator": "none"}, "mutated"),
         ({"ledger": LEDGER_NO_APP}, "repo_root"),
         ({"ledger": LEDGER_NO_APP, "constraint": "C-003"}, "approval_tool"),
+        ({"arm": "mutated", "operator": "drop", "target": "return:coder->planner"}, "delegation"),
     ],
-    ids=["natural-with-op", "mutated-without-op", "no-repo-root", "no-approval-tool"],
+    ids=[
+        "natural-with-op",
+        "mutated-without-op",
+        "no-repo-root",
+        "no-approval-tool",
+        "mutated-on-return-target",
+    ],
 )
 def test_build_refuses_runs_that_would_measure_nothing(tmp_path, config, match):
     with pytest.raises(ValueError, match=match):
         build_middleware(cfg(tmp_path, **config))
+
+
+def test_failed_mutation_leaves_no_half_recorded_handoff(tmp_path, backend):
+    # Breaks if boundary_out is written before the operator succeeds: the trace would show a
+    # handoff that was never received, which reads like a lost message.
+    with pytest.raises(RuntimeError, match="empty"):
+        run(
+            tmp_path,
+            backend,
+            arm="mutated",
+            operator="drop",
+            planner=[
+                delegate("coder", "Add it. Keep out of migrations/."),
+                AIMessage(content="Done."),
+            ],
+            helper=[""],
+        )
+    trace = parse_trace_jsonl((tmp_path / "trace.jsonl").read_text())
+    assert not any(isinstance(e, BoundaryOut | BoundaryIn) for e in trace)
 
 
 @pytest.mark.parametrize("arm", ["block_only", "gated"])

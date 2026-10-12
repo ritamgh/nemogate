@@ -28,6 +28,10 @@ def _check_arm(run_config: RunConfig) -> None:
         raise ValueError("the natural arm takes operator none")
     if run_config.arm is Arm.mutated and run_config.operator is Operator.none:
         raise ValueError("the mutated arm needs an operator other than none")
+    if run_config.operator is not Operator.none and not run_config.target_boundary.startswith(
+        "delegation:"
+    ):
+        raise ValueError("operators apply to delegation boundaries only until week 2")
 
 
 def _check_app(ledger: Ledger) -> None:

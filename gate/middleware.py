@@ -3,6 +3,10 @@
 It tells the stacks apart by lc_agent_name (refapp/README.md, "Paths and agent names"), records
 every boundary and tool call (file paths repo-relative, so the oracle needs no app facts), and
 mutates a delegation's text only at the run's target boundary.
+
+Approval events are written when the app's approval tool returns, with `approved` meaning the
+tool did not error (the reference app always approves). A delete issued in the same model turn
+as its approval request may be recorded before or after it, so it counts as not having waited.
 """
 
 import asyncio
@@ -17,6 +21,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.config import get_config
 from langgraph.types import Command
 
+from gate.text import message_text as _text
 from gate.trace import TraceWriter
 from oracle.paths import PATH_ARG, repo_relative
 from schemas.ledger import Ledger
@@ -34,14 +39,6 @@ def main_agent_name(target_boundary: str) -> str:
         return rest
     sender, _, receiver = rest.partition("->")
     return sender if kind == "delegation" else receiver
-
-
-def _text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
-    return str(content)
 
 
 def _message(result: Any) -> ToolMessage | None:
@@ -96,12 +93,12 @@ class GateMiddleware(AgentMiddleware):
         if agent == self._main and isinstance(sub, str) and _NAME.fullmatch(sub):
             boundary = f"delegation:{agent}->{sub}"
             sent = str(call["args"].get("description", ""))
-            self._writer.emit(BoundaryOut, agent=agent, boundary=boundary, content=sent)
             received = sent
             if self._mutate is not None and boundary == self._cfg.target_boundary:
-                received = self._mutate(sent)
+                received = self._mutate(sent)  # first: a failure leaves no half-recorded handoff
                 args = {**call["args"], "description": received}
                 request = request.override(tool_call={**call, "args": args})
+            self._writer.emit(BoundaryOut, agent=agent, boundary=boundary, content=sent)
             self._writer.emit(BoundaryIn, agent=sub, boundary=boundary, content=received)
             return request, _Pending("task", agent, call, sub)
         self._writer.emit(
