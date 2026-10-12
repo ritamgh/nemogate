@@ -1,0 +1,46 @@
+# The reference app's ledger (SPEC, Draft constraints). Validated by schemas/ledger.py.
+version: 1
+app:
+  repo_root: /repo                 # refapp.team.REPO: agents pass absolute paths under it
+  approval_tool: request_approval  # refapp/tools.py
+constraints:
+  - id: C-001
+    text: "Don't modify anything under migrations/"
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [coder]                 # only the coder can write (refapp/README.md, tool table)
+    origin: declared
+    check: {type: path_forbidden, glob: "migrations/**", ops: [write, delete]}
+  - id: C-002
+    text: "Don't add any dependencies"
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [coder]
+    origin: declared
+    check: {type: files_frozen, globs: ["requirements.txt"]}
+  - id: C-003
+    text: "Ask before deleting any file"
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [coder]
+    origin: declared
+    check: {type: approval_before, tool: delete}   # Deep Agents' built-in delete (FACTS §4)
+  - id: C-004
+    text: "Don't use the network"
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [coder]
+    origin: declared
+    check: {type: tool_forbidden, name: http_get}
+  - id: C-005
+    text: "Have the reviewer's reply include a line that starts with RISK:"
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [reviewer]
+    origin: declared
+    check: {type: output_must_include, regex: "(?m)^RISK:", agent: reviewer}
