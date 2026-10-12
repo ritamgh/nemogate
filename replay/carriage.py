@@ -43,6 +43,7 @@ _WILDCARDS = "*?[{"
 CLASSIFIER_VERSION = 3
 WINDOW = 100  # characters on each side of an anchor in which a cue must sit
 EXCERPT = 300  # characters of the delegation shown as evidence when the anchor is absent
+DEFAULT_LIBRARY_TRIGGER = 170_000  # tokens: Deep Agents' default summarization trigger (FACTS §4)
 SHOWN = 6  # delegations listed in the evidence
 SHOWN_CHARS = 200  # characters of each listed delegation
 
@@ -337,13 +338,11 @@ def write_carriage(path: Path, carriage: dict[str, Any]) -> None:
     path.write_text(json.dumps(carriage, indent=2) + "\n", encoding="utf-8")
 
 
-def rederive(run_dir: Path, user_message: str) -> dict[str, Any]:
-    """Re-classify a finished run from its own files and overwrite its carriage.json.
+def classify_folder(run_dir: Path, user_message: str, compaction: dict[str, Any] | None = None):
+    """Classify a finished run from its own files, in memory (nothing is written).
 
-    Reads run_config.json, trace.jsonl, violations.json and ledger.yaml. The compaction block and
-    the knobs need the live graph and the process environment, so they are kept from the old
-    carriage.json. The old file is kept under `previous_carriage` and its label under
-    `previous_label`; re-deriving again keeps the original, not the previous derivation.
+    Reads run_config.json, trace.jsonl, violations.json and ledger.yaml; FileNotFoundError if one
+    is missing. `compaction` is a finished compaction block to attach (it needs the live graph).
     """
     run_config = RunConfig.model_validate_json((run_dir / "run_config.json").read_text())
     ledger = load_ledger_yaml((run_dir / "ledger.yaml").read_text(encoding="utf-8"))
@@ -351,8 +350,6 @@ def rederive(run_dir: Path, user_message: str) -> dict[str, Any]:
         Violation.model_validate(v)
         for v in json.loads((run_dir / "violations.json").read_text(encoding="utf-8"))
     ]
-    old_path = run_dir / "carriage.json"
-    old = json.loads(old_path.read_text(encoding="utf-8")) if old_path.is_file() else {}
     derived = classify(
         check=ledger.get(run_config.target_constraint).check,
         user_message=user_message,
@@ -360,7 +357,20 @@ def rederive(run_dir: Path, user_message: str) -> dict[str, Any]:
         run_config=run_config,
         violations=violations,
     )
-    new = replace(derived, compaction=old.get("compaction")).to_dict()
+    return replace(derived, compaction=compaction)
+
+
+def rederive(run_dir: Path, user_message: str) -> dict[str, Any]:
+    """Re-classify a finished run from its own files and overwrite its carriage.json.
+
+    The compaction block and the knobs need the live graph and the process environment, so they
+    are kept from the old carriage.json. The old file is kept under `previous_carriage` and its
+    label under `previous_label`; re-deriving again keeps the original, not the previous
+    derivation.
+    """
+    old_path = run_dir / "carriage.json"
+    old = json.loads(old_path.read_text(encoding="utf-8")) if old_path.is_file() else {}
+    new = classify_folder(run_dir, user_message, old.get("compaction")).to_dict()
     new["knobs"] = old.get("knobs")
     if old.get("classifier_version") == CLASSIFIER_VERSION and "previous_carriage" in old:
         new["previous_label"], new["previous_carriage"] = (
