@@ -7,6 +7,8 @@ The contract is in replay/README.md, section "runner.py". Live use is
 import argparse
 import asyncio
 import importlib
+import json
+import os
 import sys
 import traceback
 from collections.abc import Callable, Sequence
@@ -15,10 +17,11 @@ from typing import Any
 from uuid import UUID
 
 from common import env
-from common.env import is_live
+from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
 from replay import record
 from replay.app import App, AppTask, pairs
+from replay.carriage import classify, compaction_evidence
 from replay.fsdiff import diff, snapshot
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
@@ -109,7 +112,9 @@ class Runner:
         try:
             base = await self.app.base_image(client)
             session = (await client.images.use(UUID(base))).session()
-            checkpoint_id = await self._invoke(client, session, task, run_config, run_dir)
+            checkpoint_id, compaction = await self._invoke(
+                client, session, task, run_config, run_dir
+            )
         except Exception:
             (run_dir / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
             raise
@@ -130,6 +135,23 @@ class Runner:
 
         violations = self.evaluate(scoped, trace, fs_diff)
         record.write_json(run_dir / "violations.json", violations)
+
+        # Where the rule was lost, if it was. The compaction knob is recorded here because
+        # nothing else hashes it (RunRecord and its reproducibility fields are frozen).
+        carriage = classify(
+            check=scoped.get(task.constraint).check,
+            user_message=task.user_message,
+            trace=trace,
+            run_config=run_config,
+            violations=violations,
+            compaction=compaction,
+        ).to_dict()
+        carriage["knobs"] = {
+            name: os.environ.get(name) for name in (COMPACT_TOKENS_ENV, COMPACT_KEEP_ENV)
+        }
+        (run_dir / "carriage.json").write_text(
+            json.dumps(carriage, indent=2) + "\n", encoding="utf-8"
+        )
 
         tokens, cost = run_totals(run_id)
         run_record = RunRecord(
@@ -186,8 +208,9 @@ class Runner:
 
     async def _invoke(
         self, client: Any, session: Any, task: AppTask, run_config: Any, run_dir: Path
-    ) -> str:
-        """Build the graph on a fresh session, run the task and return the final checkpoint id."""
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Build the graph on a fresh session, run the task and return the final checkpoint id
+        and the planner's compaction evidence (None if it never compacted)."""
         # Import path, constructor and close: langgraph/checkpoint/sqlite/aio.py:38 (the class),
         # :132-146 (`from_conn_string` is an async context manager that opens an aiosqlite
         # connection and closes it on exit); FACTS §5 ("SQLite checkpointer import path").
@@ -218,7 +241,8 @@ class Runner:
                     {"messages": [{"role": "user", "content": task.user_message}]}, config=config
                 )
                 state = await graph.aget_state(config)
-        return state.config["configurable"]["checkpoint_id"]
+                compaction = await compaction_evidence(graph, config, state)
+        return state.config["configurable"]["checkpoint_id"], compaction
 
     async def arun(
         self,
@@ -261,14 +285,8 @@ def _import(package: str) -> Any:
         raise RuntimeError(f"cannot run: the `{package}` package is not available ({exc})") from exc
 
 
-def run(
-    task_ids: list[str],
-    arms: list[Arm],
-    operators: list[Operator],
-    n: int,
-    repo_ref: str = "main",
-) -> list[RunRecord]:
-    """`schemas.contracts.RunFn`: the default Runner (README, "Defaults") over these runs."""
+def default_runner(runs_dir: Path | None = None) -> Runner:
+    """The default Runner (README, "Defaults"); `runs_dir` None means `RUNS_DIR`."""
     evaluate = _import("oracle").evaluate
     make_middleware = _import("gate").make_middleware
     if not LEDGER_PATH.is_file():
@@ -276,15 +294,25 @@ def run(
     ledger = load_ledger_yaml(LEDGER_PATH.read_text(encoding="utf-8"))
     from refapp.app import APP
 
-    runner = Runner(
+    return Runner(
         app=APP,
         evaluate=evaluate,
         make_middleware=make_middleware,
         ledger=ledger,
         config=load_config(CONFIG_PATH),
-        runs_dir=RUNS_DIR,
+        runs_dir=RUNS_DIR if runs_dir is None else runs_dir,
     )
-    return runner.run(task_ids, arms, operators, n, repo_ref)
+
+
+def run(
+    task_ids: list[str],
+    arms: list[Arm],
+    operators: list[Operator],
+    n: int,
+    repo_ref: str = "main",
+) -> list[RunRecord]:
+    """`schemas.contracts.RunFn`: the default Runner (README "Defaults") over these runs."""
+    return default_runner().run(task_ids, arms, operators, n, repo_ref)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -296,6 +324,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--n", required=True, type=int, help="repetitions per task and pair")
     parser.add_argument("--repo-ref", default="main")
+    parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        help="write run folders here instead of runs/ (keep compaction runs apart)",
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the run count and go")
     args = parser.parse_args(argv)
 
@@ -313,7 +346,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    for r in run(args.tasks, args.arms, args.operators, args.n, args.repo_ref):
+    if args.runs_dir is None:
+        records = run(args.tasks, args.arms, args.operators, args.n, args.repo_ref)
+    else:
+        records = default_runner(args.runs_dir).run(
+            args.tasks, args.arms, args.operators, args.n, args.repo_ref
+        )
+    for r in records:
         print(
             f"{r.run_id} task={r.task_id} arm={r.arm.value} operator={r.operator.value} "
             f"violations={','.join(r.violations) or '-'} task_success={r.task_success} "
