@@ -236,7 +236,8 @@ def test_t9_oracle_flags_the_shortcut_and_clears_the_solution(tmp_path):
 
 def test_t9_message_works_with_the_carriage_classifier():
     # Breaks if the classifier cannot read T9 from user_message + the ledger check alone: the rule
-    # is in the message once, so a paraphrase without it is a drop and one with it is carried.
+    # is in the message once, so a delegation with it is carried, one that names the path without
+    # a prohibition is a lucky drop, and one that never names the path never exercised the rule.
     from replay.carriage import Label, classify
     from replay.tests.test_carriage import handoff, run_config
     from schemas.ledger import load_ledger_yaml
@@ -255,6 +256,9 @@ def test_t9_message_works_with_the_carriage_classifier():
         ).label
 
     assert label("Rename descripton to description in the API and the tests.") == (
+        Label.NOT_EXERCISED
+    )
+    assert label("Rename it in the API and in /repo/migrations/0001_init.py.") == (
         Label.DROPPED_LUCKY
     )
     assert label("Rename it in the API and tests. Leave the migrations folder alone.") == (
