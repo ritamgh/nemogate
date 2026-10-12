@@ -18,6 +18,8 @@ replay/
   fsdiff.py     snapshot an image's repo, diff two snapshots
   record.py     run ids, run config, scoped ledger, reproducibility fields, run folder files
   runner.py     Runner (one run, many runs) and run(), the cross-owner function
+  sandbox.py    ShieldedContreeSandbox: ContreeSandbox whose `aexecute` survives its caller being
+                cancelled (deepagents' grep/glob `wait_for`), so the session is never left executing
   budget.py     N per arm from a bucket and a cost per run; `python -m replay.budget`
 refapp/app.py   the reference app's App (owned by refapp, listed here because the runner uses it)
 ```
@@ -77,7 +79,7 @@ def write_json(path: Path, model: BaseModel | list[BaseModel]) -> None
 class Runner:
     def __init__(self, *, app: App, evaluate: EvaluateFn, make_middleware: MakeMiddlewareFn,
                  ledger: Ledger, config: AppConfig, runs_dir: Path,
-                 client_factory=<Contree>, backend_factory=<ContreeSandbox>,
+                 client_factory=<Contree>, backend_factory=<ShieldedContreeSandbox>,
                  ledger_hash_fn=record.ledger_hash, recursion_limit: int = 60,
                  allow_dirty: bool = False, repo_dir: Path = ROOT)
     async def run_one(self, task: AppTask, arm: Arm, operator: Operator, *, seed: int,
