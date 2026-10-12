@@ -4,7 +4,7 @@ import re
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 from schemas.enums import (
     STRICT,
@@ -115,9 +115,18 @@ class Constraint(BaseModel):
         return self
 
 
+class AppInfo(BaseModel):
+    """Facts about the app under test that the gate needs. Nothing task-specific."""
+
+    model_config = STRICT
+    repo_root: NonEmptyStr | None = None  # where tool-call paths are rooted; None = repo-relative
+    approval_tool: NonEmptyStr | None = None  # the tool whose call counts as asking for approval
+
+
 class Ledger(BaseModel):
     model_config = STRICT
     version: Literal[1]
+    app: AppInfo = Field(default_factory=AppInfo)
     constraints: tuple[Constraint, ...]
 
     @model_validator(mode="after")
@@ -128,6 +137,14 @@ class Ledger(BaseModel):
                 raise ValueError(f"duplicate constraint id {constraint.id}")
             seen.add(constraint.id)
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_app(self, handler):
+        # An empty app block is left out, so ledgers without one dump (and hash) as before.
+        data = handler(self)
+        if self.app == AppInfo():
+            data.pop("app", None)
+        return data
 
     def get(self, constraint_id: str) -> Constraint:
         for constraint in self.constraints:

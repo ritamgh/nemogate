@@ -349,3 +349,50 @@ def test_ledger_with_tuple_fields_still_dumps_json_arrays():
     assert '"scope":["coder","reviewer"]' in dumped
     assert '"ops":["write","delete"]' in dumped
     assert Ledger.model_validate_json(dumped) == ledger
+
+
+def test_ledger_without_app_block_gets_empty_app():
+    # Breaks if the app block becomes required: every existing ledger would stop loading.
+    ledger = load_ledger_yaml(SPEC_LEDGER_YAML)
+    assert ledger.app.repo_root is None
+    assert ledger.app.approval_tool is None
+
+
+def test_app_block_loads_repo_root_and_approval_tool():
+    data = {**ledger_dict(), "app": {"repo_root": "/repo", "approval_tool": "ask"}}
+    ledger = Ledger.model_validate(data)
+    assert (ledger.app.repo_root, ledger.app.approval_tool) == ("/repo", "ask")
+
+
+@pytest.mark.parametrize("field", ["repo_root", "approval_tool"])
+def test_blank_app_field_is_rejected(field):
+    with pytest.raises(ValidationError):
+        Ledger.model_validate({**ledger_dict(), "app": {field: " "}})
+
+
+def test_unknown_app_key_is_rejected():
+    with pytest.raises(ValidationError):
+        Ledger.model_validate({**ledger_dict(), "app": {"root": "/repo"}})
+
+
+def test_ledger_without_app_block_dumps_exactly_as_before():
+    # Breaks if an empty app block appears in the dump: every existing ledger_hash would change
+    # (replay/tests/test_record.py pins one as a literal).
+    assert "app" not in load_ledger_yaml(SPEC_LEDGER_YAML).model_dump(mode="json")
+
+
+def test_non_empty_app_block_is_dumped_and_round_trips():
+    data = {**ledger_dict(), "app": {"repo_root": "/repo"}}
+    ledger = Ledger.model_validate(data)
+    dumped = ledger.model_dump(mode="json")
+    assert dumped["app"] == {"repo_root": "/repo", "approval_tool": None}
+    assert Ledger.model_validate(dumped) == ledger
+
+
+def test_ledger_rebuilt_from_version_and_constraints_still_validates():
+    # Breaks if a whole-ledger validator starts depending on app: the runner (replay/record.py)
+    # scopes ledgers by rebuilding them from version and constraints only.
+    entry = constraint_dict(check={"type": "approval_before", "tool": "remove"})
+    full = Ledger.model_validate({**ledger_dict(entry), "app": {"approval_tool": "ask"}})
+    rebuilt = Ledger(version=full.version, constraints=full.constraints)
+    assert rebuilt.app.approval_tool is None
