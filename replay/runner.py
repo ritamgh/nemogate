@@ -44,9 +44,9 @@ def _default_client() -> Any:
 
 
 def _default_backend(session: Any) -> Any:
-    from contree_sdk.langchain.sandbox import ContreeSandbox
+    from replay.sandbox import ShieldedContreeSandbox  # imported here so tests never need the SDK
 
-    return ContreeSandbox(session)
+    return ShieldedContreeSandbox(session)
 
 
 class Runner:
