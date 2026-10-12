@@ -19,11 +19,13 @@ class FakeSession:
         self.executing = False
         self.poisoned = False
         self.commands: list[str] = []
+        self.cwds: list[str | None] = []
 
-    async def run(self, *, shell, timeout, disposable, truncate_output_at):
+    async def run(self, *, shell, timeout, disposable, truncate_output_at, cwd=None):
         if self.executing or self.poisoned:
             raise RuntimeError('Image state "x" cannot have state EXECUTING')
         self.commands.append(shell)
+        self.cwds.append(cwd)
         self.executing = True
         try:
             await asyncio.sleep(self.duration)
@@ -35,11 +37,12 @@ class FakeSession:
         return SimpleNamespace(result=result)
 
 
-def make_sandbox(session: FakeSession) -> ShieldedContreeSandbox:
+def make_sandbox(session: FakeSession, cwd: str | None = None) -> ShieldedContreeSandbox:
     sandbox = object.__new__(ShieldedContreeSandbox)  # skip __init__, which wraps a real session
     sandbox._session = session
     sandbox._id = "contree-test"
     sandbox._lock = Lock()
+    sandbox._cwd = cwd
     return sandbox
 
 
@@ -81,3 +84,32 @@ def test_a_command_failing_after_its_caller_was_cancelled_logs_no_unretrieved_ex
 
     asyncio.run(scenario())
     assert "never retrieved" not in caplog.text
+
+
+def test_commands_run_from_the_configured_directory():
+    """Catches a command running from the image default directory instead of the repo."""
+
+    async def scenario():
+        session = FakeSession(duration=0)
+        await make_sandbox(session, cwd="/some/root").aexecute("grep -rn x .")
+        await make_sandbox(session).aexecute("pwd")
+        return session
+
+    session = asyncio.run(scenario())
+    assert session.commands == ["grep -rn x .", "pwd"]
+    assert session.cwds == ["/some/root", None]
+
+
+def test_the_constructor_keeps_the_directory_and_defaults_to_none(monkeypatch):
+    """Catches `cwd` being accepted by `__init__` but never reaching `session.run`."""
+    # `ContreeSandbox.__init__` wraps any session that is not a `ContreeSession`;
+    # patching the class makes the fake one count.
+    monkeypatch.setattr("contree_sdk.langchain.sandbox.ContreeSession", FakeSession)
+
+    async def scenario():
+        session = FakeSession(duration=0)
+        await ShieldedContreeSandbox(session, cwd="/work/tree").aexecute("ls")
+        await ShieldedContreeSandbox(session).aexecute("ls")
+        return session
+
+    assert asyncio.run(scenario()).cwds == ["/work/tree", None]

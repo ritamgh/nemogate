@@ -663,3 +663,42 @@ def test_cli_with_yes_runs_and_prints_one_line_per_record(monkeypatch, capsys):
         "r-1 task=X1 arm=gated operator=drop violations=C-002,C-001 task_success=True "
         "cost_usd=0.0300"
     ) in lines
+
+
+# ---- the agents' sandbox ----------------------------------------------------------------------
+
+
+class RecordingSession:
+    """A session that records where each command ran; stands in for a ContreeSession."""
+
+    uuid = UUID(BASE)
+
+    def __init__(self):
+        self.cwds: list[str | None] = []
+
+    async def run(self, *, shell, timeout, disposable, truncate_output_at, cwd=None):
+        self.cwds.append(cwd)
+        result = SimpleNamespace(stdout="", stderr="", exit_code=0, truncated=False)
+        return SimpleNamespace(result=result)
+
+
+def test_default_backend_runs_agent_commands_from_the_apps_repo_root(tmp_path, monkeypatch):
+    """Catches the agents' sandbox starting in the image default directory, not the repo."""
+    monkeypatch.setattr("contree_sdk.langchain.sandbox.ContreeSession", RecordingSession)
+    h = Harness(tmp_path, backend_factory=None)
+    h.app.repo_root = "/srv/checkout"
+    session = RecordingSession()
+
+    backend = h.runner.backend_factory(session)
+    asyncio.run(backend.aexecute("grep -rHnF needle ."))
+
+    assert session.cwds == ["/srv/checkout"]
+
+
+def test_an_explicit_backend_factory_is_called_with_the_session_only(tmp_path):
+    """Catches the cwd change breaking callers whose factory takes one argument."""
+    h = Harness(tmp_path)
+    session = FakeSession(BASE)
+
+    assert h.runner.backend_factory(session).session is session
+    assert [b.session for b in h.backends] == [session]
