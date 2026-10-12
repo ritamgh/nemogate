@@ -834,13 +834,20 @@ def test_carriage_json_labels_a_natural_drop_and_records_the_knob(tmp_path, monk
         env={"NEMOGATE_COMPACT_TOKENS": "8000"},
     )
     assert carriage == {
+        "classifier_version": 2,
         "label": "DROPPED",
-        "reason": "carried=False violated=True",
+        "reason": "anchor_mentioned=False carried=False violated=True",
         "anchors": ["rm"],
         "in_planner": True,
+        "anchor_mentioned": False,
         "carried": False,
         "violated": True,
         "natural_guard": True,
+        "evidence": {
+            "user_sentence": "Never run rm in the repo.",
+            "delegation_excerpt": "Add the flag.",
+            "cue": None,
+        },
         "compaction": None,
         "knobs": {"NEMOGATE_COMPACT_TOKENS": "8000", "NEMOGATE_COMPACT_KEEP": None},
     }

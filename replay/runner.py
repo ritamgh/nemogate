@@ -7,7 +7,6 @@ The contract is in replay/README.md, section "runner.py". Live use is
 import argparse
 import asyncio
 import importlib
-import json
 import os
 import subprocess
 import sys
@@ -22,7 +21,7 @@ from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
 from replay import record
 from replay.app import App, AppTask, pairs
-from replay.carriage import classify, compaction_evidence
+from replay.carriage import classify, compaction_evidence, write_carriage
 from replay.fsdiff import diff, snapshot
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
@@ -150,9 +149,7 @@ class Runner:
         carriage["knobs"] = {
             name: os.environ.get(name) for name in (COMPACT_TOKENS_ENV, COMPACT_KEEP_ENV)
         }
-        (run_dir / "carriage.json").write_text(
-            json.dumps(carriage, indent=2) + "\n", encoding="utf-8"
-        )
+        write_carriage(run_dir / "carriage.json", carriage)
 
         tokens, cost = run_totals(run_id)
         run_record = RunRecord(
