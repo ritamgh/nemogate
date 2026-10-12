@@ -158,34 +158,42 @@ def classify(
     )
 
 
-async def compaction_evidence(graph: Any, config: dict, state: Any) -> dict[str, Any] | None:
-    """The planner's latest summarization event, read from the finished graph's `state`
-    (`await graph.aget_state(config)`).
+async def compaction_evidence(
+    graph: Any, config: dict, state: Any, target_boundary: str
+) -> dict[str, Any] | None:
+    """The summarization event behind the planner's handoff at `target_boundary`, read from the
+    finished graph's `state` (`await graph.aget_state(config)`) and its checkpoint history.
 
     `_summarization_event` is a private state key (`PrivateStateAttr`); it is still returned in
-    `state.values` and stored in the checkpoint (FACTS §7), so no extra plumbing is needed. None
-    when the planner never compacted. `before_delegation` says whether
-    the first event was written no later than the first checkpoint holding a `task` tool call
-    (the event and the call that follows it share a checkpoint), or None if nothing was
-    delegated.
+    `state.values` and in every checkpoint (FACTS §4), and each later summarization overwrites it.
+    The event in force at the delegation is the one in the first checkpoint holding the `task`
+    call to the boundary's target agent (the event and the call it influenced share a
+    checkpoint). So the result is that one event: `cutoff_index`, `summary` and
+    `before_delegation=True` all describe the same summarization. None when the planner was not
+    compacted before that delegation (a later compaction cannot have changed the handoff). When no
+    call to the target exists (or the boundary is not a delegation), the latest event with
+    `before_delegation=None`.
     """
-    event = state.values.get(SUMMARIZATION_EVENT_KEY)
-    if not event:
+    latest = state.values.get(SUMMARIZATION_EVENT_KEY)
+    if not latest:
         return None
-    event_step = delegation_step = None
+    target = (
+        target_boundary.rpartition("->")[2] if target_boundary.startswith("delegation:") else ""
+    )
+    found, at_delegation = False, None
     async for snap in graph.aget_state_history(config):  # newest first, so keep overwriting
-        step = snap.metadata["step"]
-        if snap.values.get(SUMMARIZATION_EVENT_KEY):
-            event_step = step
         delegated = any(
-            call["name"] == DELEGATION_TOOL
+            call["name"] == DELEGATION_TOOL and call["args"].get("subagent_type") == target
             for message in snap.values.get("messages", ())
             for call in getattr(message, "tool_calls", None) or ()
         )
         if delegated:
-            delegation_step = step
+            found, at_delegation = True, snap.values.get(SUMMARIZATION_EVENT_KEY)
+    if found and not at_delegation:
+        return None
+    event = at_delegation if found else latest
     return {
         "cutoff_index": event["cutoff_index"],
         "summary": str(event["summary_message"].content),
-        "before_delegation": None if delegation_step is None else event_step <= delegation_step,
+        "before_delegation": True if found else None,
     }

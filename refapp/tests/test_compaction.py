@@ -18,6 +18,7 @@ from replay.carriage import compaction_evidence
 
 RULE = "Heads up: nothing under migrations/ may be touched."
 USER_MESSAGE = f"Add a priority field to tasks. {RULE}"
+BOUNDARY = "delegation:planner->coder"
 CONFIG = {"configurable": {"thread_id": "t1"}}
 
 
@@ -50,11 +51,11 @@ def repo_backend(tmp_path: Path) -> LocalShellBackend:
     )
 
 
-def run_team(backend, planner_script, coder_script, compaction, tmp_path):
+def run_team(backend, planner_script, coder_script, compaction, tmp_path, reviewer_script=None):
     models = {
         "planner": SpyModel(role="sut", responses=planner_script),
         "coder": get_model("sut", stub_responses=coder_script),
-        "reviewer": get_model("sut"),
+        "reviewer": get_model("sut", stub_responses=reviewer_script),
     }
 
     async def go():
@@ -63,7 +64,7 @@ def run_team(backend, planner_script, coder_script, compaction, tmp_path):
             team = build_team(backend, models=models, checkpointer=saver, compaction=compaction)
             await team.ainvoke({"messages": [HumanMessage(USER_MESSAGE)]}, CONFIG)
             state = await team.aget_state(CONFIG)
-            return state, await compaction_evidence(team, CONFIG, state)
+            return state, await compaction_evidence(team, CONFIG, state, BOUNDARY)
 
     return asyncio.run(go())
 
@@ -97,7 +98,9 @@ def test_a_low_trigger_compacts_the_planner_and_it_loses_the_rule(repo_backend, 
     assert state.values["messages"][0].content == USER_MESSAGE
     assert evidence["cutoff_index"] > 0
     assert evidence["before_delegation"] is True
-    assert "SECOND-SUMMARY" in evidence["summary"]  # the latest event wins
+    # The evidence is the compaction behind the delegation (FIRST), not the later one (SECOND).
+    assert "FIRST-SUMMARY" in evidence["summary"]
+    assert "SECOND-SUMMARY" not in evidence["summary"]
 
 
 def test_without_the_knob_the_planner_keeps_the_rule_and_no_event_is_written(
@@ -127,9 +130,9 @@ def test_compaction_is_installed_on_the_planner_only(repo_backend, tmp_path):
     assert state.values["messages"][-1].content == "All done."
 
 
-def test_a_compaction_after_the_delegation_is_not_before_it(repo_backend, tmp_path):
-    # Breaks if before_delegation cannot tell a compaction that happened after the planner
-    # delegated (it could not have removed the rule from that handoff) from one before it.
+def test_a_compaction_after_the_delegation_is_not_reported(repo_backend, tmp_path):
+    # Breaks if a compaction that happened after the planner delegated (it could not have removed
+    # the rule from that handoff) is reported as the compaction behind the handoff.
     # The coder's 60000-character report is about 15000 tokens: far above the 8000 trigger, while
     # the planner's context before it (system prompt, tools, a few short messages) is far below.
     big_report = "x" * 60000
@@ -140,11 +143,72 @@ def test_a_compaction_after_the_delegation_is_not_before_it(repo_backend, tmp_pa
         AIMessage(content="LATE-SUMMARY"),
         AIMessage(content="All done."),
     ]
-    _, evidence = run_team(repo_backend, planner, coder, compaction=(8000, 1), tmp_path=tmp_path)
+    state, evidence = run_team(
+        repo_backend, planner, coder, compaction=(8000, 1), tmp_path=tmp_path
+    )
 
-    assert evidence["before_delegation"] is False
-    assert "LATE-SUMMARY" in evidence["summary"]
+    assert state.values["_summarization_event"]["cutoff_index"] > 0  # it did fire, later
+    assert "LATE-SUMMARY" in str(state.values["_summarization_event"]["summary_message"].content)
+    assert evidence is None
     assert "migrations/" in SEEN[1]
+
+
+def test_evidence_is_the_last_compaction_before_the_delegation_to_the_target(
+    repo_backend, tmp_path
+):
+    # Breaks if the evidence takes its content from a later compaction than its timing (the final
+    # state holds THIRD-SUMMARY), or counts the planner's delegation to the reviewer as the
+    # delegation to the coder: the coder's handoff was written after SECOND-SUMMARY, and the
+    # first summary predates both.
+    to_reviewer = call("task", "c-rev", description="Review.", subagent_type="reviewer")
+    planner = [
+        call("ls", "p-ls", path="/repo"),
+        AIMessage(content="FIRST-SUMMARY"),
+        to_reviewer,
+        AIMessage(content="SECOND-SUMMARY"),
+        DELEGATE,
+        AIMessage(content="THIRD-SUMMARY"),
+        AIMessage(content="All done."),
+    ]
+    state, evidence = run_team(
+        repo_backend,
+        planner,
+        CODER,
+        compaction=(1, 1),
+        tmp_path=tmp_path,
+        reviewer_script=[AIMessage(content="Looks fine.")],
+    )
+
+    assert "THIRD-SUMMARY" in str(state.values["_summarization_event"]["summary_message"].content)
+    assert "SECOND-SUMMARY" in evidence["summary"]
+    assert "THIRD-SUMMARY" not in evidence["summary"]
+    assert evidence["before_delegation"] is True
+
+
+def test_a_compaction_before_only_a_delegation_to_another_agent_is_not_reported(
+    repo_backend, tmp_path
+):
+    # Breaks if the evidence treats a delegation to the reviewer as the target delegation: here
+    # the planner is compacted before the reviewer call and never delegates to the coder.
+    to_reviewer = call("task", "c-rev", description="Review.", subagent_type="reviewer")
+    planner = [
+        call("ls", "p-ls", path="/repo"),
+        AIMessage(content="FIRST-SUMMARY"),
+        to_reviewer,
+        AIMessage(content="SECOND-SUMMARY"),
+        AIMessage(content="All done."),
+    ]
+    _, evidence = run_team(
+        repo_backend,
+        planner,
+        CODER,
+        compaction=(1, 1),
+        tmp_path=tmp_path,
+        reviewer_script=[AIMessage(content="Looks fine.")],
+    )
+
+    assert evidence["before_delegation"] is None
+    assert "SECOND-SUMMARY" in evidence["summary"]  # nothing to pin it to: the latest event
 
 
 def test_the_app_installs_compaction_from_the_environment(monkeypatch):

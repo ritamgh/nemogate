@@ -9,6 +9,7 @@ import asyncio
 import importlib
 import json
 import os
+import subprocess
 import sys
 import traceback
 from collections.abc import Callable, Sequence
@@ -241,7 +242,9 @@ class Runner:
                     {"messages": [{"role": "user", "content": task.user_message}]}, config=config
                 )
                 state = await graph.aget_state(config)
-                compaction = await compaction_evidence(graph, config, state)
+                compaction = await compaction_evidence(
+                    graph, config, state, run_config.target_boundary
+                )
         return state.config["configurable"]["checkpoint_id"], compaction
 
     async def arun(
@@ -283,6 +286,27 @@ def _import(package: str) -> Any:
         if exc.name != package:
             raise
         raise RuntimeError(f"cannot run: the `{package}` package is not available ({exc})") from exc
+
+
+def require_ignored_runs_dir(runs_dir: Path, repo_dir: Path = ROOT) -> None:
+    """ValueError unless `runs_dir` is outside the checkout or git ignores what a run writes there.
+
+    Run folders inside the checkout that git sees as untracked make the checkout dirty, so the
+    second run would fail `require_checkout_at` after the first had spent credit.
+    """
+    path, root = runs_dir.resolve(), repo_dir.resolve()
+    if not path.is_relative_to(root):
+        return
+    probe = (path / "run-folder-probe").relative_to(root)
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", "--", str(probe)], cwd=root, capture_output=True, check=False
+    )
+    if ignored.returncode != 0:
+        raise ValueError(
+            f"--runs-dir {runs_dir} is inside the checkout and not git-ignored: its run folders "
+            "would make the checkout dirty and fail the next run. Use a directory under runs/ "
+            "or outside the checkout."
+        )
 
 
 def default_runner(runs_dir: Path | None = None) -> Runner:
@@ -332,6 +356,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--yes", action="store_true", help="confirm the run count and go")
     args = parser.parse_args(argv)
 
+    if args.runs_dir is not None:
+        try:
+            require_ignored_runs_dir(args.runs_dir)
+        except ValueError as exc:
+            print(f"refusing to run: {exc}", file=sys.stderr)
+            return 2
     if not is_live():
         print(
             "refusing to run: set NEMOGATE_LIVE=1 (real model calls spend credit)", file=sys.stderr

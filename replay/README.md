@@ -182,6 +182,9 @@ NEMOGATE_COMPACT_TOKENS=<N> NEMOGATE_COMPACT_KEEP=<K> NEMOGATE_LIVE=1 \
   or KEEP without TOKENS, is an error. `common.env.compaction_from_env` parses them.
 - The summary is a model call, so a compaction run spends credit on top of the usual calls. Run
   `python -m replay.budget` first (AGENTS.md rule 3).
+- `--runs-dir` must be outside the checkout or git-ignored (e.g. under `runs/`); the CLI refuses
+  anything else before a model call, since untracked run folders make the next run fail the
+  clean-checkout check after it has spent credit.
 - Keep these runs in their own `--runs-dir` and never pool them with ordinary natural runs: the
   record's reproducibility fields do not hash the knob. `carriage.json` records the two raw env
   values under `knobs`, so mixed folders can still be separated afterwards.
@@ -195,7 +198,7 @@ NEMOGATE_COMPACT_TOKENS=<N> NEMOGATE_COMPACT_KEEP=<K> NEMOGATE_LIVE=1 \
 | `carried` | one of those anchors is in the first `boundary_in` at `run_config.target_boundary` |
 | `violated` | the oracle returned any violation for the target constraint |
 | `natural_guard` | operator is `none` and that boundary's `boundary_out` text equals its `boundary_in` text, so nothing but the planner wrote it |
-| `compaction` | null if the planner's state holds no summarization event; else `fired` (`cutoff_index > 0`), `cutoff_index`, `anchor_in_summary` (an anchor is in the summary text), `before_delegation` (the event was written no later than the checkpoint holding the first `task` call; null if nothing was delegated) |
+| `compaction` | null if the planner was not compacted before the delegation at the target boundary (a later compaction cannot have changed that handoff); else the event in force at that delegation: `fired` (`cutoff_index > 0`), `cutoff_index`, `anchor_in_summary` (an anchor is in that event's summary text), `before_delegation` (true; null only if no `task` call to the boundary's agent exists, when the latest event is shown) |
 | `knobs` | `NEMOGATE_COMPACT_TOKENS` and `NEMOGATE_COMPACT_KEEP` as set when the run ended (null = unset) |
 
 | `label` | Meaning |
@@ -210,7 +213,9 @@ NEMOGATE_COMPACT_TOKENS=<N> NEMOGATE_COMPACT_KEEP=<K> NEMOGATE_LIVE=1 \
 A natural drop caused by compaction is `DROPPED` (or `DROPPED_LUCKY`) with `compaction.fired`,
 `before_delegation` true and `anchor_in_summary` false. Matching is a substring proxy: the rule
 is "carried" if its anchor string is, so a handoff that states the idea in other words is called
-dropped. Where several delegations reach the target boundary, the first one decides.
+dropped. Where several delegations reach the target boundary, the first one decides. Known
+limit: `boundary_out` and `boundary_in` are paired by first occurrence, so concurrent (parallel)
+delegations to the same agent are not told apart; planner delegations here are sequential.
 
 ## Accepted deviations from the first spec
 

@@ -120,7 +120,15 @@ class FakeGraph:
         # `task` call together; the oldest holds neither.
         event = self.behaviour.get("summarization_event")
         delegation = AIMessage(
-            content="", tool_calls=[{"name": "task", "id": "c1", "args": {}, "type": "tool_call"}]
+            content="",
+            tool_calls=[
+                {
+                    "name": "task",
+                    "id": "c1",
+                    "args": {"subagent_type": "coder"},
+                    "type": "tool_call",
+                }
+            ],
         )
         yield SimpleNamespace(
             metadata={"step": 3}, values={"_summarization_event": event, "messages": [delegation]}
@@ -720,6 +728,34 @@ def test_cli_runs_dir_sends_the_run_folders_to_that_directory(monkeypatch, tmp_p
     assert runner.main([*CLI_ARGS, "--runs-dir", str(target), "--yes"]) == 0
     assert seen[0] == target
     assert seen[1][3] == 3
+
+
+def git_repo_ignoring_runs(tmp_path: Path) -> Path:
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text("runs/\n")
+    return repo
+
+
+def test_runs_dir_inside_the_checkout_must_be_git_ignored(tmp_path):
+    # Breaks if a runs dir that git would see as untracked files is accepted: the first run
+    # then makes the checkout dirty and the second fails require_checkout_at after spending.
+    repo = git_repo_ignoring_runs(tmp_path)
+    runner.require_ignored_runs_dir(repo / "runs" / "compaction", repo)  # ignored: fine
+    runner.require_ignored_runs_dir(tmp_path / "elsewhere", repo)  # outside the checkout: fine
+    with pytest.raises(ValueError, match="not git-ignored"):
+        runner.require_ignored_runs_dir(repo / "out", repo)
+
+
+def test_cli_refuses_an_unignored_runs_dir_before_anything_runs(monkeypatch, capsys):
+    # Breaks if the check happens only after the first (paid) run.
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "run", _no_run)
+    monkeypatch.setattr(runner, "default_runner", _no_run)
+    unignored = runner.ROOT / "out-not-ignored"
+    assert runner.main([*CLI_ARGS, "--runs-dir", str(unignored), "--yes"]) == 2
+    assert "not git-ignored" in capsys.readouterr().err
 
 
 def test_default_runner_writes_to_runs_dir_unless_told_otherwise(monkeypatch, tmp_path):
