@@ -34,5 +34,8 @@ class RunFn(Protocol):
 
 @runtime_checkable
 class MakeMiddlewareFn(Protocol):
-    # list[AgentMiddleware] once docs/FACTS.md verifies the import.
+    # list[AgentMiddleware]. The runner passes the SAME list as both
+    # build_team(middleware=...) and build_team(subagent_middleware=...): planner middleware does
+    # not run inside subagents (docs/FACTS.md section 4), and the gate tells the stacks apart by
+    # lc_agent_name.
     def __call__(self, run_config: RunConfig) -> list[Any]: ...
