@@ -43,12 +43,6 @@ def _default_client() -> Any:
     return Contree()
 
 
-def _default_backend(session: Any) -> Any:
-    from replay.sandbox import ShieldedContreeSandbox  # imported here so tests never need the SDK
-
-    return ShieldedContreeSandbox(session)
-
-
 class Runner:
     def __init__(
         self,
@@ -60,7 +54,7 @@ class Runner:
         config: AppConfig,
         runs_dir: Path,
         client_factory: Callable[[], Any] = _default_client,
-        backend_factory: Callable[[Any], Any] = _default_backend,
+        backend_factory: Callable[[Any], Any] | None = None,
         ledger_hash_fn: Callable[[Ledger], str] = record.ledger_hash,
         recursion_limit: int = 60,
         allow_dirty: bool = False,
@@ -73,11 +67,17 @@ class Runner:
         self.config = config
         self.runs_dir = runs_dir
         self.client_factory = client_factory
-        self.backend_factory = backend_factory
+        self.backend_factory = backend_factory or self._default_backend
         self.ledger_hash_fn = ledger_hash_fn
         self.recursion_limit = recursion_limit
         self.allow_dirty = allow_dirty
         self.repo_dir = repo_dir
+
+    def _default_backend(self, session: Any) -> Any:
+        # Imported here so tests never need the SDK.
+        from replay.sandbox import ShieldedContreeSandbox
+
+        return ShieldedContreeSandbox(session, cwd=self.app.repo_root)
 
     async def run_one(
         self, task: AppTask, arm: Arm, operator: Operator, *, seed: int, repo_ref: str = "main"
