@@ -17,6 +17,7 @@ refapp/
   tools.py         run_tests, request_approval, http_get
   prompts.py       system prompts for planner, coder, reviewer (method only, no task rules)
   team.py          build_team(): the Deep Agents team
+  app.py           RefApp / APP: the team as a replay.app.App (what the runner needs)
   sandbox.py       build the Contree seed image; seed_sha()
   tests/
 ```
@@ -192,3 +193,14 @@ reviewer. To tell them apart inside `wrap_tool_call` / `awrap_tool_call`, read
 `request.runtime.config["metadata"]`): `"coder"` or `"reviewer"` for their inner tool calls, and
 `None` for the planner's own calls (the key is present, its value is `None`). Verified in sync
 and async runs; evidence in docs/FACTS.md §7 (`refapp/tests/test_agent_name.py`).
+
+## App adapter (`refapp/app.py`)
+
+`APP = RefApp()` implements `replay.app.App`, so `replay/` never imports this folder. It maps
+`repo_root` to `sandbox.REPO`, `tasks()` to `load_tasks()`, `base_image(client)` to
+`sandbox.seed_image`, `build(...)` to `build_team` with the same `middleware`,
+`subagent_middleware` and `checkpointer`, and `task_success(session, task)` to
+`sandbox.task_success(session, task.check.name, task.check.read_bytes())`. The runner passes one
+list as both `middleware` and `subagent_middleware`; Deep Agents accepts the shared instance and
+it still sees `lc_agent_name` `None` for the planner and `"coder"` for the coder
+(`refapp/tests/test_app.py`).

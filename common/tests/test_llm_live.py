@@ -23,7 +23,7 @@ from common.tests.conftest import (
     sse,
     write_config,
 )
-from schemas.config import SafeConfig, load_config
+from schemas.config import load_config
 
 # Reserve for the prompt "hi" on sut (1.00 in / 3.00 out per Mtok): 1 input token (2 chars / 3,
 # rounded up) + 4096 reserved output tokens = 1*1/1e6 + 4096*3/1e6.
@@ -72,7 +72,7 @@ def test_live_with_a_null_field_raises_config_error_naming_it(live, tmp_path, ov
         get_model("sut", config_path=path)
 
 
-@pytest.mark.parametrize(("thinking", "digest"), [(False, "8c2f708f9c34"), (True, "b53f345869d0")])
+@pytest.mark.parametrize(("thinking", "digest"), [(False, "0602bb99cc09"), (True, "3d4658bed187")])
 @pytest.mark.parametrize("role", ["helper", "sut", "planner"])
 def test_every_role_sends_the_safe_config_thinking_switch(live, tmp_path, role, thinking, digest):
     # Breaks if the safe config's thinking setting is not sent, or not sent for every role
@@ -114,21 +114,57 @@ def test_a_stale_safe_config_hash_is_refused(live, tmp_path):
     assert transport.requests == []
 
 
-def test_safe_config_hash_is_sha256_of_the_two_settings():
-    # Breaks if the hash covers other fields, or its input format changes (old runs would stop
-    # matching). Literals from `printf '%s' '<json>' | sha256sum | cut -c1-12`.
-    assert safe_config_hash(SafeConfig(response_format="json_schema", thinking=False)) == (
-        "8c2f708f9c34"
-    )
-    assert safe_config_hash(
-        SafeConfig(response_format="json_schema", thinking=True, hash="ignored")
-    ) == ("b53f345869d0")
+def test_safe_config_hash_is_sha256_of_the_settings_and_sampling(tmp_path):
+    # Breaks if the hash covers other fields (prices, ids, the stored hash), drops a role, or
+    # its input format changes (old runs would stop matching). Literals computed independently:
+    # hashlib.sha256(<the JSON text below>.encode()).hexdigest()[:12]
+    #   {"response_format":"json_schema","sampling":{"helper":{"temperature":0.0,"top_p":null},
+    #    "planner":{"temperature":0.0,"top_p":null},"sut":{"temperature":null,"top_p":null}},
+    #    "thinking":false}  (one line, no spaces)  -> 0602bb99cc09; thinking true -> 3d4658bed187
+    base = load_config(write_config(tmp_path / "base.yaml"))
+    assert safe_config_hash(base) == "0602bb99cc09"
+    thinking = load_config(write_config(tmp_path / "t.yaml", safe_config__thinking=True))
+    assert safe_config_hash(thinking) == "3d4658bed187"
+    # The stored hash is not an input.
+    other = load_config(write_config(tmp_path / "h.yaml", safe_config__hash="zzz"))
+    assert safe_config_hash(other) == "0602bb99cc09"
 
 
-def test_the_repo_config_hash_matches_its_safe_config():
-    # Breaks if someone edits safe_config in config.yaml without updating its hash.
-    safe = load_config(REPO_ROOT / "config.yaml").safe_config
-    assert safe.hash == safe_config_hash(safe)
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"models__sut__temperature": 1.0},
+        {"models__sut__top_p": 0.95},
+        {"models__helper__temperature": 0.5},
+        {"models__helper__top_p": 0.9},
+        {"models__planner__temperature": 0.5},
+        {"models__planner__top_p": 0.9},
+    ],
+    ids=["sut_temp", "sut_top_p", "helper_temp", "helper_top_p", "planner_temp", "planner_top_p"],
+)
+def test_a_sampling_change_in_any_role_changes_the_hash(tmp_path, override):
+    # Breaks if a role's temperature or top_p is left out of the fingerprint: runs under
+    # different sampling would carry the same hash and look comparable.
+    base = safe_config_hash(load_config(write_config(tmp_path / "base.yaml")))
+    changed = safe_config_hash(load_config(write_config(tmp_path / "changed.yaml", **override)))
+    assert changed != base
+
+
+def test_a_sampling_change_makes_the_stored_hash_stale_and_is_refused(live, tmp_path):
+    # Breaks if get_model only checks response_format and thinking: a sut temperature edited
+    # without updating safe_config.hash would start spending under an unrecorded fingerprint.
+    path = write_config(tmp_path / "stale.yaml", models__sut__temperature=1.0)
+    transport = Transport()
+    with pytest.raises(ConfigError, match="hash"):
+        get_model("sut", config_path=path, **transport.clients)
+    assert transport.requests == []
+
+
+def test_the_repo_config_hash_matches_its_config():
+    # Breaks if someone edits safe_config or a role's sampling in config.yaml without updating
+    # safe_config.hash.
+    config = load_config(REPO_ROOT / "config.yaml")
+    assert config.safe_config.hash == safe_config_hash(config)
 
 
 def test_one_call_logs_a_reserve_then_a_settle_with_the_same_call_id(live, config_path, spend_log):
@@ -219,7 +255,10 @@ def test_top_p_reaches_the_request_only_when_configured(live, config_path, tmp_p
     # Breaks if get_model stops passing top_p (Super would run at the provider default), or
     # sends it when the config leaves it null.
     sampled = write_config(
-        tmp_path / "sampled.yaml", models__sut__temperature=1.0, models__sut__top_p=0.95
+        tmp_path / "sampled.yaml",
+        models__sut__temperature=1.0,
+        models__sut__top_p=0.95,
+        safe_config__hash="8c5a0a1ec16e",  # same settings as the committed config.yaml
     )
     sampled_t = Transport()
     get_model("sut", config_path=sampled, **sampled_t.clients).invoke("hi")

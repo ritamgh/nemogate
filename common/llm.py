@@ -27,7 +27,7 @@ from pydantic import PrivateAttr
 
 from common.env import REPO_ROOT, is_live, require_env
 from common.spend import admit, append_spend, cost_usd
-from schemas.config import AppConfig, ModelConfig, SafeConfig, load_config
+from schemas.config import AppConfig, ModelConfig, load_config
 from schemas.enums import Role
 
 logger = logging.getLogger(__name__)
@@ -280,9 +280,31 @@ def _require(value: Any, field: str, role: Role) -> Any:
     return value
 
 
-def safe_config_hash(safe: SafeConfig) -> str:
-    """First 12 hex digits of sha256 over the safe config's two settings, as compact sorted JSON."""
-    settings = {"response_format": safe.response_format, "thinking": safe.thinking}
+def safe_config_hash(config: AppConfig) -> str:
+    """First 12 hex digits of sha256 over the settings that make runs comparable.
+
+    The hashed text is compact JSON with sorted keys (no spaces) of
+
+        {"response_format": <str|null>, "thinking": <bool|null>,
+         "sampling": {"helper": {"temperature": <number|null>, "top_p": <number|null>},
+                      "planner": {...}, "sut": {...}}}
+
+    so a change to the safe config or to any role's temperature or top_p changes the hash that
+    every trace line and run record carries. Unset values hash as null. Prices, ids and the
+    stored `safe_config.hash` itself are not covered.
+    """
+    sampling = {
+        role.value: {
+            "temperature": config.models[role].temperature,
+            "top_p": config.models[role].top_p,
+        }
+        for role in (Role.helper, Role.sut, Role.planner)
+    }
+    settings = {
+        "response_format": config.safe_config.response_format,
+        "thinking": config.safe_config.thinking,
+        "sampling": sampling,
+    }
     text = json.dumps(settings, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
@@ -324,10 +346,11 @@ def get_model(
     response_format = _require(safe.response_format, "safe_config.response_format", role)
     thinking = _require(safe.thinking, "safe_config.thinking", role)
     stored_hash = _require(safe.hash, "safe_config.hash", role)
-    if stored_hash != safe_config_hash(safe):
+    current_hash = safe_config_hash(config)
+    if stored_hash != current_hash:
         raise ConfigError(
-            f"config.yaml safe_config.hash is {stored_hash} but the settings hash to "
-            f"{safe_config_hash(safe)}; update the hash with the settings"
+            f"config.yaml safe_config.hash is {stored_hash} but the safe config and sampling "
+            f"hash to {current_hash}; update the hash with the settings"
         )
 
     kwargs: dict[str, Any] = {}
