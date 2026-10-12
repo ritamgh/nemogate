@@ -246,3 +246,21 @@ def test_failed_mutation_leaves_no_half_recorded_handoff(tmp_path, backend):
 def test_week_two_arms_are_not_built_yet(tmp_path, arm):
     with pytest.raises(NotImplementedError):
         build_middleware(cfg(tmp_path, arm=arm, operator="drop"))
+
+
+def test_build_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
+    # Breaks if a config.yaml whose stored hash no longer matches its settings can stamp traces:
+    # get_model only checks on live calls, so stub runs and a gate built before the first live
+    # call would pool runs made under different settings.
+    import gate as gate_module
+    from schemas.config import load_config as real_load
+
+    def stale(path):
+        config = real_load(path)
+        safe = config.safe_config.model_copy(update={"hash": "000000000000"})
+        return config.model_copy(update={"safe_config": safe})
+
+    monkeypatch.setattr(gate_module, "load_config", stale)
+    with pytest.raises(ValueError, match="stale"):
+        build_middleware(cfg(tmp_path))
+    assert not (tmp_path / "trace.jsonl").exists()  # refused before any trace is opened

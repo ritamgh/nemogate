@@ -10,7 +10,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 
 from common.env import REPO_ROOT
-from common.llm import get_model
+from common.llm import get_model, safe_config_hash
 from gate.middleware import GateMiddleware
 from gate.operators import make_operator
 from gate.trace import TraceWriter
@@ -54,6 +54,8 @@ def build_middleware(run_config: RunConfig, *, helper: Any | None = None) -> lis
     model_id, safe_hash = config.models[Role.sut].id, config.safe_config.hash
     if model_id is None or safe_hash is None:
         raise ValueError("config.yaml needs models.sut.id and safe_config.hash to stamp traces")
+    if safe_hash != safe_config_hash(config):
+        raise ValueError("config.yaml safe_config.hash is stale: update it with the settings")
     writer = TraceWriter(
         run_config, model_id=model_id, safe_config_hash=safe_hash, ledger_hash=loaded.ledger_hash
     )
