@@ -36,7 +36,7 @@ def test_committed_config_yaml_loads():
     # The C0 safe config (docs/FACTS.md §6): Super fails json_object; thinking off for every role.
     assert config.safe_config.response_format == "json_schema"
     assert config.safe_config.thinking is False
-    assert config.safe_config.hash == "8c2f708f9c34"
+    assert config.safe_config.hash == "8c5a0a1ec16e"
 
 
 def test_config_with_unknown_top_level_key_is_rejected():
@@ -109,6 +109,22 @@ def test_zero_price_and_zero_temperature_are_accepted():
     )
     helper = AppConfig.model_validate(data).models[Role.helper]
     assert (helper.input_usd_per_mtok, helper.temperature, helper.context_window) == (0, 0, 1)
+
+
+@pytest.mark.parametrize("bad", [2.01, 10, float("inf")])
+def test_temperature_above_two_is_rejected(bad):
+    # Breaks if temperature loses its upper bound: the API rejects > 2 only after a paid call.
+    data = _committed_config_data()
+    data["models"]["sut"]["temperature"] = bad
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+def test_temperature_of_exactly_two_is_accepted():
+    # Breaks if the bound is made exclusive: 2 is the highest value the API takes.
+    data = _committed_config_data()
+    data["models"]["sut"]["temperature"] = 2
+    assert AppConfig.model_validate(data).models[Role.sut].temperature == 2
 
 
 @pytest.mark.parametrize("bad", [0, -0.1, 1.5, float("inf"), float("nan")])

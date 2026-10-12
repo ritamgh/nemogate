@@ -38,11 +38,12 @@ def test_structured_output_defaults_to_the_safe_configs_json_schema(live, config
 
 @pytest.fixture
 def json_object_config(tmp_path):
-    # hash = sha256('{"response_format":"json_object","thinking":false}')[:12], by hand
+    # hash = sha256 of the compact sorted JSON of this config (json_object, thinking off, sut
+    # sampling unset), first 12 hex digits, computed by hand
     return write_config(
         tmp_path / "config_json_object.yaml",
         safe_config__response_format="json_object",
-        safe_config__hash="23af89f9e308",
+        safe_config__hash="4882372cc8f0",
     )
 
 
