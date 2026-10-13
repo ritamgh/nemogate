@@ -28,10 +28,12 @@ def _check_arm(run_config: RunConfig) -> None:
         raise ValueError("the natural arm takes operator none")
     if run_config.arm is Arm.mutated and run_config.operator is Operator.none:
         raise ValueError("the mutated arm needs an operator other than none")
-    if run_config.operator is not Operator.none and not run_config.target_boundary.startswith(
-        "delegation:"
-    ):
-        raise ValueError("operators apply to delegation boundaries only until week 2")
+    if run_config.operator is not Operator.none and _boundary_kind(run_config) == "compaction":
+        raise ValueError("operators apply to a delegation or return boundary, not compaction")
+
+
+def _boundary_kind(run_config: RunConfig) -> str:
+    return run_config.target_boundary.partition(":")[0]
 
 
 def _check_app(ledger: Ledger) -> None:
@@ -62,8 +64,14 @@ def build_middleware(run_config: RunConfig, *, helper: Any | None = None) -> lis
     mutate = None
     if run_config.operator is not Operator.none:
         model = helper if helper is not None else get_model(Role.helper)
-        mutate = make_operator(run_config.operator, ledger.constraints[0].text, model)
-    return [GateMiddleware(run_config, ledger, writer, mutate)]
+        mutate = make_operator(
+            run_config.operator,
+            ledger.constraints[0].text,
+            model,
+            boundary=_boundary_kind(run_config),
+        )
+    mutator_model_id = config.models[Role.helper].id
+    return [GateMiddleware(run_config, ledger, writer, mutate, mutator_model_id=mutator_model_id)]
 
 
 def make_middleware(run_config: RunConfig) -> list[AgentMiddleware]:
