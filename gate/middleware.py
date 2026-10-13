@@ -2,7 +2,8 @@
 
 It tells the stacks apart by lc_agent_name (refapp/README.md, "Paths and agent names"), records
 every boundary and tool call (file paths repo-relative, so the oracle needs no app facts), and
-mutates a delegation's text only at the run's target boundary.
+mutates the text crossing the run's target boundary only: a delegation's description, or a
+subagent's reply on its way back. Text the helper wrote carries the helper's model id.
 
 Approval events are written when the app's approval tool returns, with `approved` meaning the
 tool did not error (the reference app always approves). A delete issued in the same model turn
@@ -51,6 +52,20 @@ def _message(result: Any) -> ToolMessage | None:
     return None
 
 
+def _with_text(result: Any, text: str) -> Any:
+    """`result` with its tool-message text replaced: what the receiving agent will see."""
+    if isinstance(result, ToolMessage):
+        return result.model_copy(update={"content": text})
+    message = _message(result)
+    if message is not None:
+        messages = [*result.update["messages"][:-1], message.model_copy(update={"content": text})]
+        update = {**result.update, "messages": messages}
+        return Command(graph=result.graph, update=update, resume=result.resume, goto=result.goto)
+    if isinstance(result, str):
+        return text
+    raise TypeError(f"cannot place mutated text in a {type(result).__name__} result")
+
+
 @dataclass
 class _Pending:
     kind: str  # "task" or "tool"
@@ -66,13 +81,23 @@ class GateMiddleware(AgentMiddleware):
         ledger: Ledger,
         writer: TraceWriter,
         mutate: Callable[[str], str] | None,
+        *,
+        mutator_model_id: str | None = None,
     ) -> None:
         super().__init__()
         self._cfg = run_config
         self._ledger = ledger
         self._writer = writer
         self._mutate = mutate
+        self._mutator_model_id = mutator_model_id
         self._main = main_agent_name(run_config.target_boundary)
+
+    def _mutated(self, boundary: str, text: str) -> tuple[str, str | None]:
+        """The text the receiver gets at `boundary`, and the id of the model that wrote it
+        (None when it passed through unchanged)."""
+        if self._mutate is None or boundary != self._cfg.target_boundary:
+            return text, None
+        return self._mutate(text), self._mutator_model_id
 
     def _agent(self) -> str:
         return get_config()["metadata"].get("lc_agent_name") or self._main
@@ -93,13 +118,15 @@ class GateMiddleware(AgentMiddleware):
         if agent == self._main and isinstance(sub, str) and _NAME.fullmatch(sub):
             boundary = f"delegation:{agent}->{sub}"
             sent = str(call["args"].get("description", ""))
-            received = sent
-            if self._mutate is not None and boundary == self._cfg.target_boundary:
-                received = self._mutate(sent)  # first: a failure leaves no half-recorded handoff
+            # Mutate first: a failure leaves no half-recorded handoff.
+            received, writer_id = self._mutated(boundary, sent)
+            if received != sent:
                 args = {**call["args"], "description": received}
                 request = request.override(tool_call={**call, "args": args})
             self._writer.emit(BoundaryOut, agent=agent, boundary=boundary, content=sent)
-            self._writer.emit(BoundaryIn, agent=sub, boundary=boundary, content=received)
+            self._writer.emit(
+                BoundaryIn, agent=sub, boundary=boundary, content=received, model_id=writer_id
+            )
             return request, _Pending("task", agent, call, sub)
         self._writer.emit(
             ToolCall,
@@ -116,8 +143,17 @@ class GateMiddleware(AgentMiddleware):
         text = _text(message.content) if message is not None else _text(result)
         if pending.kind == "task":
             boundary = f"return:{pending.sub}->{pending.agent}"
+            received, writer_id = self._mutated(boundary, text)
+            if received != text:
+                result = _with_text(result, received)
             self._writer.emit(BoundaryOut, agent=pending.sub, boundary=boundary, content=text)
-            self._writer.emit(BoundaryIn, agent=pending.agent, boundary=boundary, content=text)
+            self._writer.emit(
+                BoundaryIn,
+                agent=pending.agent,
+                boundary=boundary,
+                content=received,
+                model_id=writer_id,
+            )
             return result
         tool = pending.call["name"]
         is_error = message is not None and message.status == "error"
@@ -148,10 +184,14 @@ class GateMiddleware(AgentMiddleware):
         return self._after(pending, handler(request))
 
     async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
-        # The operator calls the helper synchronously; a thread keeps the loop free, and
-        # asyncio.to_thread copies the context, so get_config() still sees lc_agent_name.
+        # Operators call the helper synchronously, before the call (delegation) or after it
+        # (return); a thread keeps the loop free, and asyncio.to_thread copies the context, so
+        # get_config() still sees lc_agent_name.
         request, pending = await asyncio.to_thread(self._before, request)
-        return self._after(pending, await handler(request))
+        result = await handler(request)
+        if pending.kind == "task" and self._mutate is not None:
+            return await asyncio.to_thread(self._after, pending, result)
+        return self._after(pending, result)
 
     def after_agent(self, state: Any, runtime: Any) -> None:
         if self._agent() != self._main:
