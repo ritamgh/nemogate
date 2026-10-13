@@ -230,6 +230,8 @@ From the C0 cost probe. The budget-check script derives the run count per arm fr
 | Task | Nano tokens | Super tokens | Ultra tokens | Cost per run (USD) | Measured on |
 | --- | --- | --- | --- | --- | --- |
 | Hello-world (planner + 1 subagent, both Super, one file write; not a reference task) | 0 | 28.5k in, 0.5k out | 0 | 0.005 | 2026-10-10, live `runs/live/hello_agent.py` → `out/hello_agent.json` |
+| Reference task T6, natural arm, full run (measured, not estimated) | not split by role | not split by role | 0 | 0.1057 | 2026-10-14, live `replay.runner --tasks T6 --arms natural --operators none --n 1`, run `r-20261013T210307-a831df` |
+| Reference task T6, fork from that run at `delegation:planner->coder`, mutated/drop (downstream part only) | not split by role | not split by role | 0 | 0.0923 | 2026-10-14, live `Runner.fork_one`, run `r-20261013T210532-056b90`, 127 s, task_success True |
 
 | Fact | Value | Status | Evidence | Date | Who |
 | --- | --- | --- | --- | --- | --- |
