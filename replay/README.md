@@ -106,7 +106,9 @@ class BoundaryRecorder(AgentMiddleware):
     # Before the call: pre_checkpoint = runtime.config["configurable"]["checkpoint_map"][""]
     # (checkpoint_id is None inside a tool call, docs/FACTS.md §5) and pre_image = session.uuid.
     # After it returns: post_image = session.uuid. Sender = metadata lc_agent_name, else the
-    # sender of target_boundary (X in delegation:X->Y and return:Y->X), as the gate names it.
+    # sender of target_boundary (X in delegation:X->Y, return:Y->X and compaction:X), as the
+    # gate names it. A call whose sender is not an agent name is skipped: recording never
+    # crashes a run.
     def crossings(self, children: Mapping[str, str]) -> tuple[Crossing, ...]
     # children: root checkpoint id -> id of this run's next checkpoint (post_checkpoint).
 def fork_point(recording, boundary) -> Crossing | None
@@ -203,12 +205,20 @@ of its target boundary. It reads only that folder, so it works from a new proces
    source record's (the fork would not be `is_comparable` with it; the message names the
    fields); the compaction knobs set now differ from the `knobs` in the source's
    `carriage.json` (they shape the planner on both sides of the fork point and nothing else
-   records them); `fork_point(<source boundaries.json>, source.boundary)` is None. A missing
-   `record.json`, `carriage.json` or `boundaries.json` raises FileNotFoundError naming it. The task is
-   `app.tasks()[source.task_id]` (KeyError if gone).
+   records them); `fork_point(<source boundaries.json>, source.boundary)` is None; the source
+   is itself a fork (`fork.json`: its trace starts at its own fork point); the task
+   `app.tasks()[source.task_id]` (KeyError if gone) now has another constraint or boundary than
+   the source record's `constraint_id`/`boundary`; the source trace has no gapless run of
+   events (steps 0..n-1) up to the gate's first `boundary_out` at the crossing's delegation (the
+   prefix, below); the arm is `block_only` or `gated` and the prefix holds an `approval` event
+   (the fork's gate starts empty and has no hook to be told of it, so it could block an
+   authorised action). A missing `record.json`, `carriage.json`, `boundaries.json` or
+   `trace.jsonl` raises FileNotFoundError naming it.
 2. As run_one steps 2-11, except: `copy_checkpoints(source/checkpoints.sqlite,
    run_dir/checkpoints.sqlite)` (the fork writes into its own copy; the source folder is never
-   written) and `run_dir/fork.json` (ForkOrigin) are written after the run config; the session
+   written), `run_dir/fork.json` (ForkOrigin) and `run_dir/prefix.jsonl` (the prefix: the
+   source's trace events before the fork point, verbatim, with the source's run id and stamps)
+   are written after the run config; the session
    starts from `crossing.pre_image`; the invoke is `await graph.ainvoke(None, config)` with
    config `{"configurable": {"thread_id": <source thread>, "checkpoint_id":
    crossing.pre_checkpoint}, "recursion_limit": ...}`, preceded by a check that this checkpoint
@@ -220,12 +230,17 @@ of its target boundary. It reads only that folder, so it works from a new proces
    source's `base_image` and `thread_id`; resuming saves a `source: "fork"` checkpoint (a copy
    of the fork point) and the step runs from it, so the fork's own crossing has that as its
    `pre_checkpoint` (docs/FACTS.md §5).
-3. Scope: the trace holds only what happens after the fork point (the gate runs only there);
-   `fs_diff` is from the source's `base_image` to the fork's final image, the run's whole
-   effect, as for a full run. The fork's gate starts fresh: approvals given before the fork
-   point are not known to it. `carriage.json` is written as for any run and is valid: the fork
-   point lies before the first crossing of the target boundary, so the fork's trace holds every
-   delegation the classifier reads, and `compaction_evidence` reads the shared history. A
+3. Scope: `trace.jsonl` holds only the gate's own events after the fork point (steps from 0,
+   validated as in step 8). The verdict covers the whole run: `evaluate()` and the carriage
+   classifier get the prefix (steps 0..n-1) followed by the fork's events with their steps
+   shifted by n, so `violations.json` steps count `prefix.jsonl` first, then `trace.jsonl`
+   (step s >= n is trace step s - n). `fs_diff` is from the source's `base_image` to the
+   fork's final image, the run's whole effect, as for a full run. The fork's gate starts
+   fresh (approvals before the fork point unknown to it; see the refusal above; a gate hook
+   that takes prior events would lift it). `carriage.json` is written as for any run and is
+   valid: the fork point lies before the first crossing of the target boundary, so the fork's
+   events hold every delegation the classifier reads, and `compaction_evidence` reads the
+   shared history. A
    natural fork repeats its source's planner handoff, so it is not an independent sample of
    carriage; `fork.json` marks a fork folder.
 

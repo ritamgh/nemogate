@@ -38,7 +38,7 @@ from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
 from schemas.ledger import Ledger, load_ledger_yaml
 from schemas.run import RunRecord
-from schemas.trace import parse_trace_jsonl
+from schemas.trace import Approval, BoundaryOut, dump_event_jsonl, parse_trace_jsonl
 
 ROOT = record.ROOT
 LEDGER_PATH = ROOT / "nemogate.yaml"
@@ -46,6 +46,7 @@ CONFIG_PATH = ROOT / "config.yaml"
 RUNS_DIR = ROOT / "runs"
 CHECKPOINTS = "checkpoints.sqlite"  # file names in a run folder
 BOUNDARIES = "boundaries.json"
+PREFIX = "prefix.jsonl"  # a fork: the source's trace events before the fork point
 
 
 def _default_client() -> Any:
@@ -157,9 +158,29 @@ class Runner:
                 f"cannot fork {source_run_id}: it never crossed {source.boundary}, so there is "
                 "nothing to fork before"
             )
+        if (source_dir / "fork.json").exists():
+            raise ValueError(
+                f"cannot fork {source_run_id}: it is itself a fork, and its trace starts at its "
+                "fork point; fork the run it was forked from"
+            )
         task = {t.id: t for t in self.app.tasks()}[source.task_id]
+        if (task.constraint, task.boundary) != (source.constraint_id, source.boundary):
+            raise ValueError(
+                f"cannot fork {source_run_id}: task {task.id} now targets {task.constraint} at "
+                f"{task.boundary}, but the run recorded {source.constraint_id} at {source.boundary}"
+            )
+        prefix = _prefix(source_dir, crossing)
+        if arm in (Arm.block_only, Arm.gated) and any(isinstance(e, Approval) for e in prefix):
+            raise ValueError(
+                f"cannot fork {source_run_id} under the {arm.value} arm: an approval was given "
+                "before the fork point, and the gate has no way yet to be told of it, so it could "
+                "block an action that was authorised"
+            )
         fork = _Fork(
-            source_dir, recording, ForkOrigin(source_run_id=source_run_id, crossing=crossing)
+            source_dir,
+            recording,
+            ForkOrigin(source_run_id=source_run_id, crossing=crossing),
+            tuple(prefix),
         )
         return await self._run(
             task, arm, operator, seed=seed, repo_ref=repo_ref, repro=repro, fork=fork
@@ -200,6 +221,9 @@ class Runner:
             # The fork resumes in its own copy, so the recorded run is never written to.
             copy_checkpoints(fork.source_dir / CHECKPOINTS, run_dir / CHECKPOINTS)
             record.write_json(run_dir / "fork.json", fork.origin)
+            (run_dir / PREFIX).write_text(
+                "".join(dump_event_jsonl(e) + "\n" for e in fork.prefix), encoding="utf-8"
+            )
 
         client = self.client_factory()
         try:
@@ -233,6 +257,11 @@ class Runner:
             (run_dir / "task_check.txt").write_text(tail, encoding="utf-8")
 
         trace = self._read_trace(run_config, repro["safe_config_hash"], repro["ledger_hash"])
+        if fork is not None:
+            # A fork is judged on what happened before its fork point too: the source's events
+            # (prefix.jsonl, steps 0..n-1) and then its own, numbered on from n.
+            n = len(fork.prefix)
+            trace = [*fork.prefix, *(e.model_copy(update={"step": e.step + n}) for e in trace)]
 
         violations = self.evaluate(scoped, trace, fs_diff)
         record.write_json(run_dir / "violations.json", violations)
@@ -430,6 +459,28 @@ class _Fork:
     source_dir: Path
     recording: Recording  # the source run's boundaries.json
     origin: ForkOrigin  # what fork.json says: the source run and the crossing resumed before
+    prefix: tuple[Any, ...]  # the source's trace events before the fork point
+
+
+def _prefix(source_dir: Path, crossing: Crossing) -> list[Any]:
+    """The source's trace events before the fork point: everything before the gate's first
+    handoff event at the crossing's delegation (the fork crossing is the first with that
+    delegation, and its step runs that call alone). ValueError if there is no such event."""
+    events = parse_trace_jsonl((source_dir / "trace.jsonl").read_text(encoding="utf-8"))
+    cut = next(
+        (
+            i
+            for i, e in enumerate(events)
+            if isinstance(e, BoundaryOut) and e.boundary == crossing.delegation
+        ),
+        None,
+    )
+    if cut is None or [e.step for e in events[:cut]] != list(range(cut)):
+        raise ValueError(
+            f"cannot fork {source_dir.name}: its trace has no gapless run of events up to a "
+            f"{crossing.delegation} handoff, so the events before the fork point are unknown"
+        )
+    return events[:cut]
 
 
 async def _check_fork_point(graph: Any, start: dict, tool_call_id: str) -> None:

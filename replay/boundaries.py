@@ -50,8 +50,10 @@ class ForkOrigin(BaseModel):
 
 
 def _sender(target_boundary: str) -> str:
-    """The delegating agent: X in delegation:X->Y and in return:Y->X."""
+    """The delegating agent: X in delegation:X->Y, in return:Y->X and in compaction:X."""
     kind, _, rest = target_boundary.partition(":")
+    if kind == "compaction":
+        return rest
     sender, _, receiver = rest.partition("->")
     return sender if kind == "delegation" else receiver
 
@@ -79,6 +81,8 @@ class BoundaryRecorder(AgentMiddleware):
             return None
         config = request.runtime.config
         agent = (config.get("metadata") or {}).get("lc_agent_name") or self._sender
+        if not _AGENT.fullmatch(agent):
+            return None  # no valid boundary id names this call: never let recording crash a run
         self._open[call["id"]] = {
             "tool_call_id": call["id"],
             "delegation": f"delegation:{agent}->{sub}",

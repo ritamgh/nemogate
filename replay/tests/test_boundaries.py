@@ -143,3 +143,13 @@ def test_recorder_ignores_calls_that_cross_no_boundary(name, args):
     recorder = BoundaryRecorder(session, "delegation:planner->coder")
     assert recorder.wrap_tool_call(request(name, args), advance(session)) == "reply"
     assert recorder.crossings({}) == ()
+
+
+def test_recorder_skips_a_call_from_an_agent_no_boundary_id_can_name():
+    """Catches a recording that would crash the run: an agent name with a space cannot form a
+    valid boundary id, so materialising the crossing would raise."""
+    session = Session()
+    recorder = BoundaryRecorder(session, "compaction:planner")
+    req = request("task", {"description": "d", "subagent_type": "coder"}, agent="lead agent")
+    assert recorder.wrap_tool_call(req, advance(session)) == "reply"
+    assert recorder.crossings({}) == ()
