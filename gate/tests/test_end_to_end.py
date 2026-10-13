@@ -1,12 +1,8 @@
 """Offline runs of the real reference team with stub models: gate → trace → oracle."""
 
 import asyncio
-import os
-import sys
-from pathlib import Path
 
 import pytest
-from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from common.env import REPO_ROOT
@@ -53,16 +49,6 @@ def call(name, call_id, **args):
 
 def delegate(sub, description):
     return call("task", f"task_{sub}", description=description, subagent_type=sub)
-
-
-@pytest.fixture
-def backend(tmp_path: Path) -> LocalShellBackend:
-    (tmp_path / "repo" / "app").mkdir(parents=True)
-    (tmp_path / "repo" / "migrations").mkdir()
-    path = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
-    return LocalShellBackend(
-        root_dir=tmp_path, virtual_mode=True, inherit_env=True, env={"PATH": path}
-    )
 
 
 def cfg(
@@ -297,9 +283,10 @@ def test_failed_mutation_leaves_no_half_recorded_handoff(tmp_path, backend):
 
 
 @pytest.mark.parametrize("arm", ["block_only", "gated"])
-def test_week_two_arms_are_not_built_yet(tmp_path, arm):
-    with pytest.raises(NotImplementedError):
-        build_middleware(cfg(tmp_path, arm=arm, operator="drop"))
+def test_blocking_arms_need_an_operator(tmp_path, arm):
+    # replay.app.pairs never runs these arms unmutated; a run that did would measure nothing.
+    with pytest.raises(ValueError, match=arm):
+        build_middleware(cfg(tmp_path, arm=arm, operator="none"))
 
 
 def test_build_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):

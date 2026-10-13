@@ -22,12 +22,11 @@ from schemas.run import RunConfig
 
 
 def _check_arm(run_config: RunConfig) -> None:
-    if run_config.arm in (Arm.block_only, Arm.gated):
-        raise NotImplementedError(f"the {run_config.arm.value} arm is built in week 2")
+    # Same pairing as replay.app.pairs: natural only unmutated, every other arm only mutated.
     if run_config.arm is Arm.natural and run_config.operator is not Operator.none:
         raise ValueError("the natural arm takes operator none")
-    if run_config.arm is Arm.mutated and run_config.operator is Operator.none:
-        raise ValueError("the mutated arm needs an operator other than none")
+    if run_config.arm is not Arm.natural and run_config.operator is Operator.none:
+        raise ValueError(f"the {run_config.arm.value} arm needs an operator other than none")
     if run_config.operator is not Operator.none and _boundary_kind(run_config) == "compaction":
         raise ValueError("operators apply to a delegation or return boundary, not compaction")
 
@@ -70,8 +69,17 @@ def build_middleware(run_config: RunConfig, *, helper: Any | None = None) -> lis
             model,
             boundary=_boundary_kind(run_config),
         )
-    mutator_model_id = config.models[Role.helper].id
-    return [GateMiddleware(run_config, ledger, writer, mutate, mutator_model_id=mutator_model_id)]
+    return [
+        GateMiddleware(
+            run_config,
+            ledger,
+            writer,
+            mutate,
+            mutator_model_id=config.models[Role.helper].id,
+            block=run_config.arm is Arm.block_only,
+            gated=run_config.arm is Arm.gated,
+        )
+    ]
 
 
 def make_middleware(run_config: RunConfig) -> list[AgentMiddleware]:

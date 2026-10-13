@@ -26,6 +26,11 @@ class TraceWriter:
         self._step = 0
         self._lock = threading.Lock()
 
+    def preview(self, model: type, **fields: Any):
+        """The event `emit` would write next, validated but not written (for pre-call checks)."""
+        with self._lock:
+            return model(**self._stamp, step=self._step, **fields)
+
     def emit(self, model: type, *, model_id: str | None = None, **fields: Any):
         """Validate and append one event; the step increases only when the write succeeds.
 
