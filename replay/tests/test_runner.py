@@ -354,11 +354,15 @@ def test_run_one_takes_the_ledger_hash_from_the_injected_function_over_the_full_
 
 
 def test_run_one_gives_the_same_list_to_both_middleware_slots(tmp_path):
+    """The gate's middleware, in order, then the boundary recorder; one list for both slots."""
     h = Harness(tmp_path)
     asyncio.run(h.run_one())
     (mw_list,) = h.middleware_lists
-    assert h.app.built["middleware"] is mw_list
-    assert h.app.built["subagent_middleware"] is mw_list
+    stack = h.app.built["middleware"]
+    assert h.app.built["subagent_middleware"] is stack
+    assert len(stack) == len(mw_list) + 1
+    assert all(got is want for got, want in zip(stack, mw_list, strict=False))
+    assert type(stack[-1]).__name__ == "BoundaryRecorder"
 
 
 def test_run_one_invokes_the_graph_with_the_user_message_thread_and_recursion_limit(tmp_path):
@@ -560,6 +564,55 @@ def test_run_is_the_sync_wrapper_of_arun(tmp_path):
     stub_run_one(h, calls)
     out = h.runner.run(["X1"], [Arm.gated], [Operator.drop], 1)
     assert calls == [("X1", Arm.gated, Operator.drop, 0, "main")]
+    assert len(out) == 1
+
+
+# ---- afork / fork ---------------------------------------------------------------------------
+
+
+def stub_fork_one(h: Harness, calls: list, fail_on: int | None = None):
+    async def fork_one(source_run_id, arm, operator, *, seed, repo_ref="main"):
+        calls.append((source_run_id, arm, operator, seed, repo_ref))
+        if fail_on == len(calls):
+            raise RuntimeError("stop here")
+        return SimpleNamespace(call=len(calls))
+
+    h.runner.fork_one = fork_one
+
+
+def test_afork_runs_pairs_then_repetitions_from_the_one_source_run(tmp_path):
+    """Catches the arms runner skipping a pair, pairing natural with an operator, or reusing
+    one seed across repetitions."""
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_fork_one(h, calls)
+    out = asyncio.run(
+        h.runner.afork("r-src", [Arm.natural, Arm.gated], [Operator.none, Operator.drop], 2, "HEAD")
+    )
+    assert calls == [
+        ("r-src", Arm.natural, Operator.none, 0, "HEAD"),
+        ("r-src", Arm.natural, Operator.none, 1, "HEAD"),
+        ("r-src", Arm.gated, Operator.drop, 0, "HEAD"),
+        ("r-src", Arm.gated, Operator.drop, 1, "HEAD"),
+    ]
+    assert [r.call for r in out] == [1, 2, 3, 4]
+
+
+def test_afork_stops_at_the_first_error(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_fork_one(h, calls, fail_on=1)
+    with pytest.raises(RuntimeError, match="stop here"):
+        asyncio.run(h.runner.afork("r-src", [Arm.mutated], [Operator.drop], 3))
+    assert len(calls) == 1
+
+
+def test_fork_is_the_sync_wrapper_of_afork(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_fork_one(h, calls)
+    out = h.runner.fork("r-src", [Arm.mutated], [Operator.hedge], 1)
+    assert calls == [("r-src", Arm.mutated, Operator.hedge, 0, "main")]
     assert len(out) == 1
 
 

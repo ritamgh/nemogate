@@ -8,7 +8,10 @@ This file is the contract between the modules below. Change it only together wit
 
 Week 1 scope (docs/SPEC.md, "Minimal runner for the Oct 12 kill gate"): one run = write the run
 config, launch the app with the gate's middleware, call `evaluate()`, write the run record with
-its reproducibility fields. Forks at boundaries, per-boundary images and statistics are week 2.
+its reproducibility fields. Week 2 (C4 record and fork): every run records the checkpoint and
+the sandbox image at each boundary it crosses (`boundaries.json`), and a fork continues a
+recorded natural run from just before its target boundary under another arm, so each arm x N
+replays only the part after the boundary. Statistics are a separate card.
 
 ## Layout
 
@@ -17,7 +20,9 @@ replay/
   app.py        App and AppTask Protocols, and pairs(arms, operators) (committed with this file)
   fsdiff.py     snapshot an image's repo, diff two snapshots
   record.py     run ids, run config, scoped ledger, reproducibility fields, run folder files
-  runner.py     Runner (one run, many runs) and run(), the cross-owner function
+  boundaries.py BoundaryRecorder middleware, boundaries.json / fork.json formats, fork point,
+                checkpoint database copy
+  runner.py     Runner (one run, many runs, forks) and run(), the cross-owner function
   sandbox.py    ShieldedContreeSandbox(session, cwd=None): ContreeSandbox whose `aexecute` survives
                 its caller being cancelled (deepagents' grep/glob `wait_for`), so the session is
                 never left executing, and which runs every command from `cwd`
@@ -74,6 +79,43 @@ def write_json(path: Path, model: BaseModel | list[BaseModel]) -> None
     # pretty JSON (indent 2, trailing newline) of model_dump(mode="json"), parents created
 ```
 
+## boundaries.py
+
+```python
+class Crossing(BaseModel):   # STRICT; one `task` call: its delegation and its return
+    tool_call_id: str
+    delegation: BoundaryId   # delegation:<sender>-><subagent>
+    returned: BoundaryId     # return:<subagent>-><sender>
+    pre_checkpoint: str      # root checkpoint of the step that runs the call: the fork point
+    pre_image: str           # session.uuid when the delegation crossed (before the call ran)
+    post_checkpoint: str | None  # this run's root checkpoint right after that step
+    post_image: str | None       # session.uuid when the reply crossed; None if it never did
+class Recording(BaseModel):  # STRICT; run_dir/boundaries.json
+    base_image: str          # the image the app's run started from (a fork keeps its source's)
+    thread_id: str           # the checkpoint thread (a fork keeps its source's)
+    crossings: tuple[Crossing, ...]   # in delegation order
+class ForkOrigin(BaseModel): # STRICT; run_dir/fork.json of a fork
+    source_run_id: str
+    crossing: Crossing       # the source crossing the fork resumed before
+
+class BoundaryRecorder(AgentMiddleware):
+    def __init__(self, session, target_boundary: str)
+    # wrap_tool_call and awrap_tool_call. Acts only on `task` calls whose subagent_type is an
+    # agent name ([A-Za-z0-9_-]+), as the gate does; every other call passes straight through.
+    # Before the call: pre_checkpoint = runtime.config["configurable"]["checkpoint_map"][""]
+    # (checkpoint_id is None inside a tool call, docs/FACTS.md §5) and pre_image = session.uuid.
+    # After it returns: post_image = session.uuid. Sender = metadata lc_agent_name, else the
+    # sender of target_boundary (X in delegation:X->Y and return:Y->X), as the gate names it.
+    def crossings(self, children: Mapping[str, str]) -> tuple[Crossing, ...]
+    # children: root checkpoint id -> id of this run's next checkpoint (post_checkpoint).
+def fork_point(recording, boundary) -> Crossing | None
+    # The FIRST crossing whose delegation or return is `boundary` (so every crossing of the
+    # boundary lies after the fork). A return forks before its delegation: no root checkpoint
+    # lies between the subagent finishing and its reply, so the call runs again.
+def copy_checkpoints(src: Path, dst: Path) -> None
+    # sqlite3 backup API (rows still in the -wal file included); FileNotFoundError if no src.
+```
+
 ## runner.py
 
 ```python
@@ -86,35 +128,45 @@ class Runner:
                  allow_dirty: bool = False, repo_dir: Path = ROOT)
     async def run_one(self, task: AppTask, arm: Arm, operator: Operator, *, seed: int,
                       repo_ref: str = "main") -> RunRecord
+    async def fork_one(self, source_run_id: str, arm: Arm, operator: Operator, *, seed: int,
+                       repo_ref: str = "main") -> RunRecord
     async def arun(self, task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]
     def run(self, task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]  # asyncio.run
+    async def afork(self, source_run_id, arms, operators, n, repo_ref="main") -> list[RunRecord]
+    def fork(self, source_run_id, arms, operators, n, repo_ref="main") -> list[RunRecord]
 
+def default_runner() -> Runner    # the Runner run() uses (see Defaults)
 def run(task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]
-    # schemas.contracts.RunFn. Builds the default Runner (see Defaults) and calls .run.
+    # schemas.contracts.RunFn. default_runner().run(...). Full runs only; it does not fork.
 ```
 
 `run_one`, in order (each step's output goes into `runs_dir/<run_id>/`):
 
-1. `repo_sha = record.require_checkout_at(repo_ref, ...)`; `run_id = new_run_id()`;
+1. `repo_sha = record.require_checkout_at(repo_ref, ...)`; the five reproducibility fields
+   (`model_ids`, `safe_config_hash`, `ledger_hash = ledger_hash_fn(self.ledger)` called once,
+   `repo_sha`, `lockfile_hash`) are computed here, before any work; `run_id = new_run_id()`;
    `run_dir = runs_dir / run_id`.
 2. The FULL ledger (`record.write_ledger(self.ledger, ...)`) is written to `run_dir/ledger.yaml`
    and `RunConfig.ledger_path` points at it: the gate loads that file and pins
-   `run_config.target_constraint` itself. `ledger_hash = ledger_hash_fn(self.ledger)`, so the
-   hash of the file the gate loads is the hash the record carries. The oracle gets
-   `scoped_ledger(self.ledger, task.constraint)` (step 9). Run config written to
-   `run_dir/run_config.json`.
+   `run_config.target_constraint` itself, so the hash of the file the gate loads is the hash the
+   record carries. The oracle gets `scoped_ledger(self.ledger, task.constraint)` (step 9). Run
+   config written to `run_dir/run_config.json`.
 3. `client = client_factory()`; `base = await app.base_image(client)`;
    `session = (await client.images.use(UUID(base))).session()`; `backend = backend_factory(session)`.
-4. `mw = make_middleware(run_config)`; graph = `app.build(backend, middleware=mw,
-   subagent_middleware=mw, checkpointer=saver)` with `saver` an `AsyncSqliteSaver` on
-   `run_dir/checkpoints.sqlite` (closed after the run). The SAME list goes to both slots: the
-   gate tells planner from subagents by `lc_agent_name` (refapp/README.md, "Paths and agent
-   names"). `make_middleware(run_config)`, the graph build and the invoke all happen inside
+4. `mw = [*make_middleware(run_config), BoundaryRecorder(session, run_config.target_boundary)]`;
+   graph = `app.build(backend, middleware=mw, subagent_middleware=mw, checkpointer=saver)` with
+   `saver` an `AsyncSqliteSaver` on `run_dir/checkpoints.sqlite` (closed after the run). The SAME
+   list goes to both slots: the gate tells planner from subagents by `lc_agent_name`
+   (refapp/README.md, "Paths and agent names"); the recorder acts only on `task` calls.
+   `make_middleware(run_config)`, the graph build and the invoke all happen inside
    `common.spend.run_scope(run_id)`, so a helper-model call made while setting up the gate is
    charged to the run.
 5. `await graph.ainvoke({"messages": [{"role": "user", "content": task.user_message}]},
    config={"configurable": {"thread_id": run_id}, "recursion_limit": recursion_limit})`.
    `checkpoint_id = (await graph.aget_state(same config)).config["configurable"]["checkpoint_id"]`.
+   If the recorder saw a crossing, `aget_state_history(same config)` gives each root
+   checkpoint's newest child (the post checkpoints). `Recording(base_image=base,
+   thread_id=run_id, crossings)` -> `run_dir/boundaries.json`.
 6. `final = str(session.uuid)`; `fs_diff = diff(await snapshot(client, base, app.repo_root),
    await snapshot(client, final, app.repo_root))` -> `run_dir/fs_diff.json`.
 7. `task_success, tail = await app.task_success(session, task)`; a failing tail goes to
@@ -129,14 +181,49 @@ def run(task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]
 9. `violations = evaluate(scoped, trace, fs_diff)`; `RunRecord.violations` = the unique
    constraint ids in first-seen order. Full list -> `run_dir/violations.json`.
 10. `tokens, cost = common.spend.run_totals(run_id)`; every Role present (0 if unused).
-11. `RunRecord(... contree_image=final, checkpoint_id=..., model_ids=record.model_ids(config),
-    safe_config_hash=config.safe_config.hash, ledger_hash, repo_sha, lockfile_hash)` ->
+11. `RunRecord(... contree_image=final, checkpoint_id=..., <the five fields from step 1>)` ->
     `run_dir/record.json`; return it.
 
 If steps 3-5 raise (base image, session, build or invoke), write the traceback to `run_dir/error.txt` and re-raise: a
-crashed run has no record. `arun` runs sequentially (no concurrency in week 1), tasks in the
-order of `task_ids` (KeyError on an unknown id), then pairs, then `n` repetitions with
-`seed = <repetition index>`; it stops at the first exception.
+crashed run has no record (and no `boundaries.json`). `arun` runs sequentially (no concurrency
+in week 1), tasks in the order of `task_ids` (KeyError on an unknown id), then pairs, then `n`
+repetitions with `seed = <repetition index>`; it stops at the first exception.
+
+`fork_one(source_run_id, arm, operator, *, seed, repo_ref)`: a new run (new run id and folder)
+that continues the recorded run `runs_dir/<source_run_id>/` from just before its first crossing
+of its target boundary. It reads only that folder, so it works from a new process.
+
+1. Refused with ValueError before any client, folder or graph exists if: the checkout is not
+   `repo_ref` (as in run_one); the source's `record.json` says another arm than `natural` (the
+   gate acts in every other arm, so the part before the boundary would differ from what the
+   app does on its own); any of the five reproducibility fields computed now differs from the
+   source record's (the fork would not be `is_comparable` with it; the message names the
+   fields); `fork_point(<source boundaries.json>, source.boundary)` is None. A missing
+   `record.json` or `boundaries.json` raises FileNotFoundError naming it. The task is
+   `app.tasks()[source.task_id]` (KeyError if gone).
+2. As run_one steps 2-11, except: `copy_checkpoints(source/checkpoints.sqlite,
+   run_dir/checkpoints.sqlite)` (the fork writes into its own copy; the source folder is never
+   written) and `run_dir/fork.json` (ForkOrigin) are written after the run config; the session
+   starts from `crossing.pre_image`; the invoke is `await graph.ainvoke(None, config)` with
+   config `{"configurable": {"thread_id": <source thread>, "checkpoint_id":
+   crossing.pre_checkpoint}, "recursion_limit": ...}`, preceded by a check that this checkpoint
+   is the step that runs `crossing.tool_call_id` and nothing else (`next == ("tools",)`, the
+   last message's tool call ids == [that id]). Several tool calls in one model turn run in one
+   step from one checkpoint and resuming re-runs them all, so that is refused with a
+   ValueError naming the count and ids (in `error.txt`, no record). The final checkpoint is
+   `aget_state` of the source thread (latest = the fork's). `boundaries.json` keeps the
+   source's `base_image` and `thread_id`; resuming saves a `source: "fork"` checkpoint (a copy
+   of the fork point) and the step runs from it, so the fork's own crossing has that as its
+   `pre_checkpoint` (docs/FACTS.md §5).
+3. Scope: the trace holds only what happens after the fork point (the gate runs only there);
+   `fs_diff` is from the source's `base_image` to the fork's final image, the run's whole
+   effect, as for a full run. The fork's gate starts fresh: approvals given before the fork
+   point are not known to it.
+
+`afork(source_run_id, arms, operators, n, repo_ref)` mirrors `arun` for one source run: pairs,
+then `n` repetitions with `seed = <repetition index>`, sequential, stops at the first exception.
+`fork` is its `asyncio.run` wrapper. Use `default_runner().fork(...)` for forks with the
+defaults (live, after `python -m replay.budget`).
 
 ## budget.py
 
@@ -177,7 +264,7 @@ main(): `python -m replay.budget --bucket kill_gate --arms natural mutated --ope
 
 ## Defaults
 
-`replay.runner.run()` (and the CLI) builds: `app = refapp.app.APP` (the one place
+`replay.runner.default_runner()` (used by `run()` and the CLI) builds: `app = refapp.app.APP` (the one place
 replay names the reference app), `evaluate = oracle.evaluate`, `make_middleware =
 gate.make_middleware`, `ledger = load_ledger_yaml(ROOT/"nemogate.yaml")`. All imported inside
 the function, so replay imports and tests work before B's packages exist; a missing one raises
