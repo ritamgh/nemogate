@@ -186,3 +186,39 @@ def test_main_checkout_root_is_the_work_tree_when_the_git_dir_is_elsewhere(tmp_p
     _forget(monkeypatch, "FROM_GIT_DIR_PARENT", "FROM_PROJECT")
     require_env("FROM_PROJECT")
     assert "FROM_GIT_DIR_PARENT" not in os.environ
+
+
+# ---- compaction_from_env --------------------------------------------------------------------
+
+
+def test_compaction_is_off_when_the_token_variable_is_unset():
+    # Breaks if an unset knob turns compaction on (default off: no behaviour change).
+    assert common.env.compaction_from_env({}) is None
+
+
+def test_compaction_reads_tokens_and_keep():
+    # Breaks if either number is read from the wrong variable or left a string.
+    environ = {"NEMOGATE_COMPACT_TOKENS": "9000", "NEMOGATE_COMPACT_KEEP": "2"}
+    assert common.env.compaction_from_env(environ) == (9000, 2)
+
+
+def test_compaction_keep_defaults_to_the_deep_agents_default_of_six():
+    # Breaks if a missing keep is an error or any value other than the library default.
+    assert common.env.compaction_from_env({"NEMOGATE_COMPACT_TOKENS": "9000"}) == (9000, 6)
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {"NEMOGATE_COMPACT_KEEP": "2"},
+        {"NEMOGATE_COMPACT_TOKENS": "lots"},
+        {"NEMOGATE_COMPACT_TOKENS": "0"},
+        {"NEMOGATE_COMPACT_TOKENS": "9000", "NEMOGATE_COMPACT_KEEP": "-1"},
+        {"NEMOGATE_COMPACT_TOKENS": "9000", "NEMOGATE_COMPACT_KEEP": "two"},
+    ],
+)
+def test_compaction_refuses_a_half_set_or_malformed_knob(environ):
+    # Breaks if a typo silently runs an ordinary natural run that is then pooled as a compaction
+    # run (or the reverse).
+    with pytest.raises(ValueError, match="NEMOGATE_COMPACT"):
+        common.env.compaction_from_env(environ)

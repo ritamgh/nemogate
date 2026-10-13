@@ -6,6 +6,7 @@ This is the only place that reads `.env` (AGENTS.md rule 2). Values are never pr
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -93,3 +94,37 @@ def require_env(*names: str) -> None:
 def is_live() -> bool:
     """True only when NEMOGATE_LIVE is exactly "1": the opt-in for real, paid model calls."""
     return os.environ.get("NEMOGATE_LIVE") == "1"
+
+
+COMPACT_TOKENS_ENV = "NEMOGATE_COMPACT_TOKENS"
+COMPACT_KEEP_ENV = "NEMOGATE_COMPACT_KEEP"
+DEFAULT_COMPACT_KEEP = 6  # Deep Agents' own default for how many recent messages survive
+
+
+def compaction_from_env(environ: Mapping[str, str] | None = None) -> tuple[int, int] | None:
+    """The planner-compaction knob as `(trigger_tokens, keep_messages)`, or None when it is off.
+
+    Off unless NEMOGATE_COMPACT_TOKENS is set. NEMOGATE_COMPACT_KEEP defaults to 6. A keep without
+    a trigger, or a value that is not a positive integer, is a ValueError naming the variable, so
+    a typo cannot turn a compaction run into an ordinary natural run unnoticed.
+    """
+    environ = os.environ if environ is None else environ
+
+    def read(name: str) -> int | None:
+        raw = environ.get(name, "").strip()
+        if not raw:
+            return None
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value < 1:
+            raise ValueError(f"{name} must be a positive integer, got {raw!r}")
+        return value
+
+    tokens, keep = read(COMPACT_TOKENS_ENV), read(COMPACT_KEEP_ENV)
+    if tokens is None:
+        if keep is not None:
+            raise ValueError(f"{COMPACT_KEEP_ENV} is set but {COMPACT_TOKENS_ENV} is not")
+        return None
+    return tokens, DEFAULT_COMPACT_KEEP if keep is None else keep

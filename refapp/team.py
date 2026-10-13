@@ -17,6 +17,7 @@ from deepagents import (
     register_harness_profile,
 )
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.summarization import SummarizationMiddleware
 from deepagents.profiles.harness.harness_profiles import (
     _HARNESS_PROFILES,
     _ensure_harness_profiles_loaded,
@@ -92,8 +93,14 @@ def build_team(
     checkpointer: Any = None,
     shell_repo: str = REPO,
     test_cmd: str = DEFAULT_TEST_CMD,
+    compaction: tuple[int, int] | None = None,
 ):
-    """Build the team as a compiled Deep Agents graph (the planner is the entry point)."""
+    """Build the team as a compiled Deep Agents graph (the planner is the entry point).
+
+    `compaction=(trigger_tokens, keep_messages)` replaces the planner's default context
+    summarization (which never fires in these short runs) with one that does, so the planner can
+    lose a rule from its own context. The coder and reviewer keep the default. None = unchanged.
+    """
     unknown = set(models or {}) - set(AGENTS)
     if unknown:
         raise ValueError(f"unknown agents in models: {sorted(unknown)}; expected {AGENTS}")
@@ -123,12 +130,24 @@ def build_team(
             "middleware": [fs(READ_TOOLS), *subagent_middleware],
         },
     ]
+    planner_extra = []
+    if compaction is not None:
+        trigger_tokens, keep_messages = compaction
+        # Same name as the default slot, so it replaces the default in place (FACTS §7).
+        planner_extra.append(
+            SummarizationMiddleware(
+                chosen["planner"],
+                backend=backend,
+                trigger=("tokens", trigger_tokens),
+                keep=("messages", keep_messages),
+            )
+        )
     with _general_purpose_disabled(chosen["planner"]):
         return create_deep_agent(
             model=chosen["planner"],
             system_prompt=PLANNER_PROMPT,
             subagents=subagents,
-            middleware=[fs(READ_TOOLS), *middleware],
+            middleware=[fs(READ_TOOLS), *planner_extra, *middleware],
             backend=backend,
             checkpointer=checkpointer,
         )

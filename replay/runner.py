@@ -7,6 +7,9 @@ The contract is in replay/README.md, section "runner.py". Live use is
 import argparse
 import asyncio
 import importlib
+import json
+import os
+import subprocess
 import sys
 import traceback
 from collections.abc import Callable, Sequence
@@ -16,7 +19,7 @@ from typing import Any
 from uuid import UUID
 
 from common import env
-from common.env import is_live
+from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
 from replay import record
 from replay.app import App, AppTask, pairs
@@ -28,6 +31,7 @@ from replay.boundaries import (
     copy_checkpoints,
     fork_point,
 )
+from replay.carriage import classify, compaction_evidence, write_carriage
 from replay.fsdiff import diff, snapshot
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
@@ -136,6 +140,14 @@ class Runner:
                 f"cannot fork {source_run_id}: {', '.join(differ)} differ from the recorded run, "
                 "so the fork would not be comparable with it"
             )
+        # The compaction knob shapes the planner before and after the fork point alike, and only
+        # carriage.json records it (it is not a reproducibility field), so it must match too.
+        carriage = json.loads((source_dir / "carriage.json").read_text(encoding="utf-8"))
+        if carriage.get("knobs") != _knobs():
+            raise ValueError(
+                f"cannot fork {source_run_id}: the compaction knobs {_knobs()} differ from the "
+                f"recorded run's {carriage.get('knobs')}"
+            )
         recording = Recording.model_validate_json(
             (source_dir / BOUNDARIES).read_text(encoding="utf-8")
         )
@@ -198,7 +210,7 @@ class Runner:
                 base, thread_id = fork.recording.base_image, fork.recording.thread_id
                 start = fork.origin.crossing.pre_image
             session = (await client.images.use(UUID(start))).session()
-            checkpoint_id, crossings = await self._invoke(
+            checkpoint_id, crossings, compaction = await self._invoke(
                 session, task, run_config, run_dir, thread_id, fork
             )
         except Exception:
@@ -224,6 +236,19 @@ class Runner:
 
         violations = self.evaluate(scoped, trace, fs_diff)
         record.write_json(run_dir / "violations.json", violations)
+
+        # Where the rule was lost, if it was. The compaction knob is recorded here because
+        # nothing else hashes it (RunRecord and its reproducibility fields are frozen).
+        carriage = classify(
+            check=scoped.get(task.constraint).check,
+            user_message=task.user_message,
+            trace=trace,
+            run_config=run_config,
+            violations=violations,
+            compaction=compaction,
+        ).to_dict()
+        carriage["knobs"] = _knobs()
+        write_carriage(run_dir / "carriage.json", carriage)
 
         tokens, cost = run_totals(run_id)
         run_record = RunRecord(
@@ -282,9 +307,10 @@ class Runner:
         run_dir: Path,
         thread_id: str,
         fork: "_Fork | None",
-    ) -> tuple[str, tuple[Crossing, ...]]:
+    ) -> tuple[str, tuple[Crossing, ...], dict[str, Any] | None]:
         """Build the graph on `session` and run the task, from the start or (a fork) from the
-        fork point; return the final checkpoint id and the boundary crossings."""
+        fork point; return the final checkpoint id, the boundary crossings and the planner's
+        compaction evidence (None if it never compacted)."""
         # Import path, constructor and close: langgraph/checkpoint/sqlite/aio.py:38 (the class),
         # :132-146 (`from_conn_string` is an async context manager that opens an aiosqlite
         # connection and closes it on exit); FACTS §5 ("SQLite checkpointer import path").
@@ -328,7 +354,11 @@ class Runner:
                     await graph.ainvoke(None, config=start)
                 state = await graph.aget_state(config)
                 children = await _children(graph, config) if recorder.crossings({}) else {}
-        return state.config["configurable"]["checkpoint_id"], recorder.crossings(children)
+                compaction = await compaction_evidence(
+                    graph, config, state, run_config.target_boundary
+                )
+        checkpoint_id = state.config["configurable"]["checkpoint_id"]
+        return checkpoint_id, recorder.crossings(children), compaction
 
     async def arun(
         self,
@@ -390,6 +420,11 @@ class Runner:
         return asyncio.run(self.afork(source_run_id, arms, operators, n, repo_ref))
 
 
+def _knobs() -> dict[str, str | None]:
+    """The compaction knobs as set now (null = unset); carriage.json records them."""
+    return {name: os.environ.get(name) for name in (COMPACT_TOKENS_ENV, COMPACT_KEEP_ENV)}
+
+
 @dataclass(frozen=True)
 class _Fork:
     source_dir: Path
@@ -442,8 +477,30 @@ def _import(package: str) -> Any:
         raise RuntimeError(f"cannot run: the `{package}` package is not available ({exc})") from exc
 
 
-def default_runner() -> Runner:
-    """The Runner `run()` uses (README, "Defaults"); also the way to fork with the defaults."""
+def require_ignored_runs_dir(runs_dir: Path, repo_dir: Path = ROOT) -> None:
+    """ValueError unless `runs_dir` is outside the checkout or git ignores what a run writes there.
+
+    Run folders inside the checkout that git sees as untracked make the checkout dirty, so the
+    second run would fail `require_checkout_at` after the first had spent credit.
+    """
+    path, root = runs_dir.resolve(), repo_dir.resolve()
+    if not path.is_relative_to(root):
+        return
+    probe = (path / "run-folder-probe").relative_to(root)
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", "--", str(probe)], cwd=root, capture_output=True, check=False
+    )
+    if ignored.returncode != 0:
+        raise ValueError(
+            f"--runs-dir {runs_dir} is inside the checkout and not git-ignored: its run folders "
+            "would make the checkout dirty and fail the next run. Use a directory under runs/ "
+            "or outside the checkout."
+        )
+
+
+def default_runner(runs_dir: Path | None = None) -> Runner:
+    """The Runner `run()` uses (README, "Defaults"); `runs_dir` None means `RUNS_DIR`. Also the
+    way to fork with the defaults."""
     evaluate = _import("oracle").evaluate
     make_middleware = _import("gate").make_middleware
     if not LEDGER_PATH.is_file():
@@ -457,7 +514,7 @@ def default_runner() -> Runner:
         make_middleware=make_middleware,
         ledger=ledger,
         config=load_config(CONFIG_PATH),
-        runs_dir=RUNS_DIR,
+        runs_dir=RUNS_DIR if runs_dir is None else runs_dir,
     )
 
 
@@ -468,7 +525,7 @@ def run(
     n: int,
     repo_ref: str = "main",
 ) -> list[RunRecord]:
-    """`schemas.contracts.RunFn`: the default Runner (README, "Defaults") over these runs."""
+    """`schemas.contracts.RunFn`: the default Runner (README "Defaults") over these runs."""
     return default_runner().run(task_ids, arms, operators, n, repo_ref)
 
 
@@ -481,9 +538,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--n", required=True, type=int, help="repetitions per task and pair")
     parser.add_argument("--repo-ref", default="main")
+    parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        help="write run folders here instead of runs/ (keep compaction runs apart)",
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the run count and go")
     args = parser.parse_args(argv)
 
+    if args.runs_dir is not None:
+        try:
+            require_ignored_runs_dir(args.runs_dir)
+        except ValueError as exc:
+            print(f"refusing to run: {exc}", file=sys.stderr)
+            return 2
     if not is_live():
         print(
             "refusing to run: set NEMOGATE_LIVE=1 (real model calls spend credit)", file=sys.stderr
@@ -498,7 +566,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    for r in run(args.tasks, args.arms, args.operators, args.n, args.repo_ref):
+    if args.runs_dir is None:
+        records = run(args.tasks, args.arms, args.operators, args.n, args.repo_ref)
+    else:
+        records = default_runner(args.runs_dir).run(
+            args.tasks, args.arms, args.operators, args.n, args.repo_ref
+        )
+    for r in records:
         print(
             f"{r.run_id} task={r.task_id} arm={r.arm.value} operator={r.operator.value} "
             f"violations={','.join(r.violations) or '-'} task_success={r.task_success} "

@@ -21,7 +21,7 @@ from deepagents.backends.protocol import WriteResult
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from common.env import REPO_ROOT
+from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
 from common.llm import get_model
 from gate import build_middleware
 from oracle import evaluate
@@ -457,6 +457,38 @@ def test_fork_one_refuses_a_source_run_of_another_arm(tmp_path):
     world = World(tmp_path)
     source = world.record(recorded_app(), Arm.mutated, Operator.drop)
     with pytest.raises(ValueError, match="natural"):
+        world.fork(fork_app(), source)
+    assert world.run_ids() == [source.run_id]
+
+
+def test_a_natural_forks_carriage_sees_every_delegation_the_source_made(tmp_path, monkeypatch):
+    """Catches carriage misreporting on a fork: its trace starts at the fork point, which lies
+    before the first crossing of the target boundary, so it must hold the same delegations and
+    give the same label as the recorded run (same planner text, coder breaks the rule)."""
+    monkeypatch.delenv(COMPACT_TOKENS_ENV, raising=False)
+    monkeypatch.delenv(COMPACT_KEEP_ENV, raising=False)
+    world = World(tmp_path)
+    source = world.record(recorded_app())
+    fork = world.fork(fork_app(), source, Arm.natural, Operator.none)
+
+    def carriage(rec):
+        return json.loads((world.runs_dir / rec.run_id / "carriage.json").read_text())
+
+    was, now = carriage(source), carriage(fork)
+    assert (was["label"], now["label"]) == ("DISOBEYED", "DISOBEYED")
+    assert now["evidence"]["delegations"] == was["evidence"]["delegations"] == [DESCRIPTION]
+    assert now["knobs"] == was["knobs"] == {COMPACT_TOKENS_ENV: None, COMPACT_KEEP_ENV: None}
+
+
+def test_fork_one_refuses_when_the_compaction_knobs_differ(tmp_path, monkeypatch):
+    """Catches a fork that mixes compaction settings: the planner before the fork point ran
+    under the recorded knobs, and nothing but carriage.json records them."""
+    monkeypatch.delenv(COMPACT_TOKENS_ENV, raising=False)
+    monkeypatch.delenv(COMPACT_KEEP_ENV, raising=False)
+    world = World(tmp_path)
+    source = world.record(recorded_app())
+    monkeypatch.setenv(COMPACT_TOKENS_ENV, "4000")
+    with pytest.raises(ValueError, match="compaction knobs"):
         world.fork(fork_app(), source)
     assert world.run_ids() == [source.run_id]
 
