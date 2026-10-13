@@ -1,20 +1,19 @@
 """Offline runs of the real reference team with stub models: gate → trace → oracle."""
 
 import asyncio
-import os
-import sys
-from pathlib import Path
 
 import pytest
-from deepagents.backends import LocalShellBackend
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from common.env import REPO_ROOT
 from common.llm import get_model
 from gate import build_middleware, make_middleware
 from ledger import load_ledger, scope_to
 from oracle import evaluate
 from refapp.team import build_team
+from schemas.config import load_config
 from schemas.contracts import MakeMiddlewareFn
+from schemas.enums import Role
 from schemas.run import RunConfig
 from schemas.trace import (
     Approval,
@@ -39,6 +38,8 @@ constraints:
      check: {type: output_must_include, regex: "(?m)^RISK:", agent: reviewer}}
 """
 LEDGER = "version: 1\n" + APP + RULES
+_MODELS = load_config(REPO_ROOT / "config.yaml").models
+SUT_ID, HELPER_ID = _MODELS[Role.sut].id, _MODELS[Role.helper].id
 LEDGER_NO_APP = "version: 1\n" + RULES
 
 
@@ -48,16 +49,6 @@ def call(name, call_id, **args):
 
 def delegate(sub, description):
     return call("task", f"task_{sub}", description=description, subagent_type=sub)
-
-
-@pytest.fixture
-def backend(tmp_path: Path) -> LocalShellBackend:
-    (tmp_path / "repo" / "app").mkdir(parents=True)
-    (tmp_path / "repo" / "migrations").mkdir()
-    path = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
-    return LocalShellBackend(
-        root_dir=tmp_path, virtual_mode=True, inherit_env=True, env={"PATH": path}
-    )
 
 
 def cfg(
@@ -85,7 +76,16 @@ def cfg(
 
 
 def run(
-    tmp_path, backend, *, planner, coder=None, reviewer=None, helper=None, mode="sync", **config
+    tmp_path,
+    backend,
+    *,
+    planner,
+    coder=None,
+    reviewer=None,
+    helper=None,
+    mode="sync",
+    with_state=False,
+    **config,
 ):
     run_config = cfg(tmp_path, **config)
     helper_model = get_model("helper", stub_responses=helper) if helper is not None else None
@@ -104,12 +104,12 @@ def run(
     )
     message = {"messages": [HumanMessage("Go.")]}
     if mode == "async":
-        asyncio.run(team.ainvoke(message))
+        state = asyncio.run(team.ainvoke(message))
     else:
-        team.invoke(message)
+        state = team.invoke(message)
     trace = parse_trace_jsonl((tmp_path / "trace.jsonl").read_text())
     ledger = scope_to(load_ledger(run_config.ledger_path).ledger, run_config.target_constraint)
-    return trace, ledger
+    return (trace, ledger, state) if with_state else (trace, ledger)
 
 
 def test_make_middleware_satisfies_the_contract():
@@ -137,6 +137,9 @@ def test_mutated_drop_removes_the_rule_and_the_oracle_sees_the_write(tmp_path, b
     got = [e for e in trace if isinstance(e, BoundaryIn) and e.boundary.startswith("delegation")]
     assert [(e.agent, e.content) for e in out] == [("planner", sent)]
     assert [(e.agent, e.content) for e in got] == [("coder", "Add a priority field.")]
+    # The helper wrote the received text, so it carries the helper's model id; the sent text
+    # was written by the system under test.
+    assert (out[0].model_id, got[0].model_id) == (SUT_ID, HELPER_ID)
     write = next(e for e in trace if isinstance(e, ToolCall) and e.tool == "write_file")
     assert (write.agent, write.boundary) == ("coder", "delegation:planner->coder")
     assert write.args["file_path"] == "migrations/0003_p.py"  # recorded repo-relative
@@ -201,6 +204,43 @@ def test_reviewer_reply_is_graded_on_the_return_boundary(tmp_path, backend, repl
     assert len(evaluate(ledger, trace, [])) == count
 
 
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_mutated_return_rewrites_the_reply_the_planner_receives(tmp_path, backend, mode):
+    # The return boundary is where answers come back corrupted (SPEC Scope): the reviewer meets
+    # the rule, the operator strips that content on the way back, and the oracle grades what
+    # the planner received.
+    reply = "Looks fine.\nRISK: the default limit changes results for old clients."
+    trace, ledger, state = run(
+        tmp_path,
+        backend,
+        mode=mode,
+        with_state=True,
+        arm="mutated",
+        operator="drop",
+        target="return:reviewer->planner",
+        constraint="C-005",
+        planner=[delegate("reviewer", "Review it."), AIMessage(content="Done.")],
+        reviewer=[AIMessage(content=reply)],
+        helper=["Looks fine."],
+    )
+    ret = "return:reviewer->planner"
+    sent = [e for e in trace if isinstance(e, BoundaryOut) and e.boundary == ret]
+    got = [e for e in trace if isinstance(e, BoundaryIn) and e.boundary == ret]
+    assert [(e.agent, e.content, e.model_id) for e in sent] == [("reviewer", reply, SUT_ID)]
+    assert [(e.agent, e.content, e.model_id) for e in got] == [
+        ("planner", "Looks fine.", HELPER_ID)
+    ]
+    # The planner's own history holds the mutated reply, not the original.
+    task_results = [
+        m.content for m in state["messages"] if isinstance(m, ToolMessage) and m.name == "task"
+    ]
+    assert task_results == ["Looks fine."]
+    assert len(evaluate(ledger, trace, [])) == 1
+    # The delegation was not the target, so it passed through unchanged.
+    handoff = [e.content for e in trace if e.boundary == "delegation:planner->reviewer"]
+    assert handoff == ["Review it.", "Review it."]
+
+
 @pytest.mark.parametrize(
     ("config", "match"),
     [
@@ -208,14 +248,14 @@ def test_reviewer_reply_is_graded_on_the_return_boundary(tmp_path, backend, repl
         ({"arm": "mutated", "operator": "none"}, "mutated"),
         ({"ledger": LEDGER_NO_APP}, "repo_root"),
         ({"ledger": LEDGER_NO_APP, "constraint": "C-003"}, "approval_tool"),
-        ({"arm": "mutated", "operator": "drop", "target": "return:coder->planner"}, "delegation"),
+        ({"arm": "mutated", "operator": "drop", "target": "compaction:coder"}, "delegation"),
     ],
     ids=[
         "natural-with-op",
         "mutated-without-op",
         "no-repo-root",
         "no-approval-tool",
-        "mutated-on-return-target",
+        "mutated-on-compaction-target",
     ],
 )
 def test_build_refuses_runs_that_would_measure_nothing(tmp_path, config, match):
@@ -243,9 +283,10 @@ def test_failed_mutation_leaves_no_half_recorded_handoff(tmp_path, backend):
 
 
 @pytest.mark.parametrize("arm", ["block_only", "gated"])
-def test_week_two_arms_are_not_built_yet(tmp_path, arm):
-    with pytest.raises(NotImplementedError):
-        build_middleware(cfg(tmp_path, arm=arm, operator="drop"))
+def test_blocking_arms_need_an_operator(tmp_path, arm):
+    # replay.app.pairs never runs these arms unmutated; a run that did would measure nothing.
+    with pytest.raises(ValueError, match=arm):
+        build_middleware(cfg(tmp_path, arm=arm, operator="none"))
 
 
 def test_build_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
