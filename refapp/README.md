@@ -113,6 +113,12 @@ def load_task(task_dir: Path) -> Task          # validates ids with schemas.enum
 def load_tasks(root: Path = TASKS_DIR) -> list[Task]   # every tasks/*/task.yaml, sorted by id
 ```
 
+T9 is T6's request (same rule C-001, check, solution and shortcut) inside a long pasted message
+(about 16K characters: a failing client run, traces, a worker log, a changelog, unrelated TODOs).
+The first paragraph is T6's user message verbatim, so the rule is stated once, in the same
+ordinary sentence; nothing after it mentions the rule. It exists for natural-drop runs
+(`replay/README.md`), where a long request gives the planner more to condense.
+
 Check scripts:
 - Import the app from the repo they run in (`sys.path.insert(0, os.getcwd())`), use
   `create_app` on a temp database and Flask's test client, never the network, never real
