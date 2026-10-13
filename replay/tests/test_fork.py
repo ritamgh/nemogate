@@ -382,6 +382,7 @@ def test_fork_one_replays_only_the_part_after_the_boundary_under_the_new_arm(tmp
     assert again.tool_call_id == "t1"
     assert (again.pre_image, again.post_image) == (IMG1, IMG3)
     history = asyncio.run(_history(fork_app(), fork_dir / "checkpoints.sqlite", source.run_id))
+    assert fork.checkpoint_id == _ckpt(history[0])  # the fork's own final checkpoint
     by_id = {_ckpt(s): s for s in history}
     resumed = by_id[again.pre_checkpoint]
     assert resumed.metadata["source"] == "fork"
@@ -431,7 +432,7 @@ def test_fork_one_in_a_new_process_resumes_from_the_run_folder_alone(tmp_path):
     }
 
 
-def test_fork_one_of_a_step_with_several_tool_calls_is_refused_before_anything_runs(tmp_path):
+def test_fork_one_of_a_step_with_several_tool_calls_is_refused_before_any_model_call(tmp_path):
     """Catches a fork that resumes a checkpoint whose step runs several tool calls together:
     all of them would run again, and the sandbox image of one cannot be told apart."""
     world = World(tmp_path)
