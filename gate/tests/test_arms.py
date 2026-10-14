@@ -3,6 +3,7 @@
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
+from gate.tests.stubs import picks
 from gate.tests.test_end_to_end import APP, RULES, call, delegate, run
 from oracle import evaluate
 from schemas.trace import BoundaryIn, GateBlock, ToolCall
@@ -32,7 +33,7 @@ def forbidden_write(tmp_path, backend, arm, mode="sync"):
             call("write_file", "w1", file_path="/repo/migrations/0003_p.py", content="x"),
             AIMessage(content="Could not write it."),
         ],
-        helper=[DROPPED],
+        helper=[picks(2)],
     )
 
 
@@ -92,7 +93,7 @@ def test_gated_blocks_a_delete_until_approval_then_allows_it(tmp_path, backend):
             call("delete", "d2", file_path="/repo/app/old.py"),
             AIMessage(content="Removed after approval."),
         ],
-        helper=["Clean up."],
+        helper=[picks(2)],
     )
     deletes = [e.blocked for e in trace if isinstance(e, ToolCall) and e.tool == "delete"]
     assert deletes == [True, False]
@@ -110,7 +111,7 @@ def test_gated_blocks_a_forbidden_tool(tmp_path, backend):
         operator="drop",
         planner=[delegate("coder", "Add an export."), AIMessage(content="Done.")],
         coder=[call("http_get", "h1", url="https://example.com"), AIMessage(content="Wrote it.")],
-        helper=["Add an export."],
+        helper=[picks()],
     )
     fetch = next(e for e in trace if isinstance(e, ToolCall) and e.tool == "http_get")
     assert fetch.blocked is True
@@ -129,7 +130,7 @@ def review(tmp_path, backend, arm, replies, planner_turns):
         operator="drop",
         planner=planner_turns,
         reviewer=replies,
-        helper=["Review it."] * 2,
+        helper=[picks()] * 2,
     )
 
 
@@ -180,7 +181,7 @@ def test_gated_stops_failing_closed_after_a_bounded_number_of_retries(tmp_path, 
         operator="drop",
         planner=[delegate("reviewer", "Review it.")] * 3 + [AIMessage(content="Done.")],
         reviewer=[AIMessage(content=good)] * 3,
-        helper=["Fine."] * 3,
+        helper=[picks(2)] * 3,
     )
     first, second, third = returned(trace)
     assert RISK_RULE in first and RISK_RULE in second
