@@ -143,6 +143,7 @@ def test_edge_is_pooled_mutated_rate_over_constraints_and_operators(rich):
     assert (
         "delegation:planner-&gt;coder: 15 of 30 mutated runs violated the rule "
         "(50%, 95% Wilson interval 33% to 67%), pooled over all operators and constraints. "
+        "Clustered: includes forked runs that share a source run, so this interval is too narrow. "
         "Constraints: C-001, C-002." in page
     )
 
@@ -406,3 +407,120 @@ def test_missing_results_file_is_a_clean_error(tmp_path, capsys):
     code = site.main(["--results", str(tmp_path / "nope.json"), "--out", str(tmp_path / "o.html")])
     assert code == 2
     assert "report.site:" in capsys.readouterr().err
+
+
+# --- review fixes ------------------------------------------------------------------------------
+
+
+def test_summary_names_the_recipient_only_on_a_delegation(rich):
+    # a return boundary may be graded on the sender's reply, so the recipient must not be blamed
+    cells = [
+        make_cell("mutated", "drop", 10, 5, 5),
+        make_cell("block_only", "drop", 10, 0, 4),
+        make_cell("gated", "drop", 10, 0, 9),
+    ]
+    rich["constraints"]["C-001"]["boundaries"]["return:coder->planner"]["cells"] = cells
+    page = site.render(rich)
+    assert (
+        "With the rule lost at the handoff <code>return:coder-&gt;planner</code>, the rule was "
+        "broken 50% of the time (5 of 10 runs). Blocking alone left task success at 40%. "
+        "NemoGate carried the rule across: task success 90%."
+    ) in page
+    assert "the planner broke it" not in page
+    assert "the coder broke it" in page  # the delegation sentence still names its recipient
+
+
+def node_rects(page: str) -> dict[str, tuple[float, float, float, float]]:
+    rects = {}
+    for x, y, w, h, name in re.findall(
+        r'<g class="node"><rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" '
+        r'rx="8"/><text [^>]*class="nodename">([^<]+)</text>',
+        page,
+    ):
+        rects[name] = (float(x), float(y), float(x) + float(w), float(y) + float(h))
+    return rects
+
+
+def edge_paths(page: str) -> dict[str, list[tuple[float, float]]]:
+    """boundary id -> sampled points of its drawn path (M, then L or Q)."""
+    out = {}
+    for bid, d in re.findall(
+        r'<title>([^:<]+:[^:<]+?): [^<]*</title><path d="([^"]+)" class="hit"/>', page
+    ):
+        nums = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", d)]
+        pts = [(nums[0], nums[1])]
+        if "Q" in d:
+            (x1, y1), (cx, cy), (x2, y2) = nums[0:2], nums[2:4], nums[4:6]
+            for i in range(1, 101):
+                t = i / 100
+                pts.append(
+                    (
+                        (1 - t) ** 2 * x1 + 2 * t * (1 - t) * cx + t * t * x2,
+                        (1 - t) ** 2 * y1 + 2 * t * (1 - t) * cy + t * t * y2,
+                    )
+                )
+        else:
+            pts.append((nums[2], nums[3]))
+        out[html.unescape(bid)] = pts
+    return out
+
+
+def test_same_layer_edge_is_a_real_arc_and_no_edge_crosses_a_node():
+    cell = [make_cell("mutated", "drop", 4, 1, 3)]
+    data = one_constraint(
+        {
+            "delegation:a->c": {"cells": cell, "comparisons": []},
+            "delegation:b->a": {"cells": cell, "comparisons": []},
+            "delegation:c->b": {"cells": cell, "comparisons": []},
+        }
+    )
+    page = site.render(data)
+    rects = node_rects(page)
+    assert set(rects) == {"a", "b", "c"}
+    assert rects["b"][0] == rects["c"][0]  # b and c share a column: the case that used to collapse
+    paths = edge_paths(page)
+    assert set(paths) == {"delegation:a->c", "delegation:b->a", "delegation:c->b"}
+    cb = re.search(
+        r'delegation:c-&gt;b: [^<]*</title><path d="M(-?[\d.]+) (-?[\d.]+)Q(-?[\d.]+) (-?[\d.]+) '
+        r'(-?[\d.]+) (-?[\d.]+)"',
+        page,
+    )
+    assert cb
+    x1, _, cx, _, x2, _ = (float(v) for v in cb.groups())
+    assert cx not in (x1, x2)  # not a vertical sliver that doubles back through the nodes
+    for bid, pts in paths.items():
+        for name, (left, top, right, bottom) in rects.items():
+            inside = [p for p in pts if left + 1 < p[0] < right - 1 and top + 1 < p[1] < bottom - 1]
+            assert not inside, (bid, name, inside[:2])
+
+
+def test_clustered_pooled_rate_is_flagged_in_tooltip_and_table(rich):
+    page = site.render(rich)
+    warning = (
+        "Clustered: includes forked runs that share a source run, so this interval is too narrow."
+    )
+    # the mutated drop cell of the first constraint is clustered, so the pooled edge is too
+    assert (
+        "(50%, 95% Wilson interval 33% to 67%), pooled over all operators and constraints. "
+        f"{warning} Constraints: C-001, C-002." in page
+    )
+    row = re.search(r'<tr><th scope="row"><code>delegation:planner-&gt;coder</code>.*?</tr>', page)
+    assert row
+    assert warning in row.group(0)
+    # the return boundary pools only an unclustered natural cell: no warning there
+    ret = re.search(r'<tr><th scope="row"><code>return:coder-&gt;planner</code>.*?</tr>', page)
+    assert ret
+    assert "Clustered:" not in ret.group(0)
+
+
+def test_unwritable_output_is_a_clean_error(tmp_path, capsys):
+    blocker = tmp_path / "a-file"
+    blocker.write_text("x", encoding="utf-8")
+    src = FIXTURES / "results_rich.json"
+    code = site.main(["--results", str(src), "--out", str(blocker / "sub" / "index.html")])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("report.site: ")
+    assert err.count("\n") == 1
+    assert site.main(["--results", str(src), "--out", "/dev/null/index.html"]) == 2
+    assert capsys.readouterr().err.startswith("report.site: ")

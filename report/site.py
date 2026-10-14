@@ -50,6 +50,10 @@ COMPACTION_RE = re.compile(r"^compaction:(.+)$")
 NODE_W, NODE_H = 140, 60
 COL_GAP, ROW_GAP = 130, 96
 MARGIN_X, MARGIN_Y = 28, 24
+CLUSTER_WARNING = (
+    "Clustered: includes forked runs that share a source run, so this interval is too narrow."
+)
+SIDE_ARC = 52  # how far a same-column edge bows out to the right
 
 
 def e(value: Any) -> str:
@@ -227,6 +231,7 @@ def edge_title(bid: str, info: dict[str, Any]) -> str:
         f"{bid}: {info['k']} of {info['n']} {info['basis']} runs violated the rule "
         f"({pct(info['rate'])}, 95% Wilson interval {pct_num(info['lo'])}% to "
         f"{pct_num(info['hi'])}%), pooled over all operators and constraints. "
+        f"{CLUSTER_WARNING + ' ' if info['clustered'] else ''}"
         f"Constraints: {owners}."
     )
 
@@ -255,7 +260,7 @@ def render_graph(boundaries: dict[str, dict[str, Any]], anchors: Anchors) -> str
             continue
         kind, a, b = p
         edges.append((bid, info, kind, a, b))
-    above_extent = below_extent = 0.0
+    above_extent = below_extent = side_extent = 0.0
     shapes = []
     for bid, info, kind, a, b in edges:
         (xa, ya), (xb, yb) = node_xy(a), node_xy(b)
@@ -275,10 +280,30 @@ def render_graph(boundaries: dict[str, dict[str, Any]], anchors: Anchors) -> str
                 )
             )
             continue
-        above = kind == "delegation" and lb >= la
-        pair = (frozenset((a, b)), "above" if above else "below")
+        above = kind == "delegation" and lb > la
+        side = la == lb
+        pair = (frozenset((a, b)), "side" if side else ("above" if above else "below"))
         stack = arc_count.get(pair, 0)
         arc_count[pair] = stack + 1
+        if side:
+            # two agents in one column: bow out to the right, into the gap, clear of both nodes
+            offset = SIDE_ARC + 30 * stack
+            x1 = x2 = xa + NODE_W
+            y1, y2 = ya + NODE_H / 2, yb + NODE_H / 2
+            cx, cy = x1 + 2 * offset, (y1 + y2) / 2
+            side_extent = max(side_extent, x1 + offset + 60)
+            shapes.append(
+                (
+                    bid,
+                    info,
+                    kind,
+                    f"M{x1:g} {y1:g}Q{cx:g} {cy:g} {x2:g} {y2:g}",
+                    x1 + offset,
+                    cy,
+                    (x1, y1, x2, y2),
+                )
+            )
+            continue
         height = 46 + 24 * abs(lb - la) + 34 * stack
         x1, x2 = xa + NODE_W / 2, xb + NODE_W / 2
         if above:
@@ -306,7 +331,9 @@ def render_graph(boundaries: dict[str, dict[str, Any]], anchors: Anchors) -> str
     top = MARGIN_Y + (above_extent + 24 if above_extent else 0)
     shift = top - MARGIN_Y
     bottom_extra = below_extent + 24 if below_extent else 0
-    width = MARGIN_X * 2 + (max_layer + 1) * NODE_W + max_layer * COL_GAP
+    width = max(
+        MARGIN_X * 2 + (max_layer + 1) * NODE_W + max_layer * COL_GAP, side_extent + MARGIN_X
+    )
     height = top + (max_row + 1) * NODE_H + max_row * ROW_GAP + MARGIN_Y + bottom_extra
 
     parts = [
@@ -406,6 +433,8 @@ def render_boundary_table(boundaries: dict[str, dict[str, Any]], anchors: Anchor
                 f"{pct(info['rate'])} ({pct_num(info['lo'])}&ndash;{pct_num(info['hi'])}%), "
                 f"{e(info['basis'])} runs"
             )
+            if info["clustered"]:
+                rate += f' <span class="warn">{e(CLUSTER_WARNING)}</span>'
         links = ", ".join(
             f'<a href="#{e(anchors.section(cid, bid))}">{e(cid)}</a>' for cid in info["constraints"]
         )
@@ -641,7 +670,9 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
     for bid in sorted(boundaries):
         cells = boundaries[bid].get("cells", [])
         parsed = parse_boundary(bid)
-        who = f"the {e(parsed[2])}" if parsed and parsed[2] else "the system"
+        # only a delegation's recipient is the one acting on the rule; a return may be graded on
+        # the sender's reply, so every other kind uses the passive form
+        recipient = parsed[2] if parsed and parsed[0] == "delegation" else None
         for op in sorted({c["operator"] for c in cells if c["arm"] == "mutated"}):
             mut = find_cell(cells, "mutated", op)
             blk = find_cell(cells, "block_only", op)
@@ -649,8 +680,9 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
             if not (mut and blk and gat):
                 continue
             phrase = OPERATOR_PHRASE.get(op, f"altered by {op}")
+            broke = f"the {e(recipient)} broke it" if recipient else "the rule was broken"
             out.append(
-                f"With the rule {e(phrase)} at the handoff <code>{e(bid)}</code>, {who} broke it "
+                f"With the rule {e(phrase)} at the handoff <code>{e(bid)}</code>, {broke} "
                 f"{pct(mut['cvr']['rate'])} of the time "
                 f"({e(mut['violations'])} of {e(mut['n'])} runs). "
                 f"Blocking alone left task success at {pct(blk['success']['rate'])}. "
@@ -756,11 +788,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         results = json.loads(args.results.read_text(encoding="utf-8"))
         page = render(results)
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(page, encoding="utf-8")
     except (OSError, ValueError) as exc:
         print(f"report.site: {exc}", file=sys.stderr)
         return 2
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(page, encoding="utf-8")
     print(f"wrote {args.out}")
     return 0
 
