@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from replay.carriage import Label
 from schemas.enums import Arm
 from schemas.ledger import Ledger, load_ledger_yaml
@@ -108,9 +110,7 @@ def _read_run(folder: Path) -> LoadedRun | None:
             if not isinstance(fork_source, str) or not fork_source.strip():
                 return None
         if (folder / "carriage.json").exists():
-            label = json.loads((folder / "carriage.json").read_bytes())["label"]
-            if not isinstance(label, str):
-                return None
+            label = Label(json.loads((folder / "carriage.json").read_bytes())["label"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return LoadedRun(record, label=label, fork_source=fork_source)
@@ -139,7 +139,8 @@ def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
     """The largest comparable group (`is_comparable`), empty if there are no runs.
 
     Largest = most runs that are not NOT_EXERCISED; ties: most runs in all, then the smallest
-    repo_sha, then the smallest model_ids (so the choice never depends on input order).
+    repo_sha, model_ids, safe_config_hash, ledger_hash and lockfile_hash in turn (so the choice
+    never depends on input order).
     """
     groups: list[list[LoadedRun]] = []
     for run in runs:
@@ -154,7 +155,15 @@ def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
         exercised = sum(run.label != Label.NOT_EXERCISED for run in group)
         head = group[0].record
         ids = sorted((str(role), name) for role, name in head.model_ids.items())
-        return (-exercised, -len(group), head.repo_sha, ids, head.safe_config_hash)
+        return (
+            -exercised,
+            -len(group),
+            head.repo_sha,
+            ids,
+            head.safe_config_hash,
+            head.ledger_hash,
+            head.lockfile_hash,
+        )
 
     return min(groups, key=rank, default=[])
 
@@ -259,7 +268,7 @@ def aggregate(
 
     total = len(ledger.constraints)
     with_check = sum(c.check is not None for c in ledger.constraints)
-    head = group[0].record if group else None
+    head = pooled[0].record if pooled else None
     return {
         "format_version": FORMAT_VERSION,
         "reproducibility": None
@@ -319,8 +328,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         ledger = load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
         runs, unreadable = load_runs(args.paths)
         results = aggregate(runs, unreadable=unreadable, ledger=ledger, extraction_recall=recall)
-    except (OSError, ValueError) as exc:  # FileNotFoundError, bad recall, bad ledger, unknown id
-        print(f"stats: {exc}", file=sys.stderr)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        # FileNotFoundError, bad recall, bad ledger (YAML or schema), unknown constraint id
+        print(f"stats: {' '.join(str(exc).split())}", file=sys.stderr)
         return 2
     if not runs and not unreadable:
         print("stats: no run folders found; writing an empty result", file=sys.stderr)

@@ -630,3 +630,72 @@ def test_load_runs_ignores_folders_that_are_not_runs(tmp_path):
     (tmp_path / "notes" / "a.txt").write_text("x")
     loaded, unreadable = load_runs([tmp_path])
     assert (len(loaded), unreadable) == (1, 0)
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+@pytest.mark.parametrize("field", ["ledger_hash", "lockfile_hash"])
+def test_aggregate_tie_break_reaches_ledger_and_lockfile_hash(field):
+    # Two singleton groups that differ only in `field` tie on every earlier rank key; the
+    # smaller value must win whichever run comes first.
+    # Breaks if the final tie-break omits that hash, so the input order picks the group.
+    a = make_run("a", **{field: "aaa"})
+    b = make_run("b", **{field: "bbb"})
+    for runs in ([a, b], [b, a]):
+        got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+        assert got["reproducibility"][field] == "aaa"
+
+
+@pytest.mark.parametrize("label", ["NOT_EXERCISEDD", "", "not_exercised"])
+def test_load_runs_counts_an_unknown_carriage_label_as_unreadable(tmp_path, label):
+    # A misspelt label would otherwise pass as "exercised" and pool a run that should be out.
+    # Breaks if the label is only checked to be a string.
+    folder = write_run(tmp_path, make_run("typo"))
+    (folder / "carriage.json").write_text(json.dumps({"label": label}))
+    loaded, unreadable = load_runs([tmp_path])
+    assert (loaded, unreadable) == ([], 1)
+
+
+def test_load_runs_accepts_every_label_the_classifier_can_write(tmp_path):
+    # Breaks if the accepted set drifts from replay.carriage.Label (a real label rejected).
+    names = [
+        "DROPPED",
+        "DROPPED_LUCKY",
+        "NOT_EXERCISED",
+        "DISOBEYED",
+        "CARRIED_OBEYED",
+        "UNKNOWN",
+        "UNCLASSIFIABLE",
+    ]
+    for i, name in enumerate(names):
+        write_run(tmp_path, make_run(f"r{i}", label=name))
+    loaded, unreadable = load_runs([tmp_path])
+    assert (len(loaded), unreadable) == (7, 0)
+
+
+def test_cli_rejects_invalid_ledger_yaml_with_one_line_and_writes_nothing(tmp_path, capsys):
+    # Breaks if a YAML syntax error escapes as a traceback instead of exit 2.
+    ledger = tmp_path / "bad.yaml"
+    ledger.write_text("constraints: [\n")
+    out = tmp_path / "results.json"
+    code = main([str(tmp_path), "--ledger", str(ledger), "--out", str(out)])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert err.startswith("stats: ")
+    assert len(err.strip().splitlines()) == 1
+    assert not out.exists()
+
+
+def test_aggregate_reproducibility_is_null_when_every_group_run_is_not_exercised():
+    # Nothing was pooled, so no group's fields describe pooled runs.
+    # Breaks if `reproducibility` names a group that contributed zero runs.
+    runs = [make_run("x-1", label="NOT_EXERCISED"), make_run("x-2", label="NOT_EXERCISED")]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    assert got["reproducibility"] is None
+    assert got["runs"] == {
+        "found": 2,
+        "pooled": 0,
+        "inconclusive": {"unreadable_record": 0, "not_comparable": 0, "not_exercised": 2},
+    }
+    assert got["constraints"] == {}

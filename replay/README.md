@@ -181,11 +181,12 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   are read too, and a folder reached twice is read once. `record.json` is validated as
   `RunRecord`. `fork.json` (`source_run_id`) marks a fork; `carriage.json` (`label`) gives the
   carriage label. A folder whose `record.json` is missing or invalid, or whose `fork.json` /
-  `carriage.json` exists but is unusable, counts as `unreadable_record` (a run whose source or
+  `carriage.json` exists but is unusable (a `label` that is not one of `replay.carriage.Label`), counts as `unreadable_record` (a run whose source or
   label is unknown is not guessed at).
 - **Pooling.** Runs are grouped with `schemas.run.is_comparable` (the five reproducibility
   fields). The group with the most runs that are not `NOT_EXERCISED` is pooled; ties go to the
-  group with more runs in all, then the smaller `repo_sha`. Every other run is `not_comparable`.
+  group with more runs in all, then the smaller `repo_sha` (and, if still tied, the smaller model ids and hashes in
+  field order). Every other run is `not_comparable`.
   Inside the pooled group a `NOT_EXERCISED` carriage label leaves the run out
   (`not_exercised`: the guarded action never came up, so it says nothing about the handoff). A
   run is counted under one reason only, `not_comparable` first, so
@@ -202,7 +203,7 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
 - **Honesty block.** `check_share` is constraints with a check over constraints declared in the
   ledger (`null` for an empty ledger); `extraction_recall` is the `recall` in the
   `--extraction-recall` JSON file (`{"recall": 0.83}`, in [0, 1]), `null` when not measured;
-  `inconclusive_total` sums the three reasons. With no pooled run `reproducibility` is `null`.
+  `inconclusive_total` sums the three reasons. With no pooled run (also when every run in the group is `NOT_EXERCISED`) `reproducibility` is `null`.
 - **Output.** Sorted keys, two-space indent, floats rounded to 4 decimals, trailing newline; no
   paths or timestamps, so the same runs give a byte-identical file in any argument order.
 
