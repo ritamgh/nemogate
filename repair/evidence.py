@@ -63,8 +63,15 @@ def _example(folder: Path, boundary: str) -> tuple[str, str]:
     return sent, got
 
 
-def load_evidence(runs_dir: str | Path, constraint_id: str, task_id: str | None = None) -> Evidence:
-    runs = load_records(runs_dir, constraint_id, task_id)
+def load_evidence(
+    runs_dir: str | Path,
+    constraint_id: str,
+    task_id: str | None = None,
+    *,
+    arm: str | None = None,
+    operator: str | None = None,
+) -> Evidence:
+    runs = load_records(runs_dir, constraint_id, task_id, arm=arm, operator=operator)
     if not runs:
         raise ValueError(f"no runs in {runs_dir} target {constraint_id}")
     violated = [(f, r) for f, r in runs if constraint_id in r.violations]

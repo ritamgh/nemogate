@@ -16,6 +16,10 @@ from repair.patch import Edit, Patch, apply_edits, unified_diff, write_patch
 from repair.plan import CallBudget, FixChoice, choose_fix
 from schemas.run import RunRecord
 
+# Fewest runs on each side before a verdict: one clean patched run must not beat a noisy
+# baseline.
+MIN_RUNS = 3
+
 
 @dataclass(frozen=True)
 class Rates:
@@ -78,12 +82,17 @@ def repair_once(
         return RepairResult(False, f"guard: {exc}", choice, edits, "", before, None)
     diff = unified_diff(files, after_files)
     after = rates(rerun(Patch(choice.fix_id, edits, after_files)), evidence.constraint_id)
-    accepted = after.runs > 0 and after.cvr < before.cvr and after.success >= before.success
     reason = (
         f"violation rate {before.cvr:.0%} -> {after.cvr:.0%}, "
         f"task success {before.success:.0%} -> {after.success:.0%} "
         f"({before.runs} baseline runs, {after.runs} patched runs)"
     )
+    if min(before.runs, after.runs) < MIN_RUNS:
+        return RepairResult(
+            False, f"too few runs to judge (need {MIN_RUNS} each): {reason}", choice, edits,
+            diff, before, after,
+        )  # fmt: skip
+    accepted = after.cvr < before.cvr and after.success >= before.success
     return RepairResult(accepted, reason, choice, edits, diff, before, after)
 
 

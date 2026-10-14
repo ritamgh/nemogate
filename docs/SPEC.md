@@ -25,8 +25,9 @@ Changes:
     - at most 2 replies are held back per run (`MAX_FAIL_CLOSED`); after that the reply is passed on and graded, so a reply that can never meet the rule (an operator on the return boundary) ends in a scored run, not a crash.
 - 2026-10-13 (B): How the repair agent (C5) is built:
   - **Where the patch is written:** Super returns insert-only edits, which our code applies in a **git worktree on a local branch, not in a Contree fork**. The patch targets the agent system's own source in this repo, and the runner only claims the commit it runs from, so the re-run happens in that worktree.
-  - **Guards:** an allowlist of editable files; insert-only edits (no instruction removed or rewritten); a token ceiling of 400 added tokens per patch; an append-only ledger; a closed menu of 4 fix kinds; and at most 3 Ultra calls per iteration.
-  - **Accept rule:** a strictly lower violation rate with no lower task success, against a baseline of the same task, arm and operator.
+  - **Guards:** a protected-path denylist no allowlist can override (the ledger and any `.yaml`/`.toml`/lock file, the pipeline folders, tests, tasks and check scripts); an allowlist of editable files; insert-only edits checked in order (no instruction removed or rewritten); a token ceiling of 400 added tokens per patch; an append-only ledger, always wired; a closed menu of 4 fix kinds; and at most 3 Ultra calls per iteration.
+  - **Spend:** the CLI sizes the re-run against the repair bucket (`replay.budget.plan` on the baseline's measured cost), refuses an `--n` above it, and needs its own `--yes`. Files are read from `HEAD`, and a rejected patch's worktree and branch are removed.
+  - **Accept rule:** a strictly lower violation rate with no lower task success, against a baseline of the same task, arm and operator, with at least 3 runs on each side.
 
 ### Accounts and environment
 
@@ -262,7 +263,7 @@ The split is by vertical slice, so both people write core code and both own some
 | C3 | Action oracle | Closed predicate DSL evaluated on the tool-call trace and the Contree filesystem diff. Deterministic pass or fail per constraint | B | Interfaces |
 | C2 | Boundary gate | Deep Agents middleware on the delegation and return boundaries. Modes: observe, mutate, block-only, enforce. Return schema with fail-closed on missing fields | B | C1, C3 |
 | C4 | Replay engine | Records a run with LangGraph checkpoint IDs and Contree image IDs at each boundary. Forks before the boundary, runs each arm N times, aggregates results with intervals | A | R, C2 hooks |
-| C5 | Repair agent | Ultra picks fixes from a closed menu, Super writes the patch in a Contree fork, a C4 subset re-runs, accept or reject, PR-ready diff | B | C4 |
+| C5 | Repair agent | Ultra picks fixes from a closed menu, Super writes the patch in a git worktree on a local branch (see Changes, 2026-10-13), a C4 subset re-runs, accept or reject, PR-ready diff | B | C4 |
 | C6 | Report page | Boundary graph with edges coloured by violation rate, per-constraint cards, trace diff at the violating action, the patch, a coverage panel. Served on Nebius Serverless Endpoints | A | C4 results format |
 
 Submission work is split the same way: A edits the video and owns the live demo URL; B writes the README, the Devpost text and the feedback writeup. Both record their own components' segments.
@@ -479,7 +480,7 @@ Person A
 
 Person B
 
-- [ ] C5: Ultra plans from the closed menu, Super writes the patch in a Contree fork, a C4 subset re-runs, accept or reject, PR diff
+- [ ] C5: Ultra plans from the closed menu, Super writes the patch in a git worktree (see Changes, 2026-10-13), a C4 subset re-runs, accept or reject, PR diff
 - [ ] C5 guards: ledger is append-only to the repair agent, token ceiling, closed fix menu
 - [ ] Stretch: `return_corrupt`; AI-Q adapter only if the week-1 check passed
 

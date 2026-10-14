@@ -11,7 +11,13 @@ from langchain_core.messages import AIMessage
 from common.llm import get_model
 from repair.__main__ import main
 from repair.evidence import Evidence, load_evidence
-from repair.guards import MAX_ADDED_TOKENS, GuardViolation, check_append_only, check_edits
+from repair.guards import (
+    MAX_ADDED_TOKENS,
+    GuardViolation,
+    check_append_only,
+    check_editable,
+    check_edits,
+)
 from repair.loop import Rates, rates, repair_once, write_report
 from repair.menu import MENU, get_fix
 from repair.patch import WRITE_PROMPT, Edit, Patch, apply_edits, unified_diff, write_patch
@@ -56,7 +62,7 @@ def record(run_id, violated, success=True, task="X1"):
             "violations": ["C-001"] if violated else [],
             "task_success": success,
             "tokens": {"helper": 0, "sut": 0, "planner": 0},
-            "cost_usd": 0.0,
+            "cost_usd": 0.01,
             "checkpoint_id": None,
             "contree_image": None,
             "model_ids": {"helper": "a", "sut": "b", "planner": "c"},
@@ -203,6 +209,57 @@ def test_guards_reject_unsafe_edits(bad, match):
         check_edits([bad], FILES)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "nemogate.yaml",  # the ledger (its regexes are predicates)
+        "config.yaml",
+        "pyproject.toml",
+        "uv.lock",
+        "schemas/ledger.py",
+        "oracle/evaluate.py",
+        "gate/middleware.py",
+        "ledger/loader.py",
+        "replay/runner.py",
+        "repair/guards.py",
+        "common/llm.py",
+        "app/tests/test_api.py",
+        "app/test_api.py",
+        "app/conftest.py",
+        "app/tasks/X1/task.yaml",
+        "app/tasks/X1/check_x1.py",
+        "app/check_x1.py",
+        ".env",
+        ".github/CODEOWNERS",
+        "docs/SPEC.md",
+    ],
+)
+def test_protected_paths_can_never_be_edited(path):
+    # Rule 8 / SPEC risk "the repair agent games the metric": the ledger, config, pipeline,
+    # tests, tasks and check scripts are off limits even if the caller lists them as editable.
+    files = {path: "old text\n"}
+    bad = Edit(file=path, old_string="old text", new_string="old text|.*")
+    with pytest.raises(GuardViolation, match="protected"):
+        check_edits([bad], files)
+    with pytest.raises(GuardViolation, match="protected"):
+        check_editable([path])
+
+
+def test_app_prompt_files_are_editable():
+    check_editable(["app/prompts.py", "app/team.py"])
+
+
+def test_overlapping_edits_are_checked_in_order():
+    # The second edit's old_string occurs once in the original but twice after the first edit
+    # inserts a copy of it; checking against the original text would wrongly pass it.
+    first = edit(new_string="Delegate the work. You write code.")
+    second = Edit(
+        file="app/prompts.py", old_string="You write code.", new_string="You write code. X"
+    )
+    with pytest.raises(GuardViolation, match="exactly once"):
+        check_edits([first, second], FILES)
+
+
 def test_token_ceiling_rejects_a_patch_that_dumps_text():
     # SPEC risk: the repair agent games the metric by dumping full history into the prompt.
     flood = "Delegate the work." + " x" * (MAX_ADDED_TOKENS * 4)
@@ -325,7 +382,8 @@ def test_repair_once_rejects_an_empty_patch_without_rerunning():
     assert (result.accepted, result.reason) == (False, "guard: the patch makes no change")
 
 
-def test_write_report_writes_the_patch_and_a_summary(tmp_path):
+def test_too_few_runs_is_never_accepted():
+    # Ritam's review: one clean patched run must not beat a noisy baseline.
     planner, writer = models()
     result = repair_once(
         evidence=EVIDENCE,
@@ -335,6 +393,21 @@ def test_write_report_writes_the_patch_and_a_summary(tmp_path):
         planner_model=planner,
         writer_model=writer,
         rerun=lambda patch: [record("p1", False)],
+    )
+    assert result.accepted is False
+    assert "too few runs" in result.reason
+
+
+def test_write_report_writes_the_patch_and_a_summary(tmp_path):
+    planner, writer = models()
+    result = repair_once(
+        evidence=EVIDENCE,
+        baseline=BASELINE,
+        files=FILES,
+        agents=["lead", "worker"],
+        planner_model=planner,
+        writer_model=writer,
+        rerun=lambda patch: [record(f"p{i}", False) for i in range(3)],
     )
     patch_path, summary_path = write_report(result, tmp_path)
     assert patch_path.read_text().startswith("--- a/app/prompts.py")
@@ -387,6 +460,30 @@ def test_worktree_rerun_commits_the_patch_and_runs_the_runner_there(tmp_path):
     assert git(repo, "status", "--porcelain").stdout == ""  # the main checkout is untouched
 
 
+def test_discard_last_removes_a_rejected_patchs_worktree_and_branch(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "app" / "prompts.py").write_text(PROMPTS, encoding="utf-8")
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed")
+    rerun = WorktreeRerun(
+        repo_dir=repo,
+        worktrees_dir=tmp_path / "trees",
+        tasks=["X1"],
+        arms=["mutated"],
+        operators=["drop"],
+        n=1,
+        run_cmd=lambda *a: None,
+    )
+    after = apply_edits(FILES, [Edit(**EDIT)])
+    rerun(Patch(fix_id="carry_rules", edits=[Edit(**EDIT)], files_after=after))
+    assert len(list((tmp_path / "trees").iterdir())) == 1
+    rerun.discard_last()
+    assert list((tmp_path / "trees").iterdir()) == []
+    assert "repair/" not in git(repo, "branch", "--list").stdout
+
+
 @pytest.mark.parametrize("path", ["/etc/passwd", "../outside.py", "app/../../outside.py"])
 def test_worktree_rerun_refuses_paths_outside_the_worktree(tmp_path, path):
     # Breaks if an absolute or escaping path lets the patch land in the main checkout.
@@ -427,3 +524,109 @@ def test_cli_refuses_without_the_live_flag(tmp_path, monkeypatch, capsys):
     )  # fmt: skip
     assert code == 2
     assert "NEMOGATE_LIVE" in capsys.readouterr().err
+
+
+# The CLI tests patch the reference app's prompt file, read from HEAD of this repo.
+PROMPT_FILE = "refapp/prompts.py"
+PROMPT_ANCHOR = "You lead a small software team"
+
+
+class FakeRerun:
+    def __init__(self, records):
+        self.records, self.patches, self.discarded = records, [], 0
+
+    def __call__(self, patch):
+        self.patches.append(patch)
+        return self.records
+
+    def discard_last(self):
+        self.discarded += 1
+
+
+@pytest.fixture
+def live_cli(tmp_path, monkeypatch):
+    # get_model refuses stub replies while NEMOGATE_LIVE=1, so the stubs are built first and
+    # the live flag is set only around main(); the injected models mean nothing is spent.
+    monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
+    monkeypatch.setenv("NEMOGATE_SPEND_LOG", str(tmp_path / "spend.jsonl"))
+    runs = tmp_path / "runs"
+    for i, violated in enumerate([True, True, False]):
+        run_folder(runs, f"r-{i}", violated=violated)
+
+    def go(*extra, editable=PROMPT_FILE, after=None):
+        edit_args = {
+            "file": PROMPT_FILE,
+            "old_string": PROMPT_ANCHOR,
+            "new_string": PROMPT_ANCHOR + ". Copy every rule from the user into each delegation",
+        }
+        planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
+        writer = get_model("sut", stub_responses=[structured("EditList", {"edits": [edit_args]})])
+        rerun = FakeRerun(
+            after if after is not None else [record(f"p{i}", False) for i in range(3)]
+        )
+        argv = [
+            "--runs", str(runs), "--constraint", "C-001", "--task", "X1",
+            "--editable", editable, "--agents", "lead,worker",
+            "--out", str(tmp_path / "out"), *extra,
+        ]  # fmt: skip
+        monkeypatch.setenv("NEMOGATE_LIVE", "1")
+        try:
+            code = main(argv, planner_model=planner, writer_model=writer, rerun=rerun)
+        finally:
+            monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
+        return code, rerun
+
+    return go
+
+
+def test_cli_without_yes_prints_the_plan_and_runs_nothing(live_cli, capsys):
+    # Ritam's review (rule 3): the re-run spends credit, so it needs the CLI's own --yes.
+    code, rerun = live_cli("--n", "3")
+    assert code == 1 and rerun.patches == []
+    out = capsys.readouterr()
+    assert "planned re-runs: 3" in out.out and "--yes" in out.err
+
+
+def test_cli_refuses_fewer_reruns_than_a_verdict_needs(live_cli, capsys):
+    # Fewer than MIN_RUNS patched runs can never be accepted, so spending on them is waste.
+    code, rerun = live_cli("--n", "2", "--yes")
+    assert code == 2 and rerun.patches == []
+    assert "at least 3" in capsys.readouterr().err
+
+
+def test_cli_refuses_more_runs_than_the_repair_bucket_allows(live_cli, capsys):
+    code, rerun = live_cli("--n", "100000", "--yes")
+    assert code == 2 and rerun.patches == []
+    assert "repair bucket" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "path", ["nemogate.yaml", "oracle/evaluate.py", "refapp/tests/test_team.py"]
+)
+def test_cli_refuses_protected_editable_files(live_cli, capsys, path):
+    code, rerun = live_cli("--n", "3", "--yes", editable=path)
+    assert code == 2 and rerun.patches == []
+    assert "protected" in capsys.readouterr().err
+
+
+def test_cli_accepts_a_good_patch_and_keeps_its_branch(live_cli, tmp_path):
+    code, rerun = live_cli("--n", "3", "--yes")
+    assert code == 0 and rerun.discarded == 0
+    (patch,) = rerun.patches
+    # Read from HEAD, so uncommitted edits in this checkout never reach the repair branch.
+    head = subprocess.run(
+        ["git", "show", f"HEAD:{PROMPT_FILE}"], capture_output=True, text=True, check=True
+    ).stdout
+    assert (
+        patch.files_after[PROMPT_FILE].replace(
+            ". Copy every rule from the user into each delegation", ""
+        )
+        == head
+    )
+    assert (tmp_path / "out" / "repair-carry_rules.patch").read_text().startswith("--- a/refapp/")
+
+
+def test_cli_discards_a_rejected_patchs_branch(live_cli):
+    same = [record(f"p{i}", i < 2) for i in range(3)]  # 2 of 3 violated: no improvement
+    code, rerun = live_cli("--n", "3", "--yes", after=same)
+    assert code == 1 and rerun.discarded == 1
