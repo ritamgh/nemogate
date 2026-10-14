@@ -23,6 +23,7 @@ replay/
                 never left executing, and which runs every command from `cwd`
   budget.py     N per arm from a bucket and a cost per run; `python -m replay.budget`
   carriage.py   did the target rule survive the planner's handoff; compaction evidence
+  stats.py      Wilson and Newcombe intervals, pooling of finished runs, results.json; `python -m replay.stats`
 refapp/app.py   the reference app's App (owned by refapp, listed here because the runner uses it)
 ```
 
@@ -160,6 +161,67 @@ main(): `python -m replay.budget --bucket kill_gate --arms natural mutated --ope
         line, ending with `N per arm per task: <n>`. Exit 1 when n < 1. spent_usd from
         common.spend.total_spent(). No model calls, no Contree.
 ```
+
+## stats.py
+
+```python
+def wilson(k, n, z=1.96) -> (lo, hi)                  # Wilson score interval, clamped to [0, 1]; ValueError if n < 1
+def newcombe_diff(k1, n1, k2, n2) -> (diff, lo, hi)   # p1 - p2, Newcombe method 10 (hybrid score) from two Wilson intervals
+@dataclass LoadedRun(record: RunRecord, label: str | None, fork_source: str | None)
+def load_runs(paths) -> (list[LoadedRun], unreadable: int)     # reads files only
+def aggregate(runs, *, unreadable, ledger, extraction_recall) -> dict   # pure: no file, no clock
+```
+
+`uv run python -m replay.stats RUNS_DIR_OR_PARENT... --ledger nemogate.yaml [--extraction-recall FILE] --out results/results.json`
+reads finished runs and writes the results file the report page shows. No model call, no
+sandbox, no network. Exit 2 and nothing written if a path is not a directory, the ledger or the
+recall file is invalid, or a pooled run is for a constraint the ledger does not declare.
+
+- **Input.** A run folder has `run_config.json` or `record.json`; a parent's subfolders that do
+  are read too, and a folder reached twice is read once. `record.json` is validated as
+  `RunRecord`. `fork.json` (`source_run_id`) marks a fork; `carriage.json` (`label`) gives the
+  carriage label. A folder whose `record.json` is missing or invalid, or whose `fork.json` /
+  `carriage.json` exists but is unusable, counts as `unreadable_record` (a run whose source or
+  label is unknown is not guessed at).
+- **Pooling.** Runs are grouped with `schemas.run.is_comparable` (the five reproducibility
+  fields). The group with the most runs that are not `NOT_EXERCISED` is pooled; ties go to the
+  group with more runs in all, then the smaller `repo_sha`. Every other run is `not_comparable`.
+  Inside the pooled group a `NOT_EXERCISED` carriage label leaves the run out
+  (`not_exercised`: the guarded action never came up, so it says nothing about the handoff). A
+  run is counted under one reason only, `not_comparable` first, so
+  `found == pooled + inconclusive_total`.
+- **Cells.** One per `(constraint, boundary, arm, operator)`, sorted by arm (natural, mutated,
+  block_only, gated) then operator name. `n` counts every run, forks included; `n_sources`
+  counts distinct sources (a fork under `fork.json`'s `source_run_id`, any other run under its
+  own id); `clustered` is `n_sources < n`. Nothing is deduplicated: a fork is not an
+  independent sample, so the report flags the cell and the intervals are not corrected.
+- **Comparisons**, per boundary, only when both cells exist: `load_bearing` = CVR(mutated, op) -
+  CVR(natural, none) for each mutated operator, then `ledger_value` = success(gated, op) -
+  success(block_only, op), each by operator name. Intervals: 95% Wilson (z = 1.96) for rates,
+  Newcombe method 10 for differences.
+- **Honesty block.** `check_share` is constraints with a check over constraints declared in the
+  ledger (`null` for an empty ledger); `extraction_recall` is the `recall` in the
+  `--extraction-recall` JSON file (`{"recall": 0.83}`, in [0, 1]), `null` when not measured;
+  `inconclusive_total` sums the three reasons. With no pooled run `reproducibility` is `null`.
+- **Output.** Sorted keys, two-space indent, floats rounded to 4 decimals, trailing newline; no
+  paths or timestamps, so the same runs give a byte-identical file in any argument order.
+
+Shape (every `inconclusive` reason is always present; `n == 0` cells are not written):
+
+```
+{"format_version": 1,
+ "reproducibility": {"model_ids": {role: id}, "safe_config_hash", "ledger_hash", "repo_sha", "lockfile_hash"} | null,
+ "runs": {"found", "pooled", "inconclusive": {"unreadable_record", "not_comparable", "not_exercised"}},
+ "honesty": {"constraints_total", "constraints_with_check", "check_share", "extraction_recall", "inconclusive_total"},
+ "constraints": {<constraint id>: {"text", "kind", "has_check", "task_ids": [sorted],
+   "boundaries": {<boundary id>: {
+     "cells": [{"arm", "operator", "n", "n_sources", "clustered", "violations",
+                "cvr": {"rate", "lo", "hi"}, "successes", "success": {"rate", "lo", "hi"}, "cost_usd"}],
+     "comparisons": [{"name", "operator", "a": {"arm", "operator"}, "b": {"arm", "operator"},
+                      "metric": "cvr" | "success", "diff", "lo", "hi"}]}}}}}
+```
+
+Only constraints with at least one pooled run appear under `constraints`.
 
 ## Natural-drop runs: a rule lost with no mutation operator
 
