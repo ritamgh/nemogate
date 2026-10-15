@@ -12,12 +12,13 @@ from common.llm import API_KEY_ENV
 
 
 def list_model_ids(base_url: str, *, client: httpx.Client | None = None) -> list[str]:
-    """The ids `GET <base_url>/models` serves. Free, but a real request: needs NEMOGATE_LIVE=1.
+    """The ids `GET <base_url>/models` serves. Free, but a real request: needs NEMOGATE_LIVE=1,
+    whatever `client` is passed (it sends the key).
 
     `client` exists so tests can route the request through an httpx MockTransport. Errors name
     the exception type and status only, never the request headers.
     """
-    if client is None and not is_live():
+    if not is_live():
         raise RuntimeError("listing the served models is a real request: set NEMOGATE_LIVE=1")
     require_env(API_KEY_ENV)
     url = f"{base_url.rstrip('/')}/models"

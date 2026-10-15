@@ -43,10 +43,21 @@ def test_an_unexpected_body_is_a_clear_error(live):
         list_model_ids(BASE, client=client)
 
 
-def test_without_the_live_flag_no_request_is_made():
-    # Breaks if listing models reaches the network without NEMOGATE_LIVE=1.
+def test_without_the_live_flag_no_request_is_made_whatever_client_is_passed(monkeypatch):
+    # Breaks if passing a client skips the opt-in: a caller's real httpx.Client would then send
+    # the key without NEMOGATE_LIVE=1. The key is set so only the live check can stop the call.
+    monkeypatch.setenv("NEBIUS_API_KEY", FAKE_KEY)
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    with pytest.raises(RuntimeError, match="NEMOGATE_LIVE=1"):
+        list_model_ids(BASE, client=_client(handler))
     with pytest.raises(RuntimeError, match="NEMOGATE_LIVE=1"):
         list_model_ids(BASE)
+    assert requests == []
 
 
 def test_a_missing_key_is_named_not_sent(monkeypatch):
