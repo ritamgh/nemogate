@@ -7,6 +7,10 @@ output), and the code removes those sentences (drop) or swaps in the helper's va
 unchanged, and free quoting also picked unrelated sentences; numbered picking was exact. On a
 delegation the rule travels as an instruction; on a return what carries it is the content that
 meets it, so each has its own prompt. compress ignores the rule.
+
+The unit is the whole sentence: in "Do the work but never touch X." drop removes the work
+instruction too, and hedge rewrites all of it. A drop or hedge that leaves the message as it was
+raises NothingToMutate, so a run whose handoff was not mutated is never recorded as mutated.
 """
 
 import re
@@ -89,14 +93,26 @@ _SELECT = {"delegation": SELECT_PROMPT, "return": SELECT_RETURN_PROMPT}
 _HEDGE = {"delegation": HEDGE_PROMPT, "return": HEDGE_RETURN_PROMPT}
 _COMPRESS_WORDS = {Operator.compress_100: 100, Operator.compress_25: 25}
 _WORD = re.compile(r"\S+")
-_BREAK = re.compile(r"(?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)[ \t]+|\n+")  # not after e.g. / i.e.
+# After . ! ? and a space (not after e.g. / i.e.), after a CJK full stop, or at line breaks.
+_BREAK = re.compile(r"(?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)[ \t]+|(?<=[。！？])[ \t]*|\n+")
+_MARKER = re.compile(r"[ \t]*\d{1,3}[.)]")  # "1." or "2)" on its own: opens a list item
+
+
+class NothingToMutate(RuntimeError):
+    """drop or hedge found nothing to change: the handoff no longer carries the rule (for
+    example the planner already left it out), so the run is not a sample of the mutation."""
 
 
 def sentences(text: str) -> list[tuple[int, int]]:
-    """(start, end) of each sentence: split after . ! ? and at line breaks."""
+    """(start, end) of each sentence: split after . ! ? and at line breaks. A list marker at the
+    start of a line or after a sentence stays with the item that follows it. In "Do: 1. A. 2. B."
+    the first marker stays with "Do:", since it cannot be told from a number ending a sentence."""
     found, pos = [], 0
     for match in _BREAK.finditer(text):
-        if text[pos : match.start()].strip():
+        piece = text[pos : match.start()]
+        if _MARKER.fullmatch(piece) and "\n" not in match.group():
+            continue  # keep pos: the marker opens the next sentence
+        if piece.strip():
             found.append((pos, match.start()))
         pos = match.end()
     if text[pos:].strip():
@@ -151,13 +167,21 @@ def _checked(op: Operator, text: str) -> str:
     return text
 
 
+def _mutated(op: Operator, message: str, out: str) -> str:
+    out = _checked(op, out)
+    if out == message.strip():
+        raise NothingToMutate(f"{op.value}: no sentence of the message carries the rule")
+    return out
+
+
 def make_operator(
     op: Operator, rule_text: str, model: Any, *, boundary: str = "delegation"
 ) -> Callable[[str], str] | None:
     """The mutation for `op` on a `delegation` or `return` boundary, or None for `none`.
 
     `model` is the helper (get_model). A mutation that would leave an empty message raises, so
-    a failed mutation is never recorded as a successful one.
+    a failed mutation is never recorded as a successful one; one that changes nothing raises
+    NothingToMutate.
     """
     if boundary not in ("delegation", "return"):
         raise ValueError(f"operators apply to a delegation or return boundary, not {boundary!r}")
@@ -172,7 +196,7 @@ def make_operator(
             out = message
             for _, start, end in _chosen(message, numbers):
                 out = _cut(out, start, end)
-            return _checked(op, out)
+            return _mutated(op, message, out)
 
         return drop
 
@@ -186,7 +210,7 @@ def make_operator(
             for number, start, end in _chosen(message, list(replacement)):
                 new = replacement[number].strip()
                 out = out[:start] + new + out[end:] if new else _cut(out, start, end)
-            return _checked(op, out)
+            return _mutated(op, message, out)
 
         return hedge
 

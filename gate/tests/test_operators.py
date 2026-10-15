@@ -2,6 +2,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from common.llm import get_model
+from gate import NothingToMutate
 from gate.operators import (
     COMPRESS_PROMPT,
     HEDGE_PROMPT,
@@ -51,11 +52,50 @@ REPLY = "Looks fine.\nRISK: old clients get 20 by default.\nThanks."
         ("One line, no stop", ["One line, no stop"]),
         ("A. B!\n\nC? D", ["A.", "B!", "C?", "D"]),
         ("Keep it, e.g. no X. Done.", ["Keep it, e.g. no X.", "Done."]),
+        ("先建好。不要碰 vendor/。", ["先建好。", "不要碰 vendor/。"]),  # CJK full stops
+        ("Never touch\nvendor/.", ["Never touch", "vendor/."]),  # a wrapped rule: two lines
+        # Known limit: an abbreviation other than e.g. / i.e. ends a sentence.
+        ("Ask Dr. Who first.", ["Ask Dr.", "Who first."]),
         ("", []),
     ],
 )
 def test_sentences_split_on_stops_and_line_breaks(text, expected):
     assert [text[s:e] for s, e in sentences(text)] == expected
+
+
+NUMBERED = "Steps:\n1. Build.\n2. Never touch vendor/.\n3) Add a test."
+BULLETED = "Steps:\n- Build.\n- Never touch vendor/.\n* Add a test."
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (NUMBERED, ["Steps:", "1. Build.", "2. Never touch vendor/.", "3) Add a test."]),
+        (BULLETED, ["Steps:", "- Build.", "- Never touch vendor/.", "* Add a test."]),
+        ("Do it in 2. Then stop.", ["Do it in 2.", "Then stop."]),  # a number ending a sentence
+        ("Do: 1. Add X. 2. Add Y.", ["Do: 1.", "Add X.", "2. Add Y."]),  # an inline list
+    ],
+    ids=["numbered", "bulleted", "mid-line-number", "inline-list"],
+)
+def test_a_list_marker_stays_with_its_item(text, expected):
+    assert [text[s:e] for s, e in sentences(text)] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (NUMBERED, "Steps:\n1. Build.\n3) Add a test."),
+        (BULLETED, "Steps:\n- Build.\n* Add a test."),
+    ],
+    ids=["numbered", "bulleted"],
+)
+def test_drop_removes_a_list_item_with_its_marker(text, expected):
+    assert make_operator(Operator.drop, "rule", Spy([picks(3)]))(text) == expected
+
+
+def test_drop_removes_a_rule_wrapped_over_two_lines():
+    drop = make_operator(Operator.drop, "rule", Spy([picks(2, 3)]))
+    assert drop("Build it.\nNever touch\nvendor/.\nAdd a test.") == "Build it.\nAdd a test."
 
 
 def test_numbered_lists_sentences_from_one():
@@ -90,15 +130,33 @@ def test_drop_on_a_return_removes_the_line_that_meets_the_rule():
 @pytest.mark.parametrize(
     ("chosen", "expected"),
     [
-        ((), DELEGATION),  # nothing concerns the rule
-        ((9, 0, -1), DELEGATION),  # out of range: ignored
         ((2, 2), "Build the export. Add a test."),  # a repeat counts once
         ((1, 3), "Never touch vendor/."),
+        ((9, 2, 0), "Build the export. Add a test."),  # out of range: ignored
     ],
-    ids=["none", "out-of-range", "repeat", "several"],
+    ids=["repeat", "several", "some-out-of-range"],
 )
 def test_drop_handles_any_set_of_numbers(chosen, expected):
     assert make_operator(Operator.drop, "rule", Spy([picks(*chosen)]))(DELEGATION) == expected
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        picks(),  # nothing concerns the rule
+        picks(9, 0, -1),  # every number out of range
+        rewrites(),  # hedge: no rewrites
+        rewrites((7, "x")),  # hedge: out of range
+        rewrites((2, "Never touch vendor/.")),  # hedge: the same sentence back
+    ],
+    ids=["no-picks", "picks-out-of-range", "no-rewrites", "rewrite-out-of-range", "same-text"],
+)
+def test_a_mutation_that_changes_nothing_raises_nothing_to_mutate(reply):
+    # A run whose handoff was not mutated must not be recorded as mutated; replay catches the
+    # type and counts the run as a non-sample.
+    op = Operator.drop if reply.tool_calls[0]["name"] == "Picks" else Operator.hedge
+    with pytest.raises(NothingToMutate):
+        make_operator(op, "rule", Spy([reply]))(DELEGATION)
 
 
 @pytest.mark.parametrize("op", [Operator.drop, Operator.hedge])
@@ -107,10 +165,26 @@ def test_a_reply_that_does_not_parse_raises(op):
         make_operator(op, "rule", Spy(["plain text, no tool call"]))(DELEGATION)
 
 
-def test_drop_that_would_erase_everything_raises():
-    drop = make_operator(Operator.drop, "rule", Spy([picks(1, 2, 3)]))
+@pytest.mark.parametrize(
+    ("op", "reply"),
+    [
+        (Operator.drop, picks(1, 2, 3)),
+        (Operator.hedge, rewrites((1, ""), (2, " "), (3, ""))),
+    ],
+    ids=["drop", "hedge-all-empty"],
+)
+def test_a_mutation_that_would_erase_everything_raises(op, reply):
+    with pytest.raises(RuntimeError, match="empty") as caught:
+        make_operator(op, "rule", Spy([reply]))(DELEGATION)
+    assert not isinstance(caught.value, NothingToMutate)
+
+
+@pytest.mark.parametrize("boundary", ["delegation", "return"])
+def test_drop_on_a_one_sentence_message_raises(boundary):
+    # Nothing sensible is left once its only sentence goes, so the run cannot be a sample.
+    drop = make_operator(Operator.drop, "rule", Spy([picks(1)]), boundary=boundary)
     with pytest.raises(RuntimeError, match="empty"):
-        drop(DELEGATION)
+        drop("Never touch vendor/.")
 
 
 @pytest.mark.parametrize(
@@ -146,8 +220,8 @@ def test_hedge_with_an_empty_replacement_removes_the_sentence_cleanly():
 
 
 def test_hedge_ignores_numbers_out_of_range():
-    hedge = make_operator(Operator.hedge, "rule", Spy([rewrites((7, "x"))]))
-    assert hedge(DELEGATION) == DELEGATION
+    hedge = make_operator(Operator.hedge, "rule", Spy([rewrites((7, "x"), (2, "Maybe."))]))
+    assert hedge(DELEGATION) == "Build the export. Maybe. Add a test."
 
 
 @pytest.mark.parametrize(
@@ -160,6 +234,13 @@ def test_compress_summarises_then_cuts_to_the_word_cap(op, words):
     assert spy.prompts == [COMPRESS_PROMPT.format(words=words, message="A long handoff message.")]
     assert len(out.split()) == words
     assert out.startswith("first line\n")  # line breaks survive the cut
+
+
+@pytest.mark.parametrize("boundary", ["delegation", "return"])
+def test_compress_ignores_the_rule_and_applies_to_both_boundaries(boundary):
+    # compress is a plain summary: the rule is not targeted, and the boundary does not matter.
+    out = make_operator(Operator.compress_100, "rule", Spy(["short"]), boundary=boundary)
+    assert out("anything") == "short"
 
 
 def test_compress_with_an_empty_summary_raises():

@@ -109,9 +109,9 @@ def test_gated_blocks_a_forbidden_tool(tmp_path, backend):
         constraint="C-004",
         arm="gated",
         operator="drop",
-        planner=[delegate("coder", "Add an export."), AIMessage(content="Done.")],
+        planner=[delegate("coder", "Add an export. Fetch nothing."), AIMessage(content="Done.")],
         coder=[call("http_get", "h1", url="https://example.com"), AIMessage(content="Wrote it.")],
-        helper=[picks()],
+        helper=[picks(2)],
     )
     fetch = next(e for e in trace if isinstance(e, ToolCall) and e.tool == "http_get")
     assert fetch.blocked is True
@@ -130,7 +130,7 @@ def review(tmp_path, backend, arm, replies, planner_turns):
         operator="drop",
         planner=planner_turns,
         reviewer=replies,
-        helper=[picks()] * 2,
+        helper=[picks(2)] * 2,
     )
 
 
@@ -153,8 +153,8 @@ def test_gated_fails_closed_on_a_reply_missing_the_required_line(tmp_path, backe
         "gated",
         replies=[AIMessage(content="Fine."), AIMessage(content=good)],
         planner_turns=[
-            delegate("reviewer", "Review it."),
-            delegate("reviewer", "Review it again."),
+            delegate("reviewer", "Review it. Note the risk."),
+            delegate("reviewer", "Review it again. Note the risk."),
             AIMessage(content="Done."),
         ],
     )
@@ -196,7 +196,10 @@ def test_block_only_passes_a_reply_through_unchecked(tmp_path, backend):
         backend,
         "block_only",
         replies=[AIMessage(content="Fine.")],
-        planner_turns=[delegate("reviewer", "Review it."), AIMessage(content="Done.")],
+        planner_turns=[
+            delegate("reviewer", "Review it. Note the risk."),
+            AIMessage(content="Done."),
+        ],
     )
     assert returned(trace) == ["Fine."]
     assert len(evaluate(ledger, trace, [])) == 1
