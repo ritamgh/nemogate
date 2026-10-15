@@ -5,7 +5,8 @@ Two pages, both generated offline from run data. Neither calls a model.
 ## Results page (`site.py`)
 
 ```
-uv run python -m report.site --results results/results.json --out results/site/index.html
+uv run python -m report.site --results results/results.json --out results/site/index.html \
+    [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]
 ```
 
 Reads the `results.json` that `replay/stats.py` writes (`format_version` 1; any other version is
@@ -43,6 +44,23 @@ Tests: `uv run pytest report/tests/test_site.py`. The fixtures in `report/tests/
 hand-written: `results_rich.json` (two constraints, a return edge, a clustered cell, a null
 extraction recall, an interval crossing 0, missing cells, markup in a rule text) and
 `results_empty.json` (nothing pooled, `reproducibility` null).
+
+### Evidence panels (`panels.py`)
+
+- **Coverage** (always): from the honesty block, the pooled constraints and, with `--ledger`, the
+  full ledger. Declared, with a compiled check, exercised (at least one pooled run), exercised and
+  checked, extraction recall ("not measured" when null), and the unchecked and never-exercised
+  rules by id and text. Without `--ledger` only constraints that had pooled runs can be named.
+- **Trace at the violating action** (`--runs`, run folders or folders of them): in each
+  constraint's boundary section, the first violating `mutated` run by run id beside the first
+  comparison run that kept the rule (a gated run with the same operator, else a natural run;
+  same task, rule and boundary, and `is_comparable`). Each side shows the planner's text diffed
+  against what the receiver got (struck = sent but lost, added = received but not sent) and the
+  action named by `violations.json` (a fork's steps count `prefix.jsonl` first). The comparison
+  side says "No such call" when it never made the call. Trace text is escaped.
+- **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
+  `.patch` beside it. Without `--repair` it says "No repair run yet". `repair` writes no
+  structured result, so the numbers are parsed from the summary's `Result:` line.
 
 ## Natural runs page (`natural_runs.py`)
 

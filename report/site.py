@@ -1,10 +1,13 @@
 """The results page: one self-contained static HTML file made from `results.json`.
 
-`uv run python -m report.site --results results/results.json --out results/site/index.html`
+`uv run python -m report.site --results results/results.json --out results/site/index.html
+[--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]`
 
 Reads the file `replay/stats.py` writes (format_version 1, nested constraint -> boundary -> cells)
 and renders a header (reproducibility group, run accounting, honesty strip), a boundary graph
-(inline SVG, built only from the boundary ids in the data) and one card per constraint. Inline CSS,
+(inline SVG, built only from the boundary ids in the data) and one card per constraint. The
+evidence panels (coverage, the trace at the violating action, the repair patch) live in
+`report/panels.py`. Inline CSS,
 no script, no font or network request. Every dynamic value goes through `html.escape`. The output
 depends on the input only (no timestamp), so two runs are byte-identical. Pure local; no model call.
 """
@@ -18,6 +21,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+
+from report import panels
+from schemas.ledger import Ledger, load_ledger_yaml
 
 FORMAT_VERSION = 1
 Z = 1.96  # the stats file uses 95% Wilson intervals; the graph re-pools cells with the same z
@@ -691,7 +697,12 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
     return out
 
 
-def render_constraint(cid: str, body: dict[str, Any], anchors: Anchors) -> str:
+def render_constraint(
+    cid: str,
+    body: dict[str, Any],
+    anchors: Anchors,
+    trace: panels.TraceEvidence | None = None,
+) -> str:
     check = "compiled check" if body.get("has_check") else "no compiled check"
     check_cls = "yes" if body.get("has_check") else "no"
     sentences = summaries(body.get("boundaries", {}))
@@ -721,6 +732,11 @@ def render_constraint(cid: str, body: dict[str, Any], anchors: Anchors) -> str:
             '<th scope="col">Violation rate</th><th scope="col">Task success</th></tr></thead>'
             f"<tbody>{rows}</tbody></table></div>"
             + render_comparisons(cells, b.get("comparisons", []))
+            + (
+                panels.render_trace_panel(trace.exemplars.get((cid, bid)), trace)
+                if trace is not None
+                else ""
+            )
             + "</section>"
         )
     return (
@@ -739,7 +755,16 @@ def render_constraint(cid: str, body: dict[str, Any], anchors: Anchors) -> str:
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8")
 
 
-def render(results: dict[str, Any]) -> str:
+def render(
+    results: dict[str, Any],
+    *,
+    trace: panels.TraceEvidence | None = None,
+    repairs: list[panels.RepairView] | None = None,
+    ledger: Ledger | None = None,
+) -> str:
+    """The page. `trace` (from --runs), `repairs` (--repair) and `ledger` (--ledger) are optional
+    evidence; without `trace` the constraint cards have no trace panel, without `repairs` the
+    patch panel says there is no repair run yet."""
     check_format(results)
     constraints = results["constraints"]
     anchors = Anchors(constraints)
@@ -754,7 +779,8 @@ def render(results: dict[str, Any]) -> str:
             f"{render_boundary_table(boundaries, anchors)}</section>"
             '<section aria-labelledby="cards-h"><h2 id="cards-h">Constraints</h2>'
             + "".join(
-                render_constraint(cid, constraints[cid], anchors) for cid in sorted(constraints)
+                render_constraint(cid, constraints[cid], anchors, trace)
+                for cid in sorted(constraints)
             )
             + "</section>"
         )
@@ -769,7 +795,8 @@ def render(results: dict[str, Any]) -> str:
         '<meta name="color-scheme" content="light dark">'
         "<title>NemoGate results</title>"
         f"<style>{CSS}</style></head><body><main>"
-        f"{render_header(results)}{graph_section}"
+        f"{render_header(results)}{panels.render_coverage(results, ledger)}{graph_section}"
+        f"{panels.render_patch_panel(repairs)}"
         '<footer><p class="note">Intervals are 95% Wilson score intervals. A difference uses the '
         "Newcombe hybrid-score interval. Cells are pooled only within one reproducibility group. "
         "Whether a rule was obeyed comes from deterministic checks, never from a model. Format "
@@ -784,10 +811,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--results", type=Path, required=True, help="results.json from replay.stats"
     )
     parser.add_argument("--out", type=Path, required=True, help="where to write index.html")
+    parser.add_argument(
+        "--runs",
+        type=Path,
+        nargs="+",
+        metavar="DIR",
+        help="run folders, or folders of them: adds the trace panel at the violating action",
+    )
+    parser.add_argument(
+        "--repair",
+        type=Path,
+        metavar="DIR",
+        help="the folder python -m repair wrote: adds the patch",
+    )
+    parser.add_argument(
+        "--ledger",
+        type=Path,
+        help="the ledger the runs used: lists unchecked and unexercised rules",
+    )
     args = parser.parse_args(argv)
     try:
         results = json.loads(args.results.read_text(encoding="utf-8"))
-        page = render(results)
+        page = render(
+            results,
+            trace=panels.load_trace_evidence(args.runs) if args.runs else None,
+            repairs=panels.load_repairs(args.repair) if args.repair else None,
+            ledger=load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
+            if args.ledger
+            else None,
+        )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")
     except (OSError, ValueError) as exc:
