@@ -46,12 +46,14 @@ def scripted_factory(tries: int, *, bad_json_object: Collection[Role] = ()):
             escape = "Let me think about the string first."
         call = {"name": "get_weather", "args": {"city": "Paris"}, "id": "c", "type": "tool_call"}
         extraction = json.dumps(EXTRACTION_FIELDS)
+        tool_reply = AIMessage(content="", tool_calls=[call])
         if variant.thinking:
             replies = [AIMessage(content=extraction)] * tries
+            replies += [AIMessage(content=escape)] * tries + [tool_reply] * tries
         else:
             replies = [AIMessage(content=escape)] * tries
             if variant.response_format == "json_schema":
-                replies += [AIMessage(content="", tool_calls=[call])] * tries
+                replies += [tool_reply] * tries
         model = StubChatModel(role=variant.role.value, responses=replies)
         models.append(model)
         return model

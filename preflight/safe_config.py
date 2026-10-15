@@ -4,7 +4,8 @@ Rules (docs/SPEC.md, C0):
 - `response_format`: `json_schema` if it round-trips valid JSON for every role with thinking off,
   else `json_object` if that does, else none.
 - `thinking`: off whenever a response format works with it off. On only as a last resort: no
-  format works with thinking off, but `json_schema` works with it on.
+  format works with thinking off, and `json_schema` works with it on for every role in all of
+  the thinking probe, the escape probe and native tool calls, each run with thinking on.
 Nothing here writes `config.yaml`; the caller writes the proposal elsewhere.
 """
 
@@ -47,7 +48,13 @@ def derive(config: AppConfig, results: Sequence[ProbeResult]) -> Proposal:
                 for fmt in RESPONSE_FORMATS
             },
             "json_schema_thinking_on": _passed(results, "thinking", role, "json_schema", True),
-            "tool_calls_native": _passed(results, "tool_call", role, "json_schema", False),
+            "escape_json_schema_thinking_on": _passed(results, "escape", role, "json_schema", True),
+            "tool_calls_native_thinking_off": _passed(
+                results, "tool_call", role, "json_schema", False
+            ),
+            "tool_calls_native_thinking_on": _passed(
+                results, "tool_call", role, "json_schema", True
+            ),
             "model_id_served": _passed(results, "model_ids", role, None, None),
         }
         for role in roles
@@ -58,13 +65,30 @@ def derive(config: AppConfig, results: Sequence[ProbeResult]) -> Proposal:
     thinking: bool | None = None
     if response_format is not None:
         thinking = False
-    elif all_roles("thinking", "json_schema", True):
-        response_format, thinking = "json_schema", True
-        warnings.append("no response format works with thinking off; proposing thinking on")
     else:
-        warnings.append("no response format passed for every role: there is no safe config")
+        # Thinking on changes what the model sends, so every property the agents rely on is
+        # proven again with it on; thinking-off results say nothing about it.
+        unproven = [
+            f"{role_name} {what} with thinking on"
+            for role_name, checks in per_role.items()
+            for key, what in (
+                ("json_schema_thinking_on", "structured output"),
+                ("escape_json_schema_thinking_on", "escape"),
+                ("tool_calls_native_thinking_on", "tool calls"),
+            )
+            if not checks[key]
+        ]
+        if unproven:
+            warnings.append(
+                "no response format works with thinking off, and thinking on is not proven for "
+                f"every role ({', '.join(unproven)}): there is no safe config"
+            )
+        else:
+            response_format, thinking = "json_schema", True
+            warnings.append("no response format works with thinking off; proposing thinking on")
+    tool_key = f"tool_calls_native_thinking_{'on' if thinking else 'off'}"
     for role_name, checks in per_role.items():
-        if not checks["tool_calls_native"]:
+        if not checks[tool_key]:
             warnings.append(f"{role_name}: tool calls did not all come back native")
         if not checks["model_id_served"]:
             warnings.append(f"{role_name}: the configured model id is not confirmed as served")

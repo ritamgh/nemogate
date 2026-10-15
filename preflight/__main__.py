@@ -6,6 +6,7 @@ it, it also needs --yes. It never writes config.yaml: the proposal goes to --out
 
 import argparse
 import json
+import subprocess
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,27 @@ def _positive(text: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be >= 1, got {text}")
     return value
+
+
+def _refused_out(out: Path, config: Path) -> str | None:
+    """Why `out` may not be written, or None. The proposal never replaces an existing config or
+    any file git tracks."""
+    target = out.resolve()
+    if target in (config.resolve(), DEFAULT_CONFIG.resolve()):
+        return "is a config.yaml"
+    try:
+        tracked = (
+            subprocess.run(
+                ["git", "ls-files", "--error-unmatch", "--", target.name],
+                cwd=target.parent,
+                capture_output=True,
+                timeout=10,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None  # no git here, nothing to be tracked by
+    return "is a file git tracks" if tracked else None
 
 
 def _result_json(result: ProbeResult) -> dict:
@@ -84,8 +106,9 @@ def main(
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
-    if args.out.resolve() == args.config.resolve():
-        parser.error("--out must not be config.yaml: write the proposal elsewhere and review it")
+    refused = _refused_out(args.out, args.config)
+    if refused:
+        parser.error(f"--out {refused}: write the proposal to a new file and review it")
     config = load_config(args.config)
     n_roles = len(config.models)
     print(

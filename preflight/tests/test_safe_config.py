@@ -26,6 +26,8 @@ def _grid(**ok_by_check):
             "escape_json_object_off": ("escape", "json_object", False),
             "tool_call_json_schema_off": ("tool_call", "json_schema", False),
             "thinking_json_schema_on": ("thinking", "json_schema", True),
+            "escape_json_schema_on": ("escape", "json_schema", True),
+            "tool_call_json_schema_on": ("tool_call", "json_schema", True),
             "model_ids_none_none": ("model_ids", None, None),
         }
         for name, (probe, fmt, thinking) in cells.items():
@@ -90,6 +92,41 @@ def test_thinking_on_is_proposed_only_when_no_format_works_with_it_off():
     assert "proposing thinking on" in proposal.warnings[0]
 
 
+def _thinking_off_broken():
+    return {
+        f"{role.value}__escape_{fmt}_off": 0
+        for role in ROLES
+        for fmt in ("json_schema", "json_object")
+    }
+
+
+@pytest.mark.parametrize(
+    ("missing", "what"),
+    [("escape_json_schema_on", "escape"), ("tool_call_json_schema_on", "tool calls")],
+)
+def test_thinking_on_needs_escape_and_tool_calls_proven_with_thinking_on(missing, what):
+    # Breaks if the fallback reuses thinking-off escape/tool results: it would propose (and
+    # hash) a config whose tool calls may come back as text with thinking on.
+    proposal = derive(CONFIG, _grid(**_thinking_off_broken(), **{f"sut__{missing}": 0}))
+    assert (proposal.response_format, proposal.thinking, proposal.hash) == (None, None, None)
+    assert proposal.warnings[0] == (
+        "no response format works with thinking off, and thinking on is not proven for every "
+        f"role (sut {what} with thinking on): there is no safe config"
+    )
+
+
+def test_thinking_on_with_tool_calls_failing_only_when_off_is_still_a_proposal():
+    # Breaks if tool-call results from the wrong thinking setting are reported: with thinking on
+    # chosen, tool_calls_native must come from the thinking-on probe, and a thinking-off tool
+    # failure must not warn.
+    proposal = derive(CONFIG, _grid(**_thinking_off_broken(), sut__tool_call_json_schema_off=0))
+    assert (proposal.response_format, proposal.thinking) == ("json_schema", True)
+    assert proposal.per_role["sut"]["tool_calls_native_thinking_on"] is True
+    assert proposal.warnings == (
+        "no response format works with thinking off; proposing thinking on",
+    )
+
+
 def test_no_working_setting_gives_no_hash_and_a_warning():
     # Breaks if a proposal (and a hash that get_model would accept) is made out of nothing.
     broken = {
@@ -104,7 +141,9 @@ def test_no_working_setting_gives_no_hash_and_a_warning():
     proposal = derive(CONFIG, _grid(**broken))
     assert (proposal.response_format, proposal.thinking, proposal.hash) == (None, None, None)
     assert proposal.warnings == (
-        "no response format passed for every role: there is no safe config",
+        "no response format works with thinking off, and thinking on is not proven for every role "
+        "(helper structured output with thinking on, sut structured output with thinking on, "
+        "planner structured output with thinking on): there is no safe config",
     )
 
 

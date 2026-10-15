@@ -23,9 +23,9 @@ from schemas.config import AppConfig, SafeConfig, load_config
 
 ModelFactory = Callable[[Variant], BaseChatModel]
 
-# Model calls per role per try: escape under each response format, one tool call, one thinking-on
-# structured call.
-CALLS_PER_ROLE_PER_TRY = len(RESPONSE_FORMATS) + 2
+# Model calls per role per try: escape under each response format and one tool call, all with
+# thinking off; then with thinking on under json_schema: extraction, escape and a tool call.
+CALLS_PER_ROLE_PER_TRY = len(RESPONSE_FORMATS) + 1 + 3
 
 
 def planned_calls(n_roles: int, tries: int) -> int:
@@ -80,5 +80,7 @@ def run_probes(
         results.append(tool_call_probe(model(default), default, tries))
         thinking_on = Variant(role, "json_schema", True)
         results.append(thinking_probe(model(thinking_on), thinking_on, tries))
+        results.append(escape_probe(model(thinking_on), thinking_on, tries))
+        results.append(tool_call_probe(model(thinking_on), thinking_on, tries))
         results.append(model_ids_probe(role, config.models[role].id, served, list_error))
     return results

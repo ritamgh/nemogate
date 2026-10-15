@@ -12,10 +12,10 @@ from schemas.enums import Role
 SERVED = {"m-helper", "m-sut", "m-planner"}
 
 
-def test_planned_calls_is_roles_times_four_probes_times_tries():
+def test_planned_calls_is_roles_times_six_probes_times_tries():
     # Breaks if the number the CLI shows before spending drifts from what run_probes makes.
-    assert planned_calls(3, 3) == 36
-    assert planned_calls(3, 1) == 12
+    assert planned_calls(3, 3) == 54
+    assert planned_calls(3, 1) == 18
 
 
 def test_run_probes_makes_exactly_the_planned_calls_and_one_result_per_probe_and_role(tmp_path):
@@ -25,7 +25,7 @@ def test_run_probes_makes_exactly_the_planned_calls_and_one_result_per_probe_and
     config = load_config(write_config(tmp_path / "config.yaml"))
     factory, models = scripted_factory(2)
     results = run_probes(config, 2, factory, SERVED)
-    assert sum(len(m.responses) for m in models) == planned_calls(3, 2) == 24
+    assert sum(len(m.responses) for m in models) == planned_calls(3, 2) == 36
     assert all(m._next == len(m.responses) for m in models)
     assert sorted(
         (r.probe, r.role.value, r.response_format, r.thinking) for r in results
@@ -37,6 +37,8 @@ def test_run_probes_makes_exactly_the_planned_calls_and_one_result_per_probe_and
             ("escape", "json_object", False),
             ("tool_call", "json_schema", False),
             ("thinking", "json_schema", True),
+            ("escape", "json_schema", True),
+            ("tool_call", "json_schema", True),
             ("model_ids", None, None),
         ]
     )
