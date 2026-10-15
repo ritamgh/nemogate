@@ -196,6 +196,22 @@ def test_a_run_folder_stats_cannot_read_is_skipped_not_shown(tmp_path):
     assert evidence.exemplars[KEY].violating.run_id == "r-20260101T000002-bbb222"
 
 
+def test_an_errored_run_folder_is_skipped_never_an_exemplar(tmp_path):
+    # Breaks if a run that crashed (error.json, no record.json: replay.stats counts it as
+    # errored, not as a run) is loaded, or if load_run unpacks load_runs' result as two values
+    # (it returns runs, unreadable, errored) and every folder is silently skipped.
+    runs = runs_without(tmp_path)
+    errored = runs / "r-20260101T000007-err777"
+    shutil.copytree(runs / "r-20260101T000002-bbb222", errored)
+    (errored / "record.json").unlink()
+    (errored / "error.json").write_text('{"error": "boom"}')
+
+    evidence = load_evidence([runs])
+
+    assert (evidence.read, evidence.skipped) == (8, 1)
+    assert evidence.exemplars[KEY].violating.run_id == "r-20260101T000001-aaa111"
+
+
 def test_no_group_means_no_exemplar_not_an_unfiltered_one():
     # Breaks if a results file with nothing pooled (reproducibility null) shows unfiltered runs.
     evidence = panels.load_trace_evidence([RUN_FOLDERS], None)

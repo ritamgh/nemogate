@@ -153,6 +153,7 @@
     "inconclusive": {
       "not_comparable": 1,
       "not_exercised": 0,
+      "run_error": 0,
       "unreadable_record": 0
     },
     "pooled": 7
