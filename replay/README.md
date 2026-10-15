@@ -294,8 +294,9 @@ defaults (live, after `python -m replay.budget`).
 `uv run python -m replay.sweep_status --runs-dir DIR [--tasks ID...]` prints one row per
 `(task, arm, operator, group)`: `records` (finished runs), `errored` (`error.json`, no
 `record.json`, and not a no-op), `noop` (`error.json` whose `error_type` is the gate's
-`NothingToMutate`: a drop or hedge that found no rule sentence to change; still an attempt, so
-`--top-up` does not retry it), and among the records `violations` (the run's target constraint is in its
+`NothingToMutate`: a drop or hedge that found no rule sentence to change; also a finished run
+whose operator left its target handoff as it was, as `stats.py` counts it, see "Mutation
+no-ops"; still an attempt, so `--top-up` does not retry it), and among the records `violations` (the run's target constraint is in its
 `violations`) and `successes` (`task_success`). `group` is the first 8 hex of the sha256 of the
 five reproducibility fields, so runs from different commits, ledgers or configs never share a
 row; a legend below the table spells each group out. Then the orphans (run folders with neither
@@ -357,12 +358,17 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   the sample towards runs where the planner kept the rule), and is never pooled. Second line,
   for operators with no check in the gate (`compress_*`): a finished run in the `mutated`,
   `block_only` or `gated` arm with an operator other than `none` also counts as `mutation_noop`
-  when, at its target boundary, every `boundary_in.content` equals the matching
-  `boundary_out.content` (paired in order, compared without surrounding whitespace). The gate
+  when, at its target boundary, the `boundary_in.content` texts are the `boundary_out.content`
+  texts, each as often as it was sent (compared without surrounding whitespace). The trace has
+  no key that ties an in to its out, and concurrent handoffs interleave, so they are compared
+  as multisets, not paired in order. The gate
   writes `boundary_out` as the sender's text and `boundary_in` as what the receiver got, which is
   the operator's output; under `gated` a delegation also carries the pinned-rules block, which is
   cut off first using the gate's own format (`gate.middleware.REPIN`). A gated reply the gate
   replaced with its fail-closed message differs from what was sent, so it is not judged a no-op.
+  Known limit: the trace does not keep the operator's output when the gate replaces it, so a
+  fail-closed reply after an operator that changed nothing stays a sample (the gate would have
+  to record the operator's text first).
   A run with no readable `trace.jsonl`, or no handoff at the target, is not judged and stays a
   sample.
 - **Pooling.** Runs are grouped with `schemas.run.is_comparable` (the five reproducibility

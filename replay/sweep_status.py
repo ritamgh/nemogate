@@ -2,10 +2,11 @@
 
 `uv run python -m replay.sweep_status --runs-dir DIR [--tasks ID...]` prints one row per
 (task, arm, operator, reproducibility group): finished records, errored runs, mutation no-ops
-(runs the gate refused to record because its drop or hedge had nothing to change), and among the
-records the violations of the target constraint and the task successes. Offline: it reads
-files only. The same scan feeds `python -m replay.runner --top-up` (replay/README.md,
-"sweep_status.py").
+(runs the gate refused to record because its drop or hedge had nothing to change, and finished
+runs whose operator left the target handoff as it was: the same classification as
+`replay.stats.load_runs`, so the two never count different samples), and among the records the
+violations of the target constraint and the task successes. Offline: it reads files only. The
+same scan feeds `python -m replay.runner --top-up` (replay/README.md, "sweep_status.py").
 
 An attempt is a run folder with `record.json` (finished) or `error.json` (the runner caught
 its exception and carried on). A folder with neither is an orphan and counts for nothing.
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from replay.app import pairs
-from replay.noop import is_noop_error
+from replay.noop import is_noop_error, text_noop
 from schemas.enums import Arm, Operator
 from schemas.run import RunRecord
 
@@ -54,7 +55,9 @@ class Attempt:
     cell: Cell
     group: str  # group_key of the run's reproducibility fields
     errored: bool  # error.json and no record.json
-    noop: bool = False  # ... and the error is the gate's NothingToMutate (replay/noop.py)
+    noop: bool = (
+        False  # NothingToMutate error, or a record whose operator changed nothing (noop.py)
+    )
     seed: int | None = None  # run_config.json's seed; None if that file is missing or unusable
     violated: bool = False  # the record lists its target constraint (records only)
     success: bool = False  # the record's task_success (records only)
@@ -91,6 +94,7 @@ def _read_attempt(folder: Path) -> Attempt | None:
                 (rec.task_id, rec.arm.value, rec.operator.value),
                 group_key(rec.model_dump(mode="json")),
                 errored=False,
+                noop=text_noop(folder, rec),
                 seed=_read_seed(folder),
                 violated=rec.constraint_id in rec.violations,
                 success=rec.task_success,

@@ -14,6 +14,7 @@ For the text check, the sender's text is `boundary_out.content` and what the rec
 arm its pinned-rules block, which `unchanged_at_target` strips with the gate's own format).
 """
 
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -36,21 +37,27 @@ def unchanged_at_target(trace: Sequence[Event], boundary: str, *, gated: bool) -
     """True if every handoff at `boundary` reached the receiver as the sender sent it (compared
     without surrounding whitespace, as the gate's own check does), and there was at least one.
 
-    Handoffs are paired in order of occurrence. `gated` runs append a pinned-rules block to a
-    delegation; it is cut off before comparing. A handoff the gate replaced with its own message
-    (a fail-closed reply) differs from what was sent and so is not unchanged.
+    The trace has no key that ties a `boundary_in` to its `boundary_out`, and concurrent handoffs
+    interleave their events, so the payloads are compared as multisets: unchanged means the
+    received texts are the sent texts, each as often as it was sent. `gated` runs append a
+    pinned-rules block to a delegation; it is cut off before comparing. A handoff the gate
+    replaced with its own message (a fail-closed reply) differs from what was sent and so is not
+    unchanged.
     """
-    sent = [e.content for e in trace if isinstance(e, BoundaryOut) and e.boundary == boundary]
-    got = [e.content for e in trace if isinstance(e, BoundaryIn) and e.boundary == boundary]
-    if not got or len(sent) != len(got):
-        return False
     pinned = gated and boundary.startswith("delegation:")
-    for out, received in zip(sent, got, strict=True):
-        if pinned and _PIN_MARK in received:
-            received = received[: received.rindex(_PIN_MARK)]
-        if out.strip() != received.strip():
-            return False
-    return True
+    sent: Counter[str] = Counter()
+    got: Counter[str] = Counter()
+    for e in trace:
+        if e.boundary != boundary:
+            continue
+        if isinstance(e, BoundaryOut):
+            sent[e.content.strip()] += 1
+        elif isinstance(e, BoundaryIn):
+            received = e.content
+            if pinned and _PIN_MARK in received:
+                received = received[: received.rindex(_PIN_MARK)]
+            got[received.strip()] += 1
+    return bool(got) and sent == got
 
 
 def text_noop(folder: Path, record: RunRecord) -> bool:

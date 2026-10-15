@@ -291,6 +291,43 @@ def test_unchanged_at_target(pairs, gated, expected):
     assert noop.unchanged_at_target(trace_of(*pairs), BOUNDARY, gated=gated) is expected
 
 
+def interleaved(*events, boundary=BOUNDARY):
+    """boundary_out / boundary_in events in the order given: ("out", text) or ("in", text)."""
+    common = dict(
+        run_id="r",
+        arm=Arm.mutated,
+        operator=Operator.compress_100,
+        boundary=boundary,
+        model_id="m",
+        safe_config_hash="s",
+        ledger_hash="l",
+    )
+    kinds = {"out": (BoundaryOut, "planner"), "in": (BoundaryIn, "coder")}
+    return [
+        kinds[kind][0](step=step, agent=kinds[kind][1], content=text, **common)
+        for step, (kind, text) in enumerate(events)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        # two concurrent delegations, written out(A) out(B) in(B) in(A): neither was changed
+        ([("out", "A"), ("out", "B"), ("in", "B"), ("in", "A")], True),
+        # the same shape, but the operator changed A on its way in
+        ([("out", "A"), ("out", "B"), ("in", "B"), ("in", "A2")], False),
+        # a duplicate payload must be matched as often as it was sent
+        ([("out", "A"), ("out", "A"), ("in", "A"), ("in", "B")], False),
+        ([("out", "A"), ("out", "A"), ("in", "A"), ("in", "A")], True),
+    ],
+)
+def test_concurrent_handoffs_are_matched_as_a_set_not_by_arrival_order(events, expected):
+    # Breaks if outgoing and incoming payloads are paired by position: the gate writes the two
+    # events of one handoff separately, so concurrent handoffs interleave (out A, out B, in B,
+    # in A) and an unchanged run would be pooled as a mutation.
+    assert noop.unchanged_at_target(interleaved(*events), BOUNDARY, gated=False) is expected
+
+
 def test_unchanged_at_target_ignores_other_boundaries():
     # Breaks if a handoff at another boundary stands in for the target's.
     other = trace_of(("Fix it.", "Fix it."), boundary="delegation:planner->reviewer")
@@ -335,6 +372,22 @@ def test_stats_counts_a_finished_run_whose_operator_changed_nothing_as_mutation_
     got = load_runs([tmp_path])
     assert sorted(r.record.run_id for r in got.runs) == ["c-changed", "d-no-trace", "e-natural"]
     assert (got.unreadable, got.errored, got.noop) == (0, 0, 2)
+
+
+def test_sweep_status_counts_a_finished_run_whose_operator_changed_nothing_as_noop(tmp_path):
+    # Breaks if sweep status shows an unchanged compress run as an ordinary scored record while
+    # stats drops it as mutation_noop: the two would count different samples for one cell. The
+    # run is still an attempt, so --top-up does not replace it.
+    same = trace_of(("Fix it.", "Fix it."))
+    changed = trace_of(("Fix it. Keep out.", "Fix it."))
+    write_run_folder(tmp_path, "r-a-same", same, arm="mutated", operator="compress_100")
+    write_run_folder(tmp_path, "r-b-changed", changed, arm="mutated", operator="compress_100")
+    found = sweep_status.scan(tmp_path)
+    ((key, row),) = sweep_status.status_rows(found).items()
+    assert key[:3] == ("T1", "mutated", "compress_100")
+    assert (row.records, row.errored, row.noop) == (1, 0, 1)
+    assert len(found.attempts) == 2
+    assert load_runs([tmp_path]).noop == 1  # stats agrees
 
 
 def test_load_runs_counts_only_the_gates_error_type_as_a_noop(tmp_path):
