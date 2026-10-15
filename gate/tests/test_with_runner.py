@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage
 from common.env import REPO_ROOT
 from common.llm import get_model
 from gate import build_middleware
+from gate.tests.stubs import picks
 from ledger import ledger_hash, load_ledger
 from oracle import evaluate
 from refapp.team import build_team
@@ -116,7 +117,7 @@ def test_runner_with_the_real_gate_and_oracle_writes_a_record(tmp_path, monkeypa
     backend = LocalShellBackend(
         root_dir=tmp_path, virtual_mode=True, inherit_env=True, env={"PATH": path}
     )
-    helper = get_model("helper", stub_responses=["Add a priority."])
+    helper = get_model("helper", stub_responses=[picks(2)])
     full = load_ledger(REPO_ROOT / "nemogate.yaml")
 
     def backend_for(session):
