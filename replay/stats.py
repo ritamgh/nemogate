@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from replay.carriage import Label
+from replay.noop import is_noop_error, text_noop
 from schemas.enums import Arm
 from schemas.ledger import Ledger, load_ledger_yaml
 from schemas.run import RunRecord, is_comparable
@@ -117,25 +118,41 @@ def _read_run(folder: Path) -> LoadedRun | None:
     return LoadedRun(record, label=label, fork_source=fork_source)
 
 
-def load_runs(paths: Iterable[Path | str]) -> tuple[list[LoadedRun], int, int]:
-    """(readable runs, run folders whose files are missing or invalid, errored run folders).
+def _is_noop_error(folder: Path) -> bool:
+    """True if `folder/error.json` says the gate had nothing to mutate (replay/noop.py)."""
+    try:
+        return is_noop_error(json.loads((folder / "error.json").read_bytes())["error_type"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def load_runs(paths: Iterable[Path | str]) -> tuple[list[LoadedRun], int, int, int]:
+    """(readable runs, run folders whose files are missing or invalid, errored run folders,
+    mutation no-ops).
 
     A folder with error.json and no record.json is an errored run (the runner caught the
-    exception and carried on); it is not "unreadable". FileNotFoundError if a path is not a
-    directory.
+    exception and carried on); it is not "unreadable". If that error is the gate's
+    NothingToMutate it is a no-op instead, and so is a finished run whose operator left its
+    target handoff as it was (`replay.noop.text_noop`); neither is in the runs returned.
+    FileNotFoundError if a path is not a directory.
     """
     runs: list[LoadedRun] = []
-    unreadable = errored = 0
+    unreadable = errored = noop = 0
     for folder in _run_dirs(paths):
         if not (folder / "record.json").exists() and (folder / "error.json").is_file():
-            errored += 1
+            if _is_noop_error(folder):
+                noop += 1
+            else:
+                errored += 1
             continue
         run = _read_run(folder)
         if run is None:
             unreadable += 1
+        elif text_noop(folder, run.record):
+            noop += 1
         else:
             runs.append(run)
-    return runs, unreadable, errored
+    return runs, unreadable, errored, noop
 
 
 # ---------------------------------------------------------------- aggregation
@@ -229,10 +246,12 @@ def aggregate(
     *,
     unreadable: int,
     errored: int = 0,
+    noop: int = 0,
     ledger: Ledger,
     extraction_recall: float | None,
 ) -> dict[str, Any]:
-    """The results dict (format_version 1) for `runs` and the `unreadable` and `errored` folders."""
+    """The results dict (format_version 1) for `runs` and the `unreadable`, `errored` and `noop`
+    (mutation no-op) folders."""
     group = _pooled_group(runs)
     pooled = sorted(
         (run for run in group if run.label != Label.NOT_EXERCISED), key=lambda r: r.record.run_id
@@ -240,6 +259,7 @@ def aggregate(
     inconclusive = {
         "unreadable_record": unreadable,
         "run_error": errored,
+        "mutation_noop": noop,
         "not_comparable": len(runs) - len(group),
         "not_exercised": len(group) - len(pooled),
     }
@@ -289,7 +309,7 @@ def aggregate(
             "lockfile_hash": head.lockfile_hash,
         },
         "runs": {
-            "found": len(runs) + unreadable + errored,
+            "found": len(runs) + unreadable + errored + noop,
             "pooled": len(pooled),
             "inconclusive": inconclusive,
         },
@@ -334,15 +354,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         recall = None if args.extraction_recall is None else _read_recall(args.extraction_recall)
         ledger = load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
-        runs, unreadable, errored = load_runs(args.paths)
+        runs, unreadable, errored, noop = load_runs(args.paths)
         results = aggregate(
-            runs, unreadable=unreadable, errored=errored, ledger=ledger, extraction_recall=recall
+            runs,
+            unreadable=unreadable,
+            errored=errored,
+            noop=noop,
+            ledger=ledger,
+            extraction_recall=recall,
         )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         # FileNotFoundError, bad recall, bad ledger (YAML or schema), unknown constraint id
         print(f"stats: {' '.join(str(exc).split())}", file=sys.stderr)
         return 2
-    if not runs and not unreadable and not errored:
+    if not runs and not unreadable and not errored and not noop:
         print("stats: no run folders found; writing an empty result", file=sys.stderr)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_bytes(render(results).encode("utf-8"))

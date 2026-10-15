@@ -1,7 +1,8 @@
 """Sweep accounting: what a runs directory already holds, cell by cell.
 
 `uv run python -m replay.sweep_status --runs-dir DIR [--tasks ID...]` prints one row per
-(task, arm, operator, reproducibility group): finished records, errored runs, and among the
+(task, arm, operator, reproducibility group): finished records, errored runs, mutation no-ops
+(runs the gate refused to record because its drop or hedge had nothing to change), and among the
 records the violations of the target constraint and the task successes. Offline: it reads
 files only. The same scan feeds `python -m replay.runner --top-up` (replay/README.md,
 "sweep_status.py").
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from replay.app import pairs
+from replay.noop import is_noop_error
 from schemas.enums import Arm, Operator
 from schemas.run import RunRecord
 
@@ -52,6 +54,7 @@ class Attempt:
     cell: Cell
     group: str  # group_key of the run's reproducibility fields
     errored: bool  # error.json and no record.json
+    noop: bool = False  # ... and the error is the gate's NothingToMutate (replay/noop.py)
     seed: int | None = None  # run_config.json's seed; None if that file is missing or unusable
     violated: bool = False  # the record lists its target constraint (records only)
     success: bool = False  # the record's task_success (records only)
@@ -96,7 +99,14 @@ def _read_attempt(folder: Path) -> Attempt | None:
         cell = (data["task_id"], Arm(data["arm"]).value, Operator(data["operator"]).value)
         if not isinstance(data["task_id"], str) or not isinstance(data["model_ids"], dict):
             return None
-        return Attempt(folder.name, cell, group_key(data), errored=True, seed=_read_seed(folder))
+        return Attempt(
+            folder.name,
+            cell,
+            group_key(data),
+            errored=True,
+            noop=is_noop_error(data.get("error_type")),
+            seed=_read_seed(folder),
+        )
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
@@ -172,6 +182,7 @@ def top_up_plan(
 class _Row:
     records: int = 0
     errored: int = 0
+    noop: int = 0
     violations: int = 0
     successes: int = 0
 
@@ -187,7 +198,9 @@ def status_rows(found: Scan, task_ids: Sequence[str] | None = None) -> dict[tupl
         if task_ids and a.cell[0] not in task_ids:
             continue
         row = rows.setdefault((*a.cell, group_hash(a.group)), _Row())
-        if a.errored:
+        if a.noop:
+            row.noop += 1
+        elif a.errored:
             row.errored += 1
         else:
             row.records += 1
@@ -208,11 +221,27 @@ def _group_line(key: str) -> str:
 
 def render(found: Scan, task_ids: Sequence[str] | None = None) -> str:
     rows = status_rows(found, task_ids)
-    header = ("task", "arm", "operator", "group", "records", "errored", "violations", "successes")
+    header = (
+        "task",
+        "arm",
+        "operator",
+        "group",
+        "records",
+        "errored",
+        "noop",
+        "violations",
+        "successes",
+    )
     table = [header]
     for key, row in rows.items():
         table.append(
-            (*key, *(str(v) for v in (row.records, row.errored, row.violations, row.successes)))
+            (
+                *key,
+                *(
+                    str(v)
+                    for v in (row.records, row.errored, row.noop, row.violations, row.successes)
+                ),
+            )
         )
     widths = [max(len(line[i]) for line in table) for i in range(len(header))]
     lines = [
