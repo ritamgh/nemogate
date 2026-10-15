@@ -15,7 +15,7 @@ from uuid import UUID
 import pytest
 from langchain_core.messages import AIMessage
 
-from common import env
+from common import ConfigError, MissingEnvError, SpendCapReached, env
 from common.spend import append_spend
 from replay import record, runner
 from replay.runner import Runner
@@ -81,8 +81,8 @@ class FakeMiddleware:
 
 
 class FakeGraph:
-    def __init__(self, session, run_config, checkpointer, behaviour):
-        self.session, self.run_config = session, run_config
+    def __init__(self, session, run_config, checkpointer, behaviour, number=0):
+        self.session, self.run_config, self.number = session, run_config, number
         self.checkpointer, self.behaviour = checkpointer, behaviour
         self.invoked: list[tuple] = []
         self.state_configs: list[dict] = []
@@ -92,6 +92,10 @@ class FakeGraph:
         await self.checkpointer.setup()  # creates the real sqlite file
         if self.behaviour.get("raises"):
             raise ValueError(self.behaviour["raises"])
+        if self.number in self.behaviour.get("raises_on", ()):  # the n-th run built (1-based)
+            raise ValueError(f"boom in run {self.number}")
+        if self.number in self.behaviour.get("stops_on", {}):
+            raise self.behaviour["stops_on"][self.number]
         if "trace_text" in self.behaviour:
             Path(self.run_config.trace_path).write_text(self.behaviour["trace_text"])
         elif self.behaviour.get("write_trace", True):
@@ -194,6 +198,7 @@ class FakeApp:
         self.graph: FakeGraph | None = None
         self.built: dict = {}
         self.success_calls: list[tuple] = []
+        self.builds = 0
 
     def tasks(self):
         return [FakeTask("X1", "C-001"), FakeTask("X2", "C-002")]
@@ -203,8 +208,9 @@ class FakeApp:
 
     def build(self, backend, *, middleware, subagent_middleware, checkpointer):
         self.built = {"middleware": middleware, "subagent_middleware": subagent_middleware}
+        self.builds += 1
         self.graph = FakeGraph(
-            backend.session, middleware[0].run_config, checkpointer, self.behaviour
+            backend.session, middleware[0].run_config, checkpointer, self.behaviour, self.builds
         )
         return self.graph
 
@@ -724,8 +730,14 @@ def test_cli_with_yes_runs_and_prints_one_line_per_record(monkeypatch, capsys):
     monkeypatch.setattr(runner, "is_live", lambda: True)
     got = []
 
-    def fake_run(task_ids, arms, operators, n, repo_ref):
-        got.append((task_ids, arms, operators, n, repo_ref))
+    class FakeDefaultRunner:
+        errors: list = []
+
+        def run(self, task_ids, arms, operators, n, repo_ref):
+            got.append((task_ids, arms, operators, n, repo_ref))
+            return fake_records()
+
+    def fake_records():
         return [
             RunRecord(
                 run_id="r-1",
@@ -748,7 +760,7 @@ def test_cli_with_yes_runs_and_prints_one_line_per_record(monkeypatch, capsys):
             )
         ]
 
-    monkeypatch.setattr(runner, "run", fake_run)
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: FakeDefaultRunner())
     assert runner.main([*CLI_ARGS, "--repo-ref", "v1", "--yes"]) == 0
     assert got == [
         (["X1", "X2"], [Arm.natural, Arm.gated], [Operator.none, Operator.drop], 3, "v1")
@@ -768,6 +780,8 @@ def test_cli_runs_dir_sends_the_run_folders_to_that_directory(monkeypatch, tmp_p
     seen = []
 
     class FakeDefaultRunner:
+        errors: list = []
+
         def run(self, *args):
             seen.append(args)
             return []
@@ -937,3 +951,258 @@ def test_carriage_json_is_unknown_when_nothing_was_delegated(tmp_path, monkeypat
     carriage = run_natural(tmp_path, {}, monkeypatch)
     assert carriage["label"] == "UNKNOWN"
     assert carriage["knobs"] == {"NEMOGATE_COMPACT_TOKENS": None, "NEMOGATE_COMPACT_KEEP": None}
+
+
+# ---- a sweep carries on past a crashed run ----------------------------------------------------
+
+
+def sweep_three(h: Harness):
+    """Three natural runs of one task, all on the fake gate, app and Contree."""
+    return h.runner.run(["X1"], [Arm.natural], [Operator.none], 3, "HEAD")
+
+
+def error_folders(h: Harness) -> list[Path]:
+    return sorted(p for p in h.runs_dir.iterdir() if (p / "error.json").exists())
+
+
+def test_arun_carries_on_past_a_run_that_raises_and_writes_error_json(tmp_path):
+    # Breaks if one crashed run still stops the sweep, leaves no error.json, or loses the
+    # conditions (reproducibility fields) a top-up needs to attribute the attempt.
+    h = Harness(tmp_path, {"raises_on": {2}})
+    records = sweep_three(h)
+
+    assert len(records) == 2
+    assert h.app.builds == 3  # the third run still started
+    (bad,) = error_folders(h)
+    assert not (bad / "record.json").exists()
+    assert sorted(p.name for p in h.runs_dir.iterdir()) == sorted(
+        [bad.name, *(r.run_id for r in records)]
+    )
+    data = json.loads((bad / "error.json").read_text())
+    config = load_config(ROOT / "config.yaml")
+    assert data == {
+        "run_id": bad.name,
+        "task_id": "X1",
+        "arm": "natural",
+        "operator": "none",
+        "constraint_id": "C-001",
+        "boundary": "delegation:planner->coder",
+        "model_ids": {role.value: config.models[role].id for role in Role},
+        "safe_config_hash": SAFE_CONFIG_HASH,
+        "ledger_hash": LEDGER_HASH,
+        "repo_sha": head_sha(),
+        "lockfile_hash": hashlib.sha256((ROOT / "uv.lock").read_bytes()).hexdigest()[:12],
+        "error_type": "builtins.ValueError",
+        "message": "boom in run 2",
+        "traceback_tail": data["traceback_tail"],
+    }
+    tail = data["traceback_tail"].splitlines()
+    assert tail[-1] == "ValueError: boom in run 2"
+    assert len(tail) <= 20
+    assert [(e.run_id, e.error_type) for e in h.runner.errors] == [
+        (bad.name, "builtins.ValueError")
+    ]
+    assert h.runner.records == records
+
+
+def test_error_json_keeps_only_the_last_twenty_traceback_lines(tmp_path):
+    # Breaks if a deep traceback is written whole, or cut from the wrong end.
+    h = Harness(tmp_path)
+    error = ValueError("deep")
+    text = "".join(f"frame {i}\n" for i in range(100)) + "ValueError: deep\n"
+    task = h.app.tasks()[0]
+    run_dir = h.runs_dir / "r-x"
+    run_dir.mkdir(parents=True)
+    repro = h.runner.reproducibility("HEAD")
+    runner._write_error(run_dir, task, Arm.natural, Operator.none, repro, error, text)
+    tail = json.loads((run_dir / "error.json").read_text())["traceback_tail"].splitlines()
+    assert tail == [*(f"frame {i}" for i in range(81, 100)), "ValueError: deep"]
+
+
+def test_error_json_creates_the_run_folder_when_the_run_died_before_it_existed(
+    tmp_path, monkeypatch
+):
+    # Breaks if a failure before the run folder exists loses the error (or raises a second,
+    # unrelated FileNotFoundError that hides it).
+    h = Harness(tmp_path)
+
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(record, "write_ledger", fail)
+    records = h.runner.run(["X1"], [Arm.natural], [Operator.none], 1, "HEAD")
+    assert records == []
+    (bad,) = error_folders(h)
+    assert json.loads((bad / "error.json").read_text())["error_type"] == "builtins.OSError"
+
+
+@pytest.mark.parametrize(
+    "stop",
+    [
+        SpendCapReached("Spend cap reached"),
+        ConfigError("config.yaml leaves a value null"),
+        MissingEnvError("NEBIUS_API_KEY is unset"),
+    ],
+    ids=["spend-cap", "config", "missing-env"],
+)
+def test_arun_stops_for_a_failure_no_later_run_can_avoid_and_writes_no_error_json(tmp_path, stop):
+    # Breaks if a spend-cap refusal (AGENTS rule 3: stop and tell a human) or a config failure
+    # is swallowed like an ordinary crash, so the sweep keeps going or counts it as an attempt.
+    h = Harness(tmp_path, {"stops_on": {2: stop}})
+    with pytest.raises(type(stop)):
+        sweep_three(h)
+    assert h.app.builds == 2  # run 3 never started
+    assert error_folders(h) == []
+    assert len(h.runner.records) == 1 and h.runner.errors == []
+    assert len(list(h.runs_dir.iterdir())) == 2  # the finished run and the stopped one
+
+
+def test_arun_stops_when_the_spend_cap_is_only_the_cause_of_the_error(tmp_path):
+    # Breaks if a library that wraps the cap error (raise ... from cap) turns it into an
+    # ordinary crash that the sweep carries on past.
+    try:
+        raise SpendCapReached("Spend cap reached")
+    except SpendCapReached as cap:
+        wrapped = RuntimeError("tool node failed")
+        wrapped.__cause__ = cap
+    h = Harness(tmp_path, {"stops_on": {1: wrapped}})
+    with pytest.raises(RuntimeError, match="tool node failed"):
+        sweep_three(h)
+    assert h.app.builds == 1
+    assert error_folders(h) == []
+
+
+def test_arun_stops_for_an_error_before_a_run_begins_and_writes_nothing(tmp_path):
+    # Breaks if a stale or dirty checkout is recorded as a failed attempt run after run.
+    h = Harness(tmp_path)
+    with pytest.raises(ValueError, match="checkout"):
+        h.runner.run(["X1"], [Arm.natural], [Operator.none], 3, "HEAD~1")
+    assert not h.runs_dir.exists()
+    assert h.runner.errors == []
+
+
+def test_a_single_run_one_that_raises_still_raises_and_leaves_error_json(tmp_path):
+    h = Harness(tmp_path, {"raises": "boom"})
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(h.run_one())
+    assert json.loads((h.run_dir() / "error.json").read_text())["message"] == "boom"
+
+
+def cli_with(h: Harness, monkeypatch, *args: str) -> int:
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: h.runner)
+    return runner.main(["--arms", "natural", "--operators", "none", "--repo-ref", "HEAD", *args])
+
+
+def test_cli_prints_the_error_summary_and_exits_1_when_a_run_errored(tmp_path, monkeypatch, capsys):
+    # Breaks if a sweep with a crashed run exits 0 (a script would call it clean) or hides
+    # which runs failed and why.
+    h = Harness(tmp_path, {"raises_on": {2}})
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "--n", "3", "--yes") == 1
+    (bad,) = error_folders(h)
+    lines = capsys.readouterr().out.splitlines()
+    assert "runs: 2 ok, 1 errored" in lines
+    assert (
+        f"errored {bad.name} task=X1 arm=natural operator=none error_type=builtins.ValueError"
+        in (lines)
+    )
+
+
+def test_cli_exits_0_when_every_run_finished(tmp_path, monkeypatch, capsys):
+    h = Harness(tmp_path)
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "--n", "2", "--yes") == 0
+    assert "runs: 2 ok, 0 errored" in capsys.readouterr().out.splitlines()
+
+
+def test_cli_reports_a_spend_cap_stop_and_exits_3(tmp_path, monkeypatch, capsys):
+    # Breaks if the cap hit ends in a bare traceback with no word on what finished first.
+    h = Harness(tmp_path, {"stops_on": {2: SpendCapReached("Spend cap reached: $1 spent")}})
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "--n", "3", "--yes") == 3
+    out = capsys.readouterr()
+    assert "stopped: Spend cap reached: $1 spent" in out.err
+    assert "runs: 1 ok, 0 errored before the stop" in out.out.splitlines()
+
+
+# ---- --top-up ---------------------------------------------------------------------------------
+
+
+def run_dirs_by_cell(h: Harness) -> dict[tuple[str, int], int]:
+    """(task id, seed) -> number of run folders holding that run config."""
+    counts: dict[tuple[str, int], int] = {}
+    for folder in h.runs_dir.iterdir():
+        config = json.loads((folder / "run_config.json").read_text())
+        key = (config["task_id"], config["seed"])
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def test_cli_top_up_runs_only_the_shortfall_and_counts_errored_runs_as_attempts(
+    tmp_path, monkeypatch, capsys
+):
+    # Breaks if top-up reruns full cells, retries an errored run (biasing the sample), or
+    # restarts seeds at 0 so the new runs repeat the old ones' seeds.
+    h = Harness(tmp_path, {"raises_on": {2}})
+    h.runner.run(["X1"], [Arm.natural], [Operator.none], 3, "HEAD")  # 2 records + 1 error
+    capsys.readouterr()
+
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "X2", "--n", "4", "--top-up") == 1  # no --yes
+    out = capsys.readouterr().out.splitlines()
+    assert out == [
+        "X1 natural none: existing 3, planned 1",
+        "X2 natural none: existing 0, planned 4",
+        "planned runs: 5",
+    ]
+    assert h.app.builds == 3  # planning ran nothing
+
+    h.app.behaviour = {}
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "X2", "--n", "4", "--top-up", "--yes") == 0
+    assert h.app.builds == 3 + 5
+    assert run_dirs_by_cell(h) == {
+        ("X1", 0): 1,
+        ("X1", 1): 1,
+        ("X1", 2): 1,
+        ("X1", 3): 1,  # the one new X1 run: seeds continue after the three attempts
+        ("X2", 0): 1,
+        ("X2", 1): 1,
+        ("X2", 2): 1,
+        ("X2", 3): 1,
+    }
+    assert "runs: 5 ok, 0 errored" in capsys.readouterr().out.splitlines()
+
+
+def test_cli_top_up_of_a_full_cell_plans_nothing_and_runs_nothing(tmp_path, monkeypatch, capsys):
+    h = Harness(tmp_path)
+    h.runner.run(["X1"], [Arm.natural], [Operator.none], 2, "HEAD")
+    capsys.readouterr()
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "--n", "2", "--top-up", "--yes") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[:2] == ["X1 natural none: existing 2, planned 0", "planned runs: 0"]
+    assert h.app.builds == 2
+
+
+def test_cli_top_up_ignores_runs_made_under_other_reproducibility_fields(
+    tmp_path, monkeypatch, capsys
+):
+    # Breaks if runs from another commit are counted, so a new commit's sweep looks complete.
+    h = Harness(tmp_path)
+    (first,) = [r.run_id for r in h.runner.run(["X1"], [Arm.natural], [Operator.none], 1, "HEAD")]
+    path = h.runs_dir / first / "record.json"
+    data = json.loads(path.read_text())
+    data["repo_sha"] = "0" * 40
+    path.write_text(json.dumps(data))
+    capsys.readouterr()
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "--n", "1", "--top-up") == 1
+    assert capsys.readouterr().out.splitlines()[0] == "X1 natural none: existing 0, planned 1"
+
+
+def test_cli_top_up_refuses_a_checkout_that_is_not_the_ref(tmp_path, monkeypatch, capsys):
+    h = Harness(tmp_path)
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: h.runner)
+    code = runner.main(
+        ["--tasks", "X1", "--arms", "natural", "--operators", "none", "--n", "1", "--top-up"]
+        + ["--repo-ref", "HEAD~1", "--yes"]
+    )
+    assert code == 2
+    assert "checkout" in capsys.readouterr().err
+    assert h.app.builds == 0
