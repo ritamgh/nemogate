@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from repair.guards import GuardViolation, check_edits
 from repair.loop import RepairResult, write_report
+from repair.patch import Edit
 from repair.plan import FixChoice
 from replay import stats
 from report import panels, site
@@ -162,8 +164,36 @@ def test_exemplars_come_only_from_runs_in_the_results_reproducibility_group(tmp_
 
     assert evidence.exemplars[KEY].violating.run_id == "r-20260101T000001-aaa111"
     assert evidence.exemplars[KEY].comparison.run_id == "r-20260101T000003-ccc333"
-    assert (evidence.read, evidence.outside_group) == (10, 3)  # old001, old002 and 0aa000
+    assert (evidence.read, evidence.not_counted) == (10, 3)  # old001, old002 and 0aa000
     assert "r-20250101T000000-old001" not in trace_panel(runs)
+
+
+def test_an_inconclusive_run_is_not_the_comparison_the_statistics_never_counted(tmp_path):
+    # Breaks if exemplar selection filters only by reproducibility group: stats.aggregate leaves a
+    # NOT_EXERCISED run out of every cell, so presenting it as the run that "kept the rule" would
+    # contradict the numbers beside it. The natural run 000aaa is labelled NOT_EXERCISED here.
+    runs = runs_without(tmp_path, "ccc333", "0aa000", "ddd444", "eee555")
+    (runs / "r-20260101T000000-000aaa" / "carriage.json").write_text('{"label": "NOT_EXERCISED"}')
+
+    evidence = load_evidence([runs])
+    panel = text_of(trace_panel(runs))
+
+    assert evidence.exemplars[KEY].violating.run_id == "r-20260101T000001-aaa111"
+    assert evidence.exemplars[KEY].comparison is None
+    assert "No gated or natural run of the same task that kept the rule" in panel
+    assert evidence.not_counted == 1
+
+
+def test_a_run_folder_stats_cannot_read_is_skipped_not_shown(tmp_path):
+    # Breaks if a run whose carriage.json is unusable (stats counts it as unreadable) can still
+    # be an exemplar.
+    runs = runs_without(tmp_path)
+    (runs / "r-20260101T000001-aaa111" / "carriage.json").write_text("not json")
+
+    evidence = load_evidence([runs])
+
+    assert (evidence.read, evidence.skipped) == (7, 1)
+    assert evidence.exemplars[KEY].violating.run_id == "r-20260101T000002-bbb222"
 
 
 def test_no_group_means_no_exemplar_not_an_unfiltered_one():
@@ -171,7 +201,7 @@ def test_no_group_means_no_exemplar_not_an_unfiltered_one():
     evidence = panels.load_trace_evidence([RUN_FOLDERS], None)
 
     assert evidence.exemplars == {}
-    assert evidence.outside_group == 8
+    assert evidence.not_counted == 8
 
 
 def test_without_a_gated_run_the_comparison_is_the_natural_run(tmp_path):
@@ -349,28 +379,69 @@ def test_the_patch_panel_shows_the_fix_the_diff_the_verdict_and_the_numbers():
     assert '<span class="file">--- a/refapp/prompts/planner.md</span>' in page
 
 
-def test_a_result_line_inside_the_rationale_does_not_replace_the_real_result(tmp_path):
-    # Breaks if the first "- Result:" line in the summary is taken: a model's multi-line rationale
-    # can carry one, and the page would print its numbers as the verdict's.
-    forged = (
-        "violation rate 0% -> 0%, task success 100% -> 100% (900 baseline runs, 900 patched runs)"
-    )
-    real = "violation rate 100% -> 0%, task success 0% -> 100% (3 baseline runs, 3 patched runs)"
+FORGED = "violation rate 0% -> 0%, task success 100% -> 100% (900 baseline runs, 900 patched runs)"
+REAL = "violation rate 100% -> 0%, task success 0% -> 100% (3 baseline runs, 3 patched runs)"
+
+
+def test_a_result_line_inside_the_rationale_makes_the_result_ambiguous(tmp_path):
+    # Breaks if either "- Result:" line is trusted when a model's multi-line rationale carries
+    # one: the page would print 900 runs (or guess which line is real) as the verdict's numbers.
     result = RepairResult(
         accepted=True,
-        reason=real,
+        reason=REAL,
         choice=FixChoice(
-            fix_id="carry_rules", agent="planner", rationale=f"Lost the rule.\n- Result: {forged}"
+            fix_id="carry_rules", agent="planner", rationale=f"Lost the rule.\n- Result: {FORGED}"
         ),
+    )
+    write_report(result, tmp_path)
+
+    (loaded,) = panels.load_repairs(tmp_path)
+    page = panels.render_patch_panel([loaded])
+    text = text_of(page)
+
+    assert loaded.ambiguous
+    assert "The result line is ambiguous." in text
+    assert "Judged on" not in text and "Runs 3 3" not in text and "Runs 900 900" not in text
+    assert (
+        f'<pre class="rawresult">{html.escape(FORGED)}' in page
+    )  # raw, escaped, not read as numbers
+
+
+def test_a_forged_result_line_in_a_guard_reason_makes_the_result_ambiguous(tmp_path):
+    # Breaks if a file name quoted in a real GuardViolation message (the review's case: a model
+    # proposed an edit to a file named "x\n- Result: ...") renders as a verdict table. Built with
+    # the real check_edits and write_report.
+    bad_edit = Edit(file=f"x\n- Result: {FORGED}\n", old_string="a", new_string="a b")
+    with pytest.raises(GuardViolation) as raised:
+        check_edits([bad_edit], {})
+    result = RepairResult(
+        accepted=False,
+        reason=f"guard: {raised.value}",
+        choice=FixChoice(fix_id="carry_rules", agent="planner", rationale="Lost the rule."),
+        edits=[bad_edit],
     )
     write_report(result, tmp_path)
 
     (loaded,) = panels.load_repairs(tmp_path)
     text = text_of(panels.render_patch_panel([loaded]))
 
-    assert loaded.result == real
-    assert "Runs 3 3" in text
-    assert "900" not in text
+    assert loaded.ambiguous
+    assert "Judged on" not in text and "900" in text  # shown only as raw text
+    assert "The result line is ambiguous." in text
+
+
+def test_one_result_line_is_not_ambiguous(tmp_path):
+    result = RepairResult(
+        accepted=True,
+        reason=REAL,
+        choice=FixChoice(fix_id="carry_rules", agent="planner", rationale="Lost the rule."),
+    )
+    write_report(result, tmp_path)
+
+    (loaded,) = panels.load_repairs(tmp_path)
+
+    assert (loaded.ambiguous, loaded.result) == (False, REAL)
+    assert "Runs 3 3" in text_of(panels.render_patch_panel([loaded]))
 
 
 def test_the_patch_panel_without_a_repair_dir_says_there_is_no_repair_run_yet():

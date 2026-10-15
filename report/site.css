@@ -119,6 +119,7 @@ details.trace>summary{cursor:pointer;font-weight:600}
 #coverage-h~h3{margin-top:1.4rem}
 .rules{margin:.4rem 0;padding-left:1.2rem;max-width:72ch}
 .repair{margin-top:20px}
+.rawresult{margin:6px 0 0;padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--rule);border-radius:8px;font:.82rem/1.5 var(--mono)}
 .patch{margin:12px 0 0;padding:10px 0;overflow-x:auto;background:var(--bg);border:1px solid var(--rule);border-radius:8px;font:.82rem/1.5 var(--mono)}
 .patch span{display:block;padding:0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .patch .add{background:var(--good-bg);color:var(--good-ink)}

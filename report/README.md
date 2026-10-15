@@ -64,8 +64,10 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
 - **Trace at the violating action** (`--runs`, run folders or folders of them): in each
   constraint's boundary section, the first violating `mutated` run by run id beside the first
   comparison run that kept the rule (a gated run with the same operator, else a natural run;
-  same task, rule and boundary, and `is_comparable`). Only runs in the results file's
-  `reproducibility` group are used, so the trace comes from the runs the numbers are made of.
+  same task, rule and boundary, and `is_comparable`). Only runs the statistics counted are
+  used: those in the results file's `reproducibility` group that `replay.stats` does not set aside
+  (`stats.is_exercised`; a folder it cannot read is skipped), so the trace comes from the runs
+  the numbers are made of.
   Each side shows the planner's text diffed against what the receiver got (a line tagged
   "(dropped)" was sent but lost, "(added)" was received but not sent; "nothing was changed in
   transit" is said only when the full payloads are equal, not just the shown part) and the action
@@ -73,8 +75,9 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   The comparison side says "No such call" when it never made the call. Trace text is escaped.
 - **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
   `.patch` beside it. Without `--repair` it says "No repair run yet". `repair` writes no
-  structured result, so the numbers are parsed from the `Result:` line `write_report` writes (the
-  last one above the `Diff:` line, so a `- Result:` inside a model's rationale is ignored). The
+  structured result, so the numbers are parsed from the `Result:` line `write_report` writes. If the summary has more than one line starting `- Result:` (a model's
+  rationale, or a file name quoted in a guard's reason, can forge one) the result is ambiguous:
+  no numbers table, the raw text is shown escaped. The
   summary does not say which constraint, arm or operator the numbers came from; the page says so.
 
 ## Natural runs page (`natural_runs.py`)

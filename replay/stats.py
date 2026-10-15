@@ -135,6 +135,12 @@ def load_runs(paths: Iterable[Path | str]) -> tuple[list[LoadedRun], int]:
 # ---------------------------------------------------------------- aggregation
 
 
+def is_exercised(run: LoadedRun) -> bool:
+    """False for a run whose carriage label says the rule never came up: it is left out of every
+    cell, though it still counts toward the comparable group's size."""
+    return run.label != Label.NOT_EXERCISED
+
+
 def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
     """The largest comparable group (`is_comparable`), empty if there are no runs.
 
@@ -152,7 +158,7 @@ def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
             groups.append([run])
 
     def rank(group: list[LoadedRun]) -> tuple[Any, ...]:
-        exercised = sum(run.label != Label.NOT_EXERCISED for run in group)
+        exercised = sum(is_exercised(run) for run in group)
         head = group[0].record
         ids = sorted((str(role), name) for role, name in head.model_ids.items())
         return (
@@ -227,9 +233,7 @@ def aggregate(
 ) -> dict[str, Any]:
     """The results dict (format_version 1) for `runs`, plus `unreadable` run folders."""
     group = _pooled_group(runs)
-    pooled = sorted(
-        (run for run in group if run.label != Label.NOT_EXERCISED), key=lambda r: r.record.run_id
-    )
+    pooled = sorted((run for run in group if is_exercised(run)), key=lambda r: r.record.run_id)
     inconclusive = {
         "unreadable_record": unreadable,
         "not_comparable": len(runs) - len(group),

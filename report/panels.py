@@ -19,6 +19,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from replay import stats
 from schemas.enums import Arm, Operator
 from schemas.ledger import Ledger
 from schemas.run import RunRecord, Violation, is_comparable
@@ -51,6 +52,7 @@ class RunView:
     events: tuple[Event, ...]  # the fork's prefix first, then its own events, steps renumbered
     fork_of: str | None
     prefix_len: int = 0  # events taken from prefix.jsonl; 0 for a run that is not a fork
+    exercised: bool = True  # False: its carriage label says the rule never came up (not counted)
 
     def at_step(self, step: int) -> Event | None:
         return next((ev for ev in self.events if ev.step == step), None)
@@ -67,7 +69,8 @@ class TraceEvidence:
     exemplars: dict[tuple[str, str], Exemplar]
     read: int  # run folders loaded
     skipped: int  # run folders with a config but no usable record or trace
-    outside_group: int = 0  # loaded folders that are not in the results' reproducibility group
+    not_counted: int = 0  # loaded folders the statistics did not count (other conditions, or
+    # inconclusive: the rule never came up)
 
 
 def _read_events(path: Path) -> list[Event]:
@@ -76,7 +79,12 @@ def _read_events(path: Path) -> list[Event]:
 
 def load_run(folder: Path) -> RunView:
     """One run folder. A fork's `violations.json` steps count `prefix.jsonl` first, then its own
-    `trace.jsonl` (replay/README.md), so the fork's events are renumbered to match."""
+    `trace.jsonl` (replay/README.md), so the fork's events are renumbered to match. A folder
+    `replay.stats` cannot read (bad record, fork.json or carriage.json) is a ValueError here too,
+    and its carriage label decides `exercised` with stats' own rule."""
+    loaded, unreadable = stats.load_runs([folder])
+    if unreadable or len(loaded) != 1:
+        raise ValueError(f"{folder}: replay.stats cannot read this run folder")
     record = RunRecord.model_validate_json((folder / "record.json").read_text(encoding="utf-8"))
     violations_path = folder / "violations.json"
     violations = (
@@ -93,7 +101,15 @@ def load_run(folder: Path) -> RunView:
     fork_of = (
         json.loads(fork_path.read_text("utf-8"))["source_run_id"] if fork_path.is_file() else None
     )
-    return RunView(folder.name, record, violations, tuple(prefix + own), fork_of, len(prefix))
+    return RunView(
+        folder.name,
+        record,
+        violations,
+        tuple(prefix + own),
+        fork_of,
+        len(prefix),
+        stats.is_exercised(loaded[0]),
+    )
 
 
 def load_runs(paths: list[Path]) -> tuple[list[RunView], int]:
@@ -173,11 +189,12 @@ def in_group(run: RunView, group: Mapping[str, Any] | None) -> bool:
 
 
 def load_trace_evidence(paths: list[Path], group: Mapping[str, Any] | None) -> TraceEvidence:
-    """Exemplars drawn only from runs in `group`, the `reproducibility` block of the results
-    file, so the trace shown comes from the runs the statistics beside it are made of."""
+    """Exemplars drawn only from the runs the statistics counted: those in `group` (the
+    `reproducibility` block of the results file) that `replay.stats` does not set aside as
+    inconclusive, so the trace shown comes from the runs the numbers beside it are made of."""
     runs, skipped = load_runs(paths)
-    inside = [r for r in runs if in_group(r, group)]
-    return TraceEvidence(pick_exemplars(inside), len(runs), skipped, len(runs) - len(inside))
+    counted = [r for r in runs if in_group(r, group) and r.exercised]
+    return TraceEvidence(pick_exemplars(counted), len(runs), skipped, len(runs) - len(counted))
 
 
 # --- the trace panel --------------------------------------------------------------------------
@@ -356,8 +373,8 @@ def render_trace_panel(ex: Exemplar | None, evidence: TraceEvidence) -> str:
         return (
             '<p class="note"><span class="notrun">Trace: no violating mutated run for this rule at '
             f"this boundary among the {e(evidence.read)} run folders read "
-            f"({e(evidence.skipped)} skipped as unreadable, {e(evidence.outside_group)} made "
-            "under other conditions than the runs counted above).</span></p>"
+            f"({e(evidence.skipped)} skipped as unreadable, {e(evidence.not_counted)} not "
+            "counted: made under other conditions, or the rule never came up).</span></p>"
         )
     boundary = ex.violating.record.boundary
     action_html, ev = violating_action(ex.violating)
@@ -400,21 +417,26 @@ class RepairView:
     why: str | None
     result: str
     diff: str | None  # None: the .patch file named by the summary is missing
+    ambiguous: bool = False  # more than one `- Result:` line: `result` is the raw text, unparsed
 
 
 def field_of(lines: list[str], key: str) -> str | None:
     return next((x[len(key) :] for x in lines if x.startswith(key)), None)
 
 
-def result_of(lines: list[str]) -> str | None:
-    """The reason `write_report` wrote: the last `- Result:` line above the last `- Diff:` line,
-    with any lines that continue it. Free text a model wrote (the rationale) sits above it and may
-    contain a `- Result:` line of its own; the first match would be that one."""
-    end = max((i for i, x in enumerate(lines) if x.startswith("- Diff: ")), default=len(lines))
-    start = max((i for i in range(end) if lines[i].startswith("- Result: ")), default=None)
-    if start is None:
+def result_of(lines: list[str]) -> tuple[str, bool] | None:
+    """The reason `write_report` wrote, with any lines that continue it up to the last `- Diff:`
+    line, and whether it is ambiguous. `write_report` writes exactly one `- Result:` line, but
+    text a model influenced (the rationale, or a file name quoted in a guard's reason) can hold
+    a line that looks like one. A summary with more than one is ambiguous: its raw text is
+    returned and nothing in it is trusted. None if there is no such line."""
+    starts = [i for i, x in enumerate(lines) if x.startswith("- Result: ")]
+    if not starts:
         return None
-    return "\n".join([lines[start][len("- Result: ") :], *lines[start + 1 : end]])
+    end = max((i for i, x in enumerate(lines) if x.startswith("- Diff: ")), default=len(lines))
+    first = starts[0]
+    text = "\n".join([lines[first][len("- Result: ") :], *lines[first + 1 : max(end, first + 1)]])
+    return text, len(starts) > 1
 
 
 def load_repairs(directory: Path) -> list[RepairView]:
@@ -428,9 +450,10 @@ def load_repairs(directory: Path) -> list[RepairView]:
         if head is None:
             raise ValueError(f"{summary}: not a repair summary (no '# Repair: Accepted|Rejected')")
         fix = next((m for m in map(FIX_RE.match, lines) if m), None)
-        result = result_of(lines)
-        if result is None:
+        parsed = result_of(lines)
+        if parsed is None:
             raise ValueError(f"{summary}: no '- Result:' line")
+        result, ambiguous = parsed
         patch = summary.with_suffix(".patch")
         repairs.append(
             RepairView(
@@ -440,6 +463,7 @@ def load_repairs(directory: Path) -> list[RepairView]:
                 agent=fix.group(2) if fix else None,
                 why=field_of(lines, "- Why: "),
                 result=result,
+                ambiguous=ambiguous,
                 diff=patch.read_text(encoding="utf-8") if patch.is_file() else None,
             )
         )
@@ -470,7 +494,7 @@ def render_repair(r: RepairView) -> str:
         if r.fix_id
         else "no fix was chosen"
     )
-    judged = JUDGED_RE.search((r.result.splitlines() or [""])[0])
+    judged = None if r.ambiguous else JUDGED_RE.search((r.result.splitlines() or [""])[0])
     numbers = ""
     if judged:
         v0, v1, s0, s1, n0, n1 = judged.groups()
@@ -502,10 +526,17 @@ def render_repair(r: RepairView) -> str:
         + "</span></p>"
     )
     why = f'<p class="note">Why: {e(r.why)}</p>' if r.why else ""
+    result = (
+        '<p class="note"><strong>The result line is ambiguous.</strong> The summary has more than '
+        "one line starting with &ldquo;- Result:&rdquo;, so none of it is read as numbers. Raw "
+        f'text:</p><pre class="rawresult">{e(r.result)}</pre>'
+        if r.ambiguous
+        else f'<p class="note">Result: {e(r.result)}</p>'
+    )
     return (
         f'<article class="constraint repair"><header><h3>{fix}</h3>'
         f'<span class="badge {"yes" if r.accepted else "no"}">{verdict}</span></header>'
-        f'{why}<p class="note">Result: {e(r.result)}</p>{numbers}{diff}</article>'
+        f"{why}{result}{numbers}{diff}</article>"
     )
 
 
