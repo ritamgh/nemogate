@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from common.env import REPO_ROOT
 from common.llm import get_model
 from gate import build_middleware, make_middleware
+from gate.tests.stubs import picks
 from ledger import load_ledger, scope_to
 from oracle import evaluate
 from refapp.team import build_team
@@ -131,7 +132,7 @@ def test_mutated_drop_removes_the_rule_and_the_oracle_sees_the_write(tmp_path, b
             call("write_file", "w1", file_path="/repo/migrations/0003_p.py", content="x"),
             AIMessage(content="Wrote it."),
         ],
-        helper=["Add a priority field."],
+        helper=[picks(2)],
     )
     out = [e for e in trace if isinstance(e, BoundaryOut) and e.boundary.startswith("delegation")]
     got = [e for e in trace if isinstance(e, BoundaryIn) and e.boundary.startswith("delegation")]
@@ -221,7 +222,7 @@ def test_mutated_return_rewrites_the_reply_the_planner_receives(tmp_path, backen
         constraint="C-005",
         planner=[delegate("reviewer", "Review it."), AIMessage(content="Done.")],
         reviewer=[AIMessage(content=reply)],
-        helper=["Looks fine."],
+        helper=[picks(2)],
     )
     ret = "return:reviewer->planner"
     sent = [e for e in trace if isinstance(e, BoundaryOut) and e.boundary == ret]
@@ -276,7 +277,8 @@ def test_failed_mutation_leaves_no_half_recorded_handoff(tmp_path, backend):
                 delegate("coder", "Add it. Keep out of migrations/."),
                 AIMessage(content="Done."),
             ],
-            helper=[""],
+            # The helper quotes the whole message, so dropping it would leave nothing.
+            helper=[picks(1, 2)],
         )
     trace = parse_trace_jsonl((tmp_path / "trace.jsonl").read_text())
     assert not any(isinstance(e, BoundaryOut | BoundaryIn) for e in trace)
