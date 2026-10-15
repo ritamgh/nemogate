@@ -54,10 +54,32 @@ BOUNDARY_RE = re.compile(r"^(delegation|return):(.+)->(.+)$")
 COMPACTION_RE = re.compile(r"^compaction:(.+)$")
 
 NODE_W, NODE_H = 140, 60
-COL_GAP, ROW_GAP = 130, 96
+COL_GAP, ROW_GAP = 150, 96
 MARGIN_X, MARGIN_Y = 28, 24
 CLUSTER_WARNING = (
     "Clustered: includes forked runs that share a source run, so this interval is too narrow."
+)
+CLUSTER_NOTE = (  # the same warning where it is visible text rather than a tooltip
+    "Not independent: includes forked runs that share a source run, so this range is too narrow."
+)
+KEY_ARMS = (
+    ("Natural", "no sabotage: the agents hand the rule on, or lose it, by themselves."),
+    ("Mutated", "the handoff is sabotaged by an operator and nothing guards the rule."),
+    (
+        "Block-only",
+        "sabotaged handoff, and the gate refuses an action that breaks the rule, without "
+        "sending the rule again.",
+    ),
+    (
+        "Gated",
+        "sabotaged handoff, and the gate both refuses a rule-breaking action and puts the "
+        "rule back into the handoff.",
+    ),
+)
+KEY_OPERATORS = (
+    ("drop", "the sentence that states the rule is removed from the handoff."),
+    ("hedge", "the rule is reworded as vague advice."),
+    ("compress_100", "the handoff is summarised to 100 words."),
 )
 SIDE_ARC = 52  # how far a same-column edge bows out to the right
 
@@ -151,18 +173,27 @@ def boundary_rate(cells_lists: list[list[dict[str, Any]]]) -> dict[str, Any]:
     return {"basis": None, "n": 0, "k": 0, "rate": None, "lo": None, "hi": None, "clustered": False}
 
 
+def is_graded(body: dict[str, Any]) -> bool:
+    """A rule can be graded only if it has a compiled check; without one no run can be flagged,
+    so its violation counts would be zeros that mean nothing."""
+    return bool(body.get("has_check"))
+
+
 def collect_boundaries(constraints: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Per boundary id: its pooled rate and the constraint ids (sorted) that have cells there."""
+    """Per boundary id: its pooled rate (graded constraints only) and the constraint ids (sorted)
+    that have cells there, graded or not."""
     cells_by: dict[str, list[list[dict[str, Any]]]] = {}
     owners: dict[str, list[str]] = {}
     for cid in sorted(constraints):
+        graded = is_graded(constraints[cid])
         for bid, body in constraints[cid].get("boundaries", {}).items():
-            cells_by.setdefault(bid, []).append(body.get("cells", []))
+            cells_by.setdefault(bid, []).extend([body.get("cells", [])] if graded else [])
             owners.setdefault(bid, []).append(cid)
     out = {}
-    for bid in sorted(cells_by):
+    for bid in sorted(owners):
         info = boundary_rate(cells_by[bid])
         info["constraints"] = owners[bid]
+        info["graded"] = [c for c in owners[bid] if is_graded(constraints[c])]
         info["parsed"] = parse_boundary(bid)
         out[bid] = info
     return out
@@ -223,16 +254,30 @@ def layout_agents(boundaries: dict[str, dict[str, Any]]) -> dict[str, tuple[int,
     return placed
 
 
-def edge_text(info: dict[str, Any]) -> str:
+def rate_text(info: dict[str, Any]) -> str:
     if info["basis"] is None:
         return "no data"
     return pct(info["rate"]) + (" natural" if info["basis"] == "natural" else "")
 
 
+def edge_text(info: dict[str, Any]) -> str:
+    """The pill on an edge: the rate and the runs behind it, so a pooled 50% is not read as the
+    5 of 10 on a card."""
+    if info["basis"] is None:
+        return "no data"
+    counts = f" {info['k']}/{info['n']}"
+    return pct(info["rate"]) + counts + (" natural" if info["basis"] == "natural" else "")
+
+
+def link_target(info: dict[str, Any], anchors: Anchors, bid: str) -> str:
+    """The card an edge links to: the first constraint that was graded here, else the first."""
+    return anchors.section((info["graded"] or info["constraints"])[0], bid)
+
+
 def edge_title(bid: str, info: dict[str, Any]) -> str:
     owners = ", ".join(info["constraints"])
     if info["basis"] is None:
-        return f"{bid}: no mutated or natural runs at this boundary. Constraints: {owners}."
+        return f"{bid}: no graded mutated or natural runs at this boundary. Constraints: {owners}."
     return (
         f"{bid}: {info['k']} of {info['n']} {info['basis']} runs violated the rule "
         f"({pct(info['rate'])}, 95% Wilson interval {pct_num(info['lo'])}% to "
@@ -346,7 +391,7 @@ def render_graph(boundaries: dict[str, dict[str, Any]], anchors: Anchors) -> str
         f'<svg class="graph" viewBox="0 0 {width:g} {height:g}" role="group" '
         f'aria-labelledby="graph-title" focusable="false">',
         '<title id="graph-title">Boundary graph: agents joined by the handoffs seen in the data, '
-        "each handoff coloured by its pooled violation rate</title>",
+        "each handoff coloured by its violation rate</title>",
         "<defs>",
     ]
     for b in [*(f"b{i}" for i in range(len(BIN_EDGES) + 1)), NO_DATA]:
@@ -361,7 +406,7 @@ def render_graph(boundaries: dict[str, dict[str, Any]], anchors: Anchors) -> str
     for bid, info, kind, d, mx, my, _ in shapes:
         cls = rate_bin(info["rate"]) if info["rate"] is not None else NO_DATA
         sw = 3 if info["rate"] is None else 3 + 6 * info["rate"]
-        target = anchors.section(info["constraints"][0], bid)
+        target = link_target(info, anchors, bid)
         text = edge_text(info)
         label = f"return {text}" if kind == "return" else text
         w = len(label) * 7.4 + 18
@@ -390,14 +435,14 @@ def render_graph(boundaries: dict[str, dict[str, Any]], anchors: Anchors) -> str
         if mark:
             bid, info = mark
             cls = rate_bin(info["rate"]) if info["rate"] is not None else NO_DATA
-            target = anchors.section(info["constraints"][0], bid)
+            target = link_target(info, anchors, bid)
             parts.append(
                 f'<a href="#{e(target)}" class="edge"><title>{e(edge_title(bid, info))}</title>'
                 f'<rect x="{x + 8:g}" y="{y + 36:g}" width="{NODE_W - 16}" height="19" rx="9.5" '
                 f'class="pill stroke-{cls}"/>'
                 f'<circle cx="{x + 20:g}" cy="{y + 45.5:g}" r="4.5" class="fill-{cls}"/>'
                 f'<text x="{x + 30:g}" y="{y + 49.5:g}" class="marktext">'
-                f"compaction {e(edge_text(info))}</text></a>"
+                f"compaction {e(rate_text(info))}</text></a>"
             )
         parts.append("</g>")
     parts.append("</g></svg>")
@@ -418,8 +463,9 @@ def render_legend(boundaries: dict[str, dict[str, Any]]) -> str:
     )
     return (
         '<ul class="legend" aria-label="Edge colour scale">' + "".join(items) + "</ul>"
-        '<p class="note">Edge colour, thickness and label all give the pooled violation rate '
-        "of the mutated runs at that boundary, over every constraint and operator there. "
+        '<p class="note">Edge colour, thickness and label all give how often the rule was broken '
+        "in the mutated runs at that boundary, over every graded constraint and operator there; "
+        "the label also gives the runs behind it (broken/total). "
         "Where a boundary has no mutated runs the natural runs are used and the label ends in "
         "&ldquo;natural&rdquo;. Straight edges are delegations; curved edges below the agents "
         "are returns. A boundary with neither kind of run shows &ldquo;no data&rdquo;, which "
@@ -433,14 +479,14 @@ def render_boundary_table(boundaries: dict[str, dict[str, Any]], anchors: Anchor
         p = info["parsed"]
         kind = p[0] if p else "unrecognised"
         if info["basis"] is None:
-            rate = "no data"
+            rate = "no data" if info["graded"] else "no data (no graded constraint here)"
         else:
             rate = (
                 f"{pct(info['rate'])} ({pct_num(info['lo'])}&ndash;{pct_num(info['hi'])}%), "
                 f"{e(info['basis'])} runs"
             )
             if info["clustered"]:
-                rate += f' <span class="warn">{e(CLUSTER_WARNING)}</span>'
+                rate += f' <span class="warn">{e(CLUSTER_NOTE)}</span>'
         links = ", ".join(
             f'<a href="#{e(anchors.section(cid, bid))}">{e(cid)}</a>' for cid in info["constraints"]
         )
@@ -450,13 +496,14 @@ def render_boundary_table(boundaries: dict[str, dict[str, Any]], anchors: Anchor
             f'<td class="num">{rate}</td><td class="num">{info["n"] or "&ndash;"}</td>'
             f"<td>{links}</td></tr>"
         )
-    return (
-        '<div class="tablewrap"><table class="plain"><caption>Every boundary in the data, as text'
+    return panels.tablewrap(
+        "Every boundary in the data, as a table",
+        '<table class="plain"><caption>Every boundary in the data, as text'
         '</caption><thead><tr><th scope="col">Boundary</th><th scope="col">Kind</th>'
-        '<th scope="col">Pooled violation rate</th><th scope="col">n</th>'
+        '<th scope="col">Violation rate, all graded constraints</th><th scope="col">n</th>'
         '<th scope="col">Constraint cards</th></tr></thead><tbody>'
         + "".join(rows)
-        + "</tbody></table></div>"
+        + "</tbody></table>",
     )
 
 
@@ -468,7 +515,7 @@ def short(value: Any) -> str:
     return f'<code title="{e(text)}">{e(text[:12])}</code>'
 
 
-def render_header(results: dict[str, Any]) -> str:
+def render_header(results: dict[str, Any], verdict: str) -> str:
     repro = results.get("reproducibility") or {}
     models = repro.get("model_ids") or {}
     model_items = (
@@ -503,21 +550,24 @@ def render_header(results: dict[str, Any]) -> str:
     )
     inconclusive_total = honesty.get("inconclusive_total", 0)
     if results["reproducibility"]:
-        group_note = "Only runs sharing all of these, and the hashes beside them, were pooled."
+        group_note = "Only runs made under exactly these conditions were counted."
     else:
-        group_note = "No runs were pooled, so there is no reproducibility group."
+        group_note = "No runs were counted, so there is no shared set of conditions."
     return f"""<header class="top">
 <h1>NemoGate results</h1>
 <p class="lead">Do the rules survive the handoffs between agents? Each boundary below was tested by
 sabotaging the handoff and counting how often the rule was then broken.</p>
+{verdict}
 </header>
+{render_key()}
 <section aria-labelledby="honesty-h" class="strip">
 <h2 id="honesty-h">What these numbers can and cannot tell you</h2>
 <ul class="honesty">
 <li><span class="v">{e(recall_text)}</span>
 <span class="k">extraction recall: how many of the seeded rules the extractor found</span></li>
 <li><span class="v">{e(with_check)} of {e(total)}</span>
-<span class="k">constraints have a compiled check; only those can be graded</span></li>
+<span class="k">rules can be graded: each has a compiled check, a program that decides
+pass or fail</span></li>
 <li><span class="v">{e(inconclusive_total)}</span>
 <span class="k">inconclusive runs, left out of every rate below</span></li>
 </ul>
@@ -526,7 +576,7 @@ sabotaging the handoff and counting how often the rule was then broken.</p>
 <div>
 <h2 id="runs-h">Runs</h2>
 <dl class="kv"><div><dt>found</dt><dd>{e(runs.get("found", 0))}</dd></div>
-<div><dt>pooled into a cell</dt><dd>{e(runs.get("pooled", 0))}</dd></div></dl>
+<div><dt>counted in the rates</dt><dd>{e(runs.get("pooled", 0))}</dd></div></dl>
 <h3>Left out, by reason</h3>
 <dl class="kv">{reason_items}</dl>
 </div>
@@ -536,10 +586,77 @@ sabotaging the handoff and counting how often the rule was then broken.</p>
 <dl class="kv">{model_items}</dl>
 </div>
 <div>
-<h2>Reproducibility group</h2>
+<h2>Same conditions</h2>
 <dl class="kv">{hashes}</dl>
 </div>
 </section>"""
+
+
+# --- verdict and key --------------------------------------------------------------------------
+
+
+def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
+    """One plain sentence from the data: the largest rule effect (sabotaged versus natural
+    violation rate) and what the gated runs did in the same case. Only graded constraints count.
+    Where an interval includes 0 the sentence says it cannot be told from 0."""
+    found = []
+    for cid, body in sorted(results["constraints"].items()):
+        if not is_graded(body):
+            continue
+        for bid, b in sorted(body.get("boundaries", {}).items()):
+            cells = b.get("cells", [])
+            for comp in b.get("comparisons", []):
+                if comp.get("name") != "load_bearing":
+                    continue
+                mut = find_cell(cells, comp["a"]["arm"], comp["a"]["operator"])
+                nat = find_cell(cells, comp["b"]["arm"], comp["b"]["operator"])
+                if mut and nat:
+                    found.append((cid, bid, comp, mut, nat, cells))
+    if not found:
+        return (
+            '<p class="verdict-line"><strong>No comparison has enough runs yet.</strong> A rule '
+            "effect needs a rule with a compiled check and runs both with and without the "
+            "sabotage at the same handoff.</p>"
+        )
+    clear = [f for f in found if not f[2]["lo"] <= 0 <= f[2]["hi"]]
+    cid, bid, comp, mut, nat, cells = min(
+        clear or found, key=lambda f: (-f[2]["diff"], f[0], f[1], f[2]["operator"])
+    )
+    op = comp["operator"]
+    tail = (
+        f", {indistinct(comp, cells)}" if comp["lo"] <= 0 <= comp["hi"] else ""
+    )  # a win claim whose interval includes 0 says so
+    gat = find_cell(cells, "gated", op)
+    gated = (
+        f"With the gate on, it was broken in {e(gat['violations'])} of {e(gat['n'])} gated runs "
+        f"({pct(gat['cvr']['rate'])}, 95% interval {pct_num(gat['cvr']['lo'])}% to "
+        f"{pct_num(gat['cvr']['hi'])}%)."
+        if gat
+        else "There are no gated runs of this case yet."
+    )
+    phrase = OPERATOR_PHRASE.get(op, f"altered by {op}")
+    return (
+        '<p class="verdict-line"><strong>Largest effect found.</strong> '
+        f'At <a href="#{e(anchors.section(cid, bid))}"><code>{e(cid)}</code> on '
+        f"<code>{e(bid)}</code></a>, with the rule {e(phrase)}, it was broken in "
+        f"{e(mut['violations'])} of {e(mut['n'])} runs ({pct(mut['cvr']['rate'])}) against "
+        f"{e(nat['violations'])} of {e(nat['n'])} with no sabotage ({pct(nat['cvr']['rate'])}): "
+        f"{e(pp(comp['diff']))} (95% interval {e(pp(comp['lo']))} to {e(pp(comp['hi']))}"
+        f"{e(tail)}). {gated}</p>"
+    )
+
+
+def render_key() -> str:
+    arms = "".join(f"<div><dt>{e(k)}</dt><dd>{e(v)}</dd></div>" for k, v in KEY_ARMS)
+    ops = "".join(
+        f"<div><dt><code>{e(k)}</code></dt><dd>{e(v)}</dd></div>" for k, v in KEY_OPERATORS
+    )
+    return (
+        '<section aria-labelledby="key-h" class="key"><h2 id="key-h">Key</h2><div class="keycols">'
+        f'<div><h3>Arms (how a run was set up)</h3><dl class="kv stack">{arms}</dl></div>'
+        f'<div><h3>Operators (how the handoff is sabotaged)</h3><dl class="kv stack">{ops}</dl>'
+        "</div></div></section>"
+    )
 
 
 # --- constraint cards -------------------------------------------------------------------------
@@ -588,8 +705,8 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
     if cell.get("clustered"):
         n_text += f'<span class="count">from {e(cell.get("n_sources"))} sources</span>'
         warn = (
-            '<span class="warn"><strong>Clustered.</strong> Forked runs share a source run, so '
-            "they are not independent and these intervals are too narrow.</span>"
+            '<span class="warn"><strong>Not independent.</strong> Forked runs share a source run, '
+            "so these ranges are too narrow.</span>"
         )
     cvr = fraction_cell(cell["violations"], n, cell["cvr"])
     success = fraction_cell(cell["successes"], n, cell["success"])
@@ -621,23 +738,40 @@ def expected_rows(cells: list[dict[str, Any]]) -> list[tuple[str, str]]:
 COMPARISONS = (
     (
         "load_bearing",
-        "Load-bearing score",
+        "Rule effect (violations added by the sabotage)",
         "violation rate with the rule sabotaged (mutated) minus the natural violation rate",
         "mutated",
     ),
     (
         "ledger_value",
-        "Ledger value",
+        "Gate effect on task success",
         "task success with the rule carried (gated) minus task success with blocking alone",
         "gated",
     ),
 )
 
 
+def n_text(*counts: int) -> str:
+    """ "n = 10" when the groups compared are the same size, else "n = 10 and 8"."""
+    return "n = " + " and ".join(dict.fromkeys(str(c) for c in counts))
+
+
+def compared_n(cells: list[dict[str, Any]], comp: dict[str, Any]) -> list[int]:
+    """The run counts of the two cells a comparison is made from (empty if a cell is missing)."""
+    pair = [find_cell(cells, comp[side]["arm"], comp[side]["operator"]) for side in ("a", "b")]
+    return [c["n"] for c in pair if c]
+
+
+def indistinct(comp: dict[str, Any], cells: list[dict[str, Any]]) -> str:
+    """Plain wording for an interval that includes 0, with the run counts it rests on."""
+    counts = compared_n(cells, comp)
+    return "not distinguishable from 0 at " + (n_text(*counts) if counts else "these sample sizes")
+
+
 def render_comparisons(cells: list[dict[str, Any]], comparisons: list[dict[str, Any]]) -> str:
     if not any(c["arm"] in ("mutated", "gated") for c in cells):
         return (
-            '<p class="note"><span class="notrun">Load-bearing score and ledger value: not run'
+            '<p class="note"><span class="notrun">Rule effect and gate effect: not run'
             "</span> (no mutated or gated runs at this boundary).</p>"
         )
     items = []
@@ -653,7 +787,7 @@ def render_comparisons(cells: list[dict[str, Any]], comparisons: list[dict[str, 
             else:
                 crosses = comp["lo"] <= 0 <= comp["hi"]
                 verdict = (
-                    "Not distinguishable from 0 at these sample sizes."
+                    indistinct(comp, cells).capitalize() + "."
                     if crosses
                     else ("Higher" if comp["diff"] > 0 else "Lower")
                     + " than 0: the interval excludes 0."
@@ -667,6 +801,31 @@ def render_comparisons(cells: list[dict[str, Any]], comparisons: list[dict[str, 
                 )
             items.append(f"<div><dt>{head}<small>{e(meaning)}</small></dt><dd>{body}</dd></div>")
     return '<dl class="compare">' + "".join(items) + "</dl>"
+
+
+def gate_effect(boundaries: dict[str, Any], bid: str, op: str, blk: dict, gat: dict) -> str:
+    """The gated-versus-block-only task success, stated as a win only if its interval excludes 0."""
+    gated = pct(gat["success"]["rate"])
+    comp = next(
+        (
+            c
+            for c in boundaries[bid].get("comparisons", [])
+            if c.get("name") == "ledger_value" and c.get("operator") == op
+        ),
+        None,
+    )
+    if comp is None:
+        return f"With NemoGate carrying the rule, task success was {gated}."
+    if comp["lo"] <= 0 <= comp["hi"]:
+        return (
+            f"With NemoGate carrying the rule, task success was {gated}, {pp(comp['diff'])} "
+            f"against blocking alone: {indistinct(comp, boundaries[bid].get('cells', []))}."
+        )
+    return (
+        f"With NemoGate carrying the rule, task success was {gated}, "
+        f"{pp(comp['diff'])} against blocking alone (95% interval {pp(comp['lo'])} to "
+        f"{pp(comp['hi'])})."
+    )
 
 
 def summaries(boundaries: dict[str, Any]) -> list[str]:
@@ -692,9 +851,55 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
                 f"{pct(mut['cvr']['rate'])} of the time "
                 f"({e(mut['violations'])} of {e(mut['n'])} runs). "
                 f"Blocking alone left task success at {pct(blk['success']['rate'])}. "
-                f"NemoGate carried the rule across: task success {pct(gat['success']['rate'])}."
+                f"{e(gate_effect(boundaries, bid, op, blk, gat))}"
             )
     return out
+
+
+def graded_section(
+    cid: str,
+    bid: str,
+    b: dict[str, Any],
+    anchors: Anchors,
+    trace: panels.TraceEvidence | None,
+) -> str:
+    cells = b.get("cells", [])
+    rows = "".join(cell_row(arm, op, find_cell(cells, arm, op)) for arm, op in expected_rows(cells))
+    sid = e(anchors.section(cid, bid))
+    table = (
+        '<table class="cells"><colgroup><col style="width:21%"><col style="width:13%">'
+        '<col style="width:18%"><col style="width:24%"><col style="width:24%"></colgroup>'
+        "<thead><tr>"
+        '<th scope="col">Arm</th><th scope="col">Operator</th><th scope="col">Runs</th>'
+        '<th scope="col">Violation rate</th><th scope="col">Task success</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+    exemplar = (
+        panels.render_trace_panel(trace.exemplars.get((cid, bid)), trace)
+        if trace is not None
+        else ""
+    )
+    return (
+        f'<section class="bnd" id="{sid}" aria-labelledby="{sid}-h">'
+        f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
+        + panels.tablewrap(f"Runs of {cid} at {bid}", table)
+        + render_comparisons(cells, b.get("comparisons", []))
+        + exemplar
+        + "</section>"
+    )
+
+
+def ungraded_section(cid: str, bid: str, b: dict[str, Any], anchors: Anchors) -> str:
+    """A boundary of a rule with no compiled check: the runs are counted, nothing is rated."""
+    sid = e(anchors.section(cid, bid))
+    runs = sum(c["n"] for c in b.get("cells", []))
+    return (
+        f'<section class="bnd" id="{sid}" aria-labelledby="{sid}-h">'
+        f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
+        '<p class="note"><span class="notrun">Not graded.</span> This rule has no compiled check, '
+        f"so no run can be marked as breaking it. {e(runs)} runs reached this handoff; no "
+        "violation rate, success rate or comparison is shown.</p></section>"
+    )
 
 
 def render_constraint(
@@ -703,50 +908,74 @@ def render_constraint(
     anchors: Anchors,
     trace: panels.TraceEvidence | None = None,
 ) -> str:
-    check = "compiled check" if body.get("has_check") else "no compiled check"
-    check_cls = "yes" if body.get("has_check") else "no"
-    sentences = summaries(body.get("boundaries", {}))
-    summary = "".join(f'<p class="summary">{s}</p>' for s in sentences)
+    graded = is_graded(body)
+    badge = (
+        '<span class="badge yes" title="This rule has a compiled check, so runs can be graded">'
+        "Graded</span>"
+        if graded
+        else '<span class="badge no" title="This rule has no compiled check, so no run can be '
+        'graded against it">Not graded</span>'
+    )
+    summary = (
+        "".join(f'<p class="summary">{s}</p>' for s in summaries(body.get("boundaries", {})))
+        if graded
+        else ""
+    )
     tasks = body.get("task_ids") or []
     task_line = (
         f'<p class="note">Tasks that contributed runs: {", ".join(e(t) for t in tasks)}.</p>'
         if tasks
         else ""
     )
-    sections = []
-    for bid in sorted(body.get("boundaries", {})):
-        b = body["boundaries"][bid]
-        cells = b.get("cells", [])
-        rows = "".join(
-            cell_row(arm, op, find_cell(cells, arm, op)) for arm, op in expected_rows(cells)
-        )
-        sid = e(anchors.section(cid, bid))
-        sections.append(
-            f'<section class="bnd" id="{sid}" aria-labelledby="{sid}-h">'
-            f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
-            '<div class="tablewrap"><table class="cells"><colgroup><col style="width:21%">'
-            '<col style="width:13%"><col style="width:18%"><col style="width:24%">'
-            '<col style="width:24%">'
-            "</colgroup><thead><tr>"
-            '<th scope="col">Arm</th><th scope="col">Operator</th><th scope="col">Runs</th>'
-            '<th scope="col">Violation rate</th><th scope="col">Task success</th></tr></thead>'
-            f"<tbody>{rows}</tbody></table></div>"
-            + render_comparisons(cells, b.get("comparisons", []))
-            + (
-                panels.render_trace_panel(trace.exemplars.get((cid, bid)), trace)
-                if trace is not None
-                else ""
-            )
-            + "</section>"
-        )
+    boundaries = body.get("boundaries", {})
+    sections = [
+        graded_section(cid, bid, boundaries[bid], anchors, trace)
+        if graded
+        else ungraded_section(cid, bid, boundaries[bid], anchors)
+        for bid in sorted(boundaries)
+    ]
     return (
         f'<article class="constraint" id="{e(anchors.constraint[cid])}" '
         f'aria-labelledby="{e(anchors.constraint[cid])}-h">'
         f'<header><h3 id="{e(anchors.constraint[cid])}-h"><code>{e(cid)}</code></h3>'
-        f'<span class="badge">{e(body.get("kind", "unknown kind"))}</span>'
-        f'<span class="badge {check_cls}">{check}</span></header>'
+        f'<span class="badge">{e(body.get("kind", "unknown kind"))}</span>{badge}</header>'
         f'<p class="rule">{e(body.get("text", ""))}</p>{summary}{task_line}{"".join(sections)}'
         "</article>"
+    )
+
+
+def render_method(results: dict[str, Any]) -> str:
+    """The footer: one plain line always visible, the statistics behind it folded away."""
+    terms = (
+        ("Intervals", "Every rate comes with a 95% Wilson score interval."),
+        (
+            "Differences",
+            "A difference between two rates uses the Newcombe hybrid-score interval. When it "
+            "includes 0 the page says the difference is not distinguishable from 0.",
+        ),
+        (
+            "Pooled",
+            "Runs are pooled into a cell (arm, operator, rule, handoff) only within one "
+            "reproducibility group: runs that share model ids, safe-config hash, ledger hash, "
+            "repo commit and lockfile hash. Other runs are counted as not comparable.",
+        ),
+        (
+            "Clustered",
+            "Forked runs share a source run. They are counted, not deduplicated, so a cell that "
+            "contains forks is marked clustered and its intervals are too narrow.",
+        ),
+        (
+            "Ungraded rules",
+            "A rule with no compiled check is never rated; its runs are only counted.",
+        ),
+    )
+    items = "".join(f"<div><dt>{e(k)}</dt><dd>{e(v)}</dd></div>" for k, v in terms)
+    return (
+        '<footer><p class="note">Ranges show how uncertain each number is: the fewer runs behind '
+        "it, the wider the range. Whether a rule was obeyed comes from deterministic checks, "
+        "never from a model.</p>"
+        f'<details class="method"><summary>Method</summary><dl class="kv stack">{items}</dl>'
+        f'<p class="note">Format version {e(results["format_version"])}.</p></details></footer>'
     )
 
 
@@ -773,6 +1002,7 @@ def render(
     if constraints:
         graph_section = (
             '<section aria-labelledby="graph-h"><h2 id="graph-h">Boundary graph</h2>'
+            '<p class="note scrollhint">This graph is wider than the screen: scroll sideways.</p>'
             '<div class="graphwrap" tabindex="0" role="region" '
             'aria-label="Boundary graph, scrolls sideways on narrow screens">'
             f"{graph}</div>{render_legend(boundaries)}"
@@ -786,21 +1016,18 @@ def render(
         )
     else:
         graph_section = (
-            '<div class="empty"><strong>No runs were pooled.</strong> There is nothing to chart '
+            '<div class="empty"><strong>No runs were counted.</strong> There is nothing to chart '
             "yet: no boundary, no constraint and no rate. Nothing here is a zero.</div>"
         )
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="light dark">'
-        "<title>NemoGate results</title>"
+        "<title>NemoGate: rule survival across handoffs</title>"
         f"<style>{CSS}</style></head><body><main>"
-        f"{render_header(results)}{panels.render_coverage(results, ledger)}{graph_section}"
-        f"{panels.render_patch_panel(repairs)}"
-        '<footer><p class="note">Intervals are 95% Wilson score intervals. A difference uses the '
-        "Newcombe hybrid-score interval. Cells are pooled only within one reproducibility group. "
-        "Whether a rule was obeyed comes from deterministic checks, never from a model. Format "
-        f"version {e(results['format_version'])}.</p></footer>"
+        f"{render_header(results, render_verdict(results, anchors))}"
+        f"{panels.render_coverage(results, ledger)}{graph_section}"
+        f"{panels.render_patch_panel(repairs)}{render_method(results)}"
         "</main></body></html>\n"
     )
 
@@ -834,7 +1061,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         results = json.loads(args.results.read_text(encoding="utf-8"))
         page = render(
             results,
-            trace=panels.load_trace_evidence(args.runs) if args.runs else None,
+            trace=panels.load_trace_evidence(args.runs, results.get("reproducibility"))
+            if args.runs
+            else None,
             repairs=panels.load_repairs(args.repair) if args.repair else None,
             ledger=load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
             if args.ledger

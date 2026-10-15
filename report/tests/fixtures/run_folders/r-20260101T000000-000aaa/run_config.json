@@ -1,0 +1,12 @@
+{
+  "run_id": "r-20260101T000000-000aaa",
+  "task_id": "TA",
+  "arm": "natural",
+  "operator": "none",
+  "target_boundary": "delegation:planner->coder",
+  "target_constraint": "C-001",
+  "repo_ref": "main",
+  "ledger_path": "ledger.yaml",
+  "trace_path": "trace.jsonl",
+  "seed": 0
+}

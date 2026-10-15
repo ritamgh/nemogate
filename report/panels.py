@@ -12,6 +12,7 @@ import html
 import json
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,7 @@ class RunView:
     violations: tuple[Violation, ...]
     events: tuple[Event, ...]  # the fork's prefix first, then its own events, steps renumbered
     fork_of: str | None
+    prefix_len: int = 0  # events taken from prefix.jsonl; 0 for a run that is not a fork
 
     def at_step(self, step: int) -> Event | None:
         return next((ev for ev in self.events if ev.step == step), None)
@@ -65,6 +67,7 @@ class TraceEvidence:
     exemplars: dict[tuple[str, str], Exemplar]
     read: int  # run folders loaded
     skipped: int  # run folders with a config but no usable record or trace
+    outside_group: int = 0  # loaded folders that are not in the results' reproducibility group
 
 
 def _read_events(path: Path) -> list[Event]:
@@ -90,7 +93,7 @@ def load_run(folder: Path) -> RunView:
     fork_of = (
         json.loads(fork_path.read_text("utf-8"))["source_run_id"] if fork_path.is_file() else None
     )
-    return RunView(folder.name, record, violations, tuple(prefix + own), fork_of)
+    return RunView(folder.name, record, violations, tuple(prefix + own), fork_of, len(prefix))
 
 
 def load_runs(paths: list[Path]) -> tuple[list[RunView], int]:
@@ -154,9 +157,27 @@ def pick_exemplars(runs: list[RunView]) -> dict[tuple[str, str], Exemplar]:
     return out
 
 
-def load_trace_evidence(paths: list[Path]) -> TraceEvidence:
+def in_group(run: RunView, group: Mapping[str, Any] | None) -> bool:
+    """True if the run was made under the conditions results.json pooled (its `reproducibility`
+    block). With no group (nothing was pooled) no run is in it."""
+    if not group:
+        return False
+    record = run.record
+    return (
+        {str(role): name for role, name in record.model_ids.items()} == group.get("model_ids")
+        and record.safe_config_hash == group.get("safe_config_hash")
+        and record.ledger_hash == group.get("ledger_hash")
+        and record.repo_sha == group.get("repo_sha")
+        and record.lockfile_hash == group.get("lockfile_hash")
+    )
+
+
+def load_trace_evidence(paths: list[Path], group: Mapping[str, Any] | None) -> TraceEvidence:
+    """Exemplars drawn only from runs in `group`, the `reproducibility` block of the results
+    file, so the trace shown comes from the runs the statistics beside it are made of."""
     runs, skipped = load_runs(paths)
-    return TraceEvidence(pick_exemplars(runs), len(runs), skipped)
+    inside = [r for r in runs if in_group(r, group)]
+    return TraceEvidence(pick_exemplars(inside), len(runs), skipped, len(runs) - len(inside))
 
 
 # --- the trace panel --------------------------------------------------------------------------
@@ -174,21 +195,36 @@ def sentences(text: str) -> list[str]:
 
 
 def render_diff(sent: str, received: str) -> str:
-    """The planner's text against what the receiver got, one sentence per line: a struck line was
-    sent and never arrived, an added line arrived without being sent."""
+    """The planner's text against what the receiver got, one sentence per line: a line tagged
+    (dropped) was sent and never arrived, one tagged (added) arrived without being sent. "Nothing
+    changed" is claimed only when the two full texts are equal, not just their shown part."""
     a, b = sentences(clip(sent, CLIP_TEXT)), sentences(clip(received, CLIP_TEXT))
     lines = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
         if tag == "equal":
             lines += [f'<p class="ln">{e(s)}</p>' for s in a[i1:i2]]
             continue
-        lines += [f'<p class="ln"><del>{e(s)}</del></p>' for s in a[i1:i2]]
-        lines += [f'<p class="ln"><ins>{e(s)}</ins></p>' for s in b[j1:j2]]
-    note = (
-        '<p class="note">Identical to what the planner sent: nothing was changed in transit.</p>'
-        if a == b
-        else ""
-    )
+        lines += [
+            f'<p class="ln"><del>{e(s)}</del> <span class="tag">(dropped)</span></p>'
+            for s in a[i1:i2]
+        ]
+        lines += [
+            f'<p class="ln"><ins>{e(s)}</ins> <span class="tag">(added)</span></p>'
+            for s in b[j1:j2]
+        ]
+    if sent == received:
+        note = (
+            '<p class="note">Identical to what the planner sent: nothing was changed in '
+            "transit.</p>"
+        )
+    elif a == b:
+        note = (
+            '<p class="note"><strong>The part shown is the same, but the full texts are not:'
+            "</strong> they differ in whitespace or after the first "
+            f"{CLIP_TEXT} characters, which are not shown.</p>"
+        )
+    else:
+        note = ""
     return f'<div class="diff">{"".join(lines) or "<p class=ln><em>(empty)</em></p>"}</div>{note}'
 
 
@@ -203,6 +239,22 @@ def describe(ev: Event) -> str:
         return f"<code>{e(ev.tool)}</code> <code>{e(args_text(ev.args))}</code>{e(blocked)}"
     content = getattr(ev, "content", None) or getattr(ev, "reason", "") or ""
     return f"{e(ev.type)}: {e(clip(str(content), CLIP_ARGS))}"
+
+
+def step_note(run: RunView) -> str:
+    """A fork's step numbers count prefix.jsonl first, so they differ from trace.jsonl's."""
+    return (
+        f" (a fork: steps count its {e(run.prefix_len)} earlier events first)"
+        if run.prefix_len
+        else ""
+    )
+
+
+def tablewrap(label: str, table: str) -> str:
+    """A table in a box that scrolls sideways when it must: focusable, so a keyboard can scroll."""
+    return (
+        f'<div class="tablewrap" tabindex="0" role="region" aria-label="{e(label)}">{table}</div>'
+    )
 
 
 def kv(rows: list[tuple[str, str]]) -> str:
@@ -229,7 +281,7 @@ def violating_action(run: RunView) -> tuple[str, Event | None]:
     return kv(
         [
             ("check", check),
-            ("step", f"{e(ev.step)}, agent <code>{e(ev.agent)}</code>"),
+            ("step", f"{e(ev.step)}, agent <code>{e(ev.agent)}</code>{step_note(run)}"),
             ("action", describe(ev)),
         ]
     ), ev
@@ -245,7 +297,10 @@ def comparison_action(run: RunView, ev: Event | None) -> str:
             outcome = "was blocked by the gate" if same.blocked else "went ahead"
             return kv(
                 [
-                    ("result", f"Made the same call at step {e(same.step)}: it {outcome}."),
+                    (
+                        "result",
+                        f"Made the same call at step {e(same.step)}{step_note(run)}: it {outcome}.",
+                    ),
                     ("action", describe(same)),
                 ]
             )
@@ -301,7 +356,8 @@ def render_trace_panel(ex: Exemplar | None, evidence: TraceEvidence) -> str:
         return (
             '<p class="note"><span class="notrun">Trace: no violating mutated run for this rule at '
             f"this boundary among the {e(evidence.read)} run folders read "
-            f"({e(evidence.skipped)} skipped as unreadable).</span></p>"
+            f"({e(evidence.skipped)} skipped as unreadable, {e(evidence.outside_group)} made "
+            "under other conditions than the runs counted above).</span></p>"
         )
     boundary = ex.violating.record.boundary
     action_html, ev = violating_action(ex.violating)
@@ -318,9 +374,10 @@ def render_trace_panel(ex: Exemplar | None, evidence: TraceEvidence) -> str:
         '<details class="trace" open><summary>Trace at the violating action</summary>'
         '<p class="note">Left: the first violating mutated run, by run id. Right: the first run '
         "of the same task that kept the rule, preferring a gated run with the same operator. "
-        "<del>Struck</del> sentences were in the planner's text and never reached the receiver; "
-        "<ins>added</ins> sentences reached it without being sent. Trace text is model output, "
-        f'shown escaped.</p><div class="pair">{left}{right}</div></details>'
+        'Lines tagged <span class="tag">(dropped)</span> were in the planner\'s text and never '
+        'reached the receiver; lines tagged <span class="tag">(added)</span> reached it without '
+        "being sent. Trace text is "
+        f'model output, shown escaped.</p><div class="pair">{left}{right}</div></details>'
     )
 
 
@@ -349,6 +406,17 @@ def field_of(lines: list[str], key: str) -> str | None:
     return next((x[len(key) :] for x in lines if x.startswith(key)), None)
 
 
+def result_of(lines: list[str]) -> str | None:
+    """The reason `write_report` wrote: the last `- Result:` line above the last `- Diff:` line,
+    with any lines that continue it. Free text a model wrote (the rationale) sits above it and may
+    contain a `- Result:` line of its own; the first match would be that one."""
+    end = max((i for i, x in enumerate(lines) if x.startswith("- Diff: ")), default=len(lines))
+    start = max((i for i in range(end) if lines[i].startswith("- Result: ")), default=None)
+    if start is None:
+        return None
+    return "\n".join([lines[start][len("- Result: ") :], *lines[start + 1 : end]])
+
+
 def load_repairs(directory: Path) -> list[RepairView]:
     """Each `repair-*.md` summary `repair.loop.write_report` wrote, with the diff beside it."""
     if not directory.is_dir():
@@ -360,7 +428,7 @@ def load_repairs(directory: Path) -> list[RepairView]:
         if head is None:
             raise ValueError(f"{summary}: not a repair summary (no '# Repair: Accepted|Rejected')")
         fix = next((m for m in map(FIX_RE.match, lines) if m), None)
-        result = field_of(lines, "- Result: ")
+        result = result_of(lines)
         if result is None:
             raise ValueError(f"{summary}: no '- Result:' line")
         patch = summary.with_suffix(".patch")
@@ -402,7 +470,7 @@ def render_repair(r: RepairView) -> str:
         if r.fix_id
         else "no fix was chosen"
     )
-    judged = JUDGED_RE.search(r.result)
+    judged = JUDGED_RE.search((r.result.splitlines() or [""])[0])
     numbers = ""
     if judged:
         v0, v1, s0, s1, n0, n1 = judged.groups()
@@ -419,6 +487,8 @@ def render_repair(r: RepairView) -> str:
                 )
             )
             + "</tbody></table>"
+            '<p class="note">Not stated in the repair output: which constraint, arm and operator '
+            "these baseline and patched numbers come from.</p>"
         )
     diff = (
         render_patch_lines(r.diff)
@@ -489,17 +559,18 @@ def render_coverage(results: dict[str, Any], ledger: Ledger | None) -> str:
     rows = [
         ("Declared in the ledger", f"{e(total)}"),
         ("With a compiled check", f"{e(checked)} of {e(total)}"),
-        ("Exercised: at least one pooled run", f"{e(len(run_ids))} of {e(total)}"),
+        ("Exercised: at least one counted run", f"{e(len(run_ids))} of {e(total)}"),
         (
             "Exercised and checked: the only ones with a verdict",
             f"{e(len(run_and_checked))} of {e(total)}",
         ),
         ("Extraction recall", e(recall_text)),
     ]
-    table = (
-        '<div class="tablewrap"><table class="plain"><tbody>'
+    table = tablewrap(
+        "Coverage of the ledger",
+        '<table class="plain"><tbody>'
         + "".join(f'<tr><th scope="row">{k}</th><td class="num">{v}</td></tr>' for k, v in rows)
-        + "</tbody></table></div>"
+        + "</tbody></table>",
     )
     if ledger is not None:
         unchecked = [(c.id, c.text) for c in ledger.constraints if c.check is None]
@@ -510,7 +581,7 @@ def render_coverage(results: dict[str, Any], ledger: Ledger | None) -> str:
             if len(ledger.constraints) != total
             else ""
         )
-        never = f"<h3>Never exercised (no pooled run)</h3>{rule_list(unexercised)}"
+        never = f"<h3>Never exercised (no counted run)</h3>{rule_list(unexercised)}"
     else:
         unchecked = [
             (c, constraints[c].get("text", ""))

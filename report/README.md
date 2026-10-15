@@ -16,6 +16,10 @@ byte-identical. Generated pages are not committed.
 
 What it shows:
 
+- Top: one plain verdict line made from the data (the largest rule effect among graded
+  constraints, preferring one whose interval excludes 0, with its runs, interval and what the
+  gated runs did in the same case; "No comparison has enough runs yet" when there is none), then
+  a key defining the four arms and the operators in method words.
 - Header: the reproducibility group (short hashes, with the full value in the tooltip, and the
   model ids), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
@@ -30,18 +34,24 @@ What it shows:
   deficiency); the rate is also the line thickness and the text on the edge, and a table under the
   graph lists the same numbers. Each edge links to the card of the first constraint that has the
   boundary; the table links to all of them.
-- One card per constraint: rule text, kind, whether it has a compiled check, and per boundary a
+- One card per constraint: rule text, kind, a Graded / Not graded tag, and per boundary a
   table of cells (arm, operator, runs, violation rate and task success with their 95% Wilson
   intervals and a small interval bar). A cell that was not run prints "not run", not 0. A cell with
-  `clustered: true` carries a warning that its intervals are too narrow. The load-bearing score and
-  ledger value are shown with their interval, and an interval that crosses 0 says "Not
-  distinguishable from 0 at these sample sizes."
+  `clustered: true` carries a warning that its intervals are too narrow. The rule effect
+  (`load_bearing`) and gate effect on task success (`ledger_value`) are shown with their interval,
+  and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
+  `has_check: false` is tagged Not graded and shows no rate, comparison or trace (only a count of
+  its runs); its cells are also left out of the boundary graph's pooled rates.
 - A one-sentence summary per (boundary, operator), only when the mutated violation rate, the
   block-only success and the gated success all exist. It uses those cells' numbers and nothing
   else.
 
-Tests: `uv run pytest report/tests/test_site.py`. The fixtures in `report/tests/fixtures/` are
-hand-written: `results_rich.json` (two constraints, a return edge, a clustered cell, a null
+Tests: `uv run pytest report/tests/test_site.py`. Fixtures in `report/tests/fixtures/`:
+`results_runs.json` is generated from `run_folders/` and `ledger.yaml` by `replay.stats`
+(`uv run python -m replay.stats report/tests/fixtures/run_folders --ledger
+report/tests/fixtures/ledger.yaml --out report/tests/fixtures/results_runs.json`; a test
+regenerates it and compares), so the numbers and the trace panel describe the same runs.
+`results_rich.json` is hand-written, has no run folders behind it, and is for page features: (two constraints, a return edge, a clustered cell, a null
 extraction recall, an interval crossing 0, missing cells, markup in a rule text) and
 `results_empty.json` (nothing pooled, `reproducibility` null).
 
@@ -54,13 +64,18 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
 - **Trace at the violating action** (`--runs`, run folders or folders of them): in each
   constraint's boundary section, the first violating `mutated` run by run id beside the first
   comparison run that kept the rule (a gated run with the same operator, else a natural run;
-  same task, rule and boundary, and `is_comparable`). Each side shows the planner's text diffed
-  against what the receiver got (struck = sent but lost, added = received but not sent) and the
-  action named by `violations.json` (a fork's steps count `prefix.jsonl` first). The comparison
-  side says "No such call" when it never made the call. Trace text is escaped.
+  same task, rule and boundary, and `is_comparable`). Only runs in the results file's
+  `reproducibility` group are used, so the trace comes from the runs the numbers are made of.
+  Each side shows the planner's text diffed against what the receiver got (a line tagged
+  "(dropped)" was sent but lost, "(added)" was received but not sent; "nothing was changed in
+  transit" is said only when the full payloads are equal, not just the shown part) and the action
+  named by `violations.json` (a fork's steps count `prefix.jsonl` first, and the page says so).
+  The comparison side says "No such call" when it never made the call. Trace text is escaped.
 - **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
   `.patch` beside it. Without `--repair` it says "No repair run yet". `repair` writes no
-  structured result, so the numbers are parsed from the summary's `Result:` line.
+  structured result, so the numbers are parsed from the `Result:` line `write_report` writes (the
+  last one above the `Diff:` line, so a `- Result:` inside a model's rationale is ignored). The
+  summary does not say which constraint, arm or operator the numbers came from; the page says so.
 
 ## Natural runs page (`natural_runs.py`)
 

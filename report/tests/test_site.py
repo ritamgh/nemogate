@@ -21,6 +21,16 @@ def load(name: str) -> dict:
 
 @pytest.fixture
 def rich() -> dict:
+    data = load("results_rich.json")
+    # C-002 is the fixture's rule without a check. These tests read rates off its card, so it is
+    # graded here; the tests that need it ungraded say so (see `ungraded` below).
+    data["constraints"]["C-002"]["has_check"] = True
+    return data
+
+
+@pytest.fixture
+def ungraded() -> dict:
+    """results_rich.json as written: C-002 has no compiled check although it has cells."""
     return load("results_rich.json")
 
 
@@ -113,7 +123,7 @@ def test_header_shows_reproducibility_runs_and_honesty(rich):
     assert "repo commit 0123456789ab" in text  # 12 characters; the full sha is in the title
     assert 'title="0123456789abcdef0123456789abcdef01234567"' in page
     assert "found 120" in text
-    assert "pooled into a cell 104" in text
+    assert "counted in the rates 104" in text
     assert "not comparable 9" in text
     assert "rule never came up 7" in text
     assert "unreadable record 0" in text
@@ -122,7 +132,7 @@ def test_header_shows_reproducibility_runs_and_honesty(rich):
 def test_honesty_strip_says_not_measured_when_recall_is_null(rich):
     text = text_of(site.render(rich))
     assert "not measured extraction recall" in text
-    assert "4 of 5 constraints have a compiled check" in text
+    assert "4 of 5 rules can be graded: each has a compiled check" in text
     assert "16 inconclusive runs" in text
 
 
@@ -139,7 +149,7 @@ def test_honesty_strip_prints_a_measured_recall(rich):
 def test_edge_is_pooled_mutated_rate_over_constraints_and_operators(rich):
     page = site.render(rich)
     # 5 + 2 + 8 violations in 30 mutated runs: 50%, Wilson 33% to 67%
-    assert ">50%</text>" in page
+    assert ">50% 15/30</text>" in page
     assert (
         "delegation:planner-&gt;coder: 15 of 30 mutated runs violated the rule "
         "(50%, 95% Wilson interval 33% to 67%), pooled over all operators and constraints. "
@@ -150,7 +160,7 @@ def test_edge_is_pooled_mutated_rate_over_constraints_and_operators(rich):
 
 def test_edge_without_mutated_runs_falls_back_to_natural_and_says_so(rich):
     page = site.render(rich)
-    assert ">return 0% natural</text>" in page
+    assert ">return 0% 0/10 natural</text>" in page
     assert "return:coder-&gt;planner: 0 of 10 natural runs violated the rule" in page
     assert "Where a boundary has no mutated runs the natural runs are used" in page
 
@@ -236,10 +246,9 @@ def test_card_shows_rule_kind_badge_and_cell_numbers(rich):
     c2 = article(page, "C-002")
     text = text_of(c2)
     assert "scope" in text
-    assert "no compiled check" in text
     assert "Natural none 10 30% (11–60%) 3 of 10 runs 70% (40–89%) 7 of 10 runs" in text
     assert "Mutated drop 10 80% (49–94%) 8 of 10 runs 30% (11–60%) 3 of 10 runs" in text
-    assert "compiled check" in text_of(article(page, "C-001"))
+    assert "Graded" in text_of(article(page, "C-001"))
 
 
 def test_missing_cells_print_not_run_never_zero(rich):
@@ -253,30 +262,29 @@ def test_missing_cells_print_not_run_never_zero(rich):
         '<td colspan="3" class="notrun">not run</td>'
     ) in c1
     text = text_of(c1)
-    assert re.search(r"Load-bearing score \(hedge\)[^+]*? not run", text)
+    assert re.search(
+        r"Rule effect \(violations added by the sabotage\) \(hedge\)[^+]*? not run", text
+    )
 
 
 def test_boundary_with_only_a_natural_cell_says_comparisons_were_not_run(rich):
     text = text_of(article(site.render(rich), "C-001"))
-    assert "Load-bearing score and ledger value: not run (no mutated or gated runs" in text
+    assert "Rule effect and gate effect: not run (no mutated or gated runs" in text
 
 
 def test_clustered_cell_carries_a_warning_once(rich):
     page = site.render(rich)
-    assert page.count("<strong>Clustered.</strong>") == 1
+    assert page.count("<strong>Not independent.</strong>") == 1
     assert "from 4 sources" in text_of(article(page, "C-001"))
-    assert "intervals are too narrow" in page
+    assert "ranges are too narrow" in page
 
 
 def test_comparison_crossing_zero_says_so_in_words(rich):
     page = site.render(rich)
     c2 = text_of(article(page, "C-002"))
-    assert "Ledger value (drop)" in c2
-    assert (
-        "+10 pp (95% interval -30 pp to +50 pp) Not distinguishable from 0 at these sample sizes."
-        in c2
-    )
-    assert page.count("Not distinguishable from 0 at these sample sizes.") == 1
+    assert "Gate effect on task success (drop)" in c2
+    assert "+10 pp (95% interval -30 pp to +50 pp) Not distinguishable from 0 at n = 10." in c2
+    assert page.count("Not distinguishable from 0 at n = 10.") == 1
 
 
 def test_comparison_excluding_zero_says_so(rich):
@@ -300,11 +308,13 @@ def test_summary_sentence_uses_only_numbers_from_the_cells(rich):
     assert (
         "With the rule lost at the handoff <code>delegation:planner-&gt;coder</code>, the coder "
         "broke it 80% of the time (8 of 10 runs). Blocking alone left task success at 50%. "
-        "NemoGate carried the rule across: task success 60%."
+        "With NemoGate carrying the rule, task success was 60%, +10 pp against blocking alone: "
+        "not distinguishable from 0 at n = 10."
     ) in page
     assert (
         "broke it 50% of the time (5 of 10 runs). Blocking alone left task success at 50%. "
-        "NemoGate carried the rule across: task success 100%."
+        "With NemoGate carrying the rule, task success was 100%, +50 pp against blocking alone "
+        "(95% interval +20 pp to +70 pp)."
     ) in page
 
 
@@ -327,6 +337,177 @@ def test_summary_needs_each_of_its_three_cells(rich, missing_arm):
     page = site.render(rich)
     assert "broke it 80% of the time" not in page
     assert page.count('<p class="summary">') == 1  # C-001's is unaffected
+
+
+# --- verdict, key, method, graded and not graded ----------------------------------------------
+
+
+def verdict_text(page: str) -> str:
+    block = re.search(r'<p class="verdict-line">.*?</p>', page, flags=re.S)
+    assert block, "no verdict line"
+    return re.sub(r"\s+([,.:;)])", r"\1", text_of(block.group(0))).strip()
+
+
+def raise_c002_effect(data: dict) -> None:
+    """C-002's rule effect becomes +60 pp, larger than C-001's +50 pp."""
+    comp = data["constraints"]["C-002"]["boundaries"][FORMAT_V1_DELEGATION]["comparisons"][0]
+    comp.update({"diff": 0.6, "lo": 0.2, "hi": 0.9})
+
+
+def test_verdict_states_the_largest_effect_with_its_runs_interval_and_the_gated_result(rich):
+    # Breaks if the page opens without a plain result, or picks a smaller effect, or leaves out
+    # the counts, the interval or what the gate did in the same case.
+    raise_c002_effect(rich)
+
+    assert verdict_text(site.render(rich)) == (
+        "Largest effect found. At C-002 on delegation:planner->coder, with the rule lost, it was "
+        "broken in 8 of 10 runs (80%) against 3 of 10 with no sabotage (30%): +60 pp (95% "
+        "interval +20 pp to +90 pp). With the gate on, it was broken in 0 of 10 gated runs "
+        "(0%, 95% interval 0% to 28%)."
+    )
+
+
+def test_verdict_ignores_a_rule_that_cannot_be_graded(ungraded):
+    # Breaks if an ungraded rule's (meaningless) cells can win the headline.
+    raise_c002_effect(ungraded)
+
+    text = verdict_text(site.render(ungraded))
+
+    assert text.startswith("Largest effect found. At C-001 on delegation:planner->coder")
+    assert "+50 pp" in text and "C-002" not in text
+
+
+def test_verdict_says_not_distinguishable_when_the_interval_includes_zero(rich):
+    # Breaks if a win is claimed from an interval that includes 0.
+    for cid in ("C-001", "C-002"):
+        comp = rich["constraints"][cid]["boundaries"][FORMAT_V1_DELEGATION]["comparisons"][0]
+        comp.update({"lo": -0.1})
+
+    text = verdict_text(site.render(rich))
+
+    assert "+50 pp (95% interval -10 pp to +70 pp, not distinguishable from 0 at n = 10)." in text
+
+
+def test_verdict_prefers_an_effect_whose_interval_excludes_zero(rich):
+    # Breaks if a bigger but unproven difference beats a smaller proven one.
+    comp = rich["constraints"]["C-002"]["boundaries"][FORMAT_V1_DELEGATION]["comparisons"][0]
+    comp.update({"diff": 0.9, "lo": -0.1, "hi": 1.0})
+
+    text = verdict_text(site.render(rich))
+
+    assert text.startswith("Largest effect found. At C-001 ")
+
+
+def test_verdict_without_a_gated_run_says_there_is_none(rich):
+    cells = rich["constraints"]["C-001"]["boundaries"][FORMAT_V1_DELEGATION]["cells"]
+    cells[:] = [c for c in cells if c["arm"] != "gated"]
+
+    assert "There are no gated runs of this case yet." in verdict_text(site.render(rich))
+
+
+def test_verdict_with_nothing_to_compare_says_no_comparison_has_enough_runs():
+    # Breaks if an empty page, or one with only natural runs, claims an effect.
+    only_natural = one_constraint(
+        {"delegation:a->b": {"cells": [make_cell("natural", "none", 4, 0, 4)], "comparisons": []}}
+    )
+
+    for page in (load("results_empty.json"), only_natural):
+        assert verdict_text(site.render(page)).startswith("No comparison has enough runs yet.")
+
+
+def test_key_defines_every_arm_and_operator_in_method_words():
+    # Breaks if a judge meets "block-only" or "hedge" with no definition.
+    text = text_of(site.render(load("results_empty.json")))
+    key = text.split("Key", 1)[1].split("What these numbers can and cannot tell you")[0]
+
+    for term in ("Natural", "Mutated", "Block-only", "Gated", "drop", "hedge", "compress_100"):
+        assert term in key
+    assert "the sentence that states the rule is removed from the handoff" in key
+    assert "puts the rule back into the handoff" in key
+    assert not re.search(r"\bT[1-8]\b|C-00\d", key)  # method words only, nothing about any task
+
+
+def test_statistics_jargon_sits_in_the_collapsed_method_block(rich):
+    # Breaks if a judge meets Wilson, Newcombe, pooled or clustered outside the Method block.
+    page = site.render(rich)
+    method = re.search(r'<details class="method">.*?</details>', page, flags=re.S).group(0)
+    # tooltips (svg <title>) are hover detail, not page text
+    visible = text_of(re.sub(r"<title>.*?</title>", "", page.replace(method, ""), flags=re.S))
+
+    for word in ("Wilson", "Newcombe", "ooled", "lustered", "eproducibility"):
+        assert word not in visible
+    assert "Ranges show how uncertain each number is" in visible
+    assert " open" not in method.split(">", 1)[0]
+    assert "Newcombe hybrid-score interval" in method
+    assert "reproducibility group" in method
+
+
+def test_the_page_title_is_not_the_heading_again(rich):
+    page = site.render(rich)
+
+    assert page.count("NemoGate results") == 1  # the h1
+    assert "<title>NemoGate: rule survival across handoffs</title>" in page
+
+
+def test_cards_are_tagged_graded_or_not_graded(ungraded):
+    page = site.render(ungraded)
+
+    assert "Not graded" in text_of(article(page, "C-002"))
+    assert "Not graded" not in text_of(article(page, "C-001"))
+    assert "Graded" in text_of(article(page, "C-001"))
+
+
+def test_a_rule_without_a_check_shows_no_rates_comparisons_or_trace(ungraded):
+    # Breaks if the card of a rule the coverage panel calls ungradable still prints a violation
+    # rate, a rule effect or a summary (the fixture has cells for it: 40 runs).
+    page = site.render(ungraded)
+    card = article(page, "C-002")
+    text = text_of(card)
+
+    assert "Not graded." in text
+    assert "40 runs reached this handoff" in text
+    for shown in ("80%", "30%", "Rule effect", "Gate effect", "of 10 runs", "excludes 0"):
+        assert shown not in text
+    assert '<table class="cells"' not in card
+    assert 'class="summary"' not in card
+    assert 'id="c1-c-002-b0"' in card  # the graph and the table still have somewhere to link
+
+
+def test_an_ungraded_rule_does_not_feed_the_boundary_rate(ungraded):
+    # Breaks if C-002's violation counts (always meaningless without a check) are pooled into
+    # the edge: with them it reads 15/30; without, only C-001's 5 + 2 of 20 mutated runs count.
+    page = site.render(ungraded)
+
+    assert ">35% 7/20</text>" in page
+    assert "7 of 20 mutated runs violated the rule" in page
+    assert "Constraints: C-001, C-002." in page
+
+
+def test_a_boundary_seen_only_by_an_ungraded_rule_is_no_data_and_still_linked():
+    data = one_constraint(
+        {"delegation:a->b": {"cells": [make_cell("mutated", "drop", 10, 0, 10)], "comparisons": []}}
+    )
+    data["constraints"]["C-900"]["has_check"] = False
+
+    page = site.render(data)
+
+    assert ">no data</text>" in page
+    assert "no data (no graded constraint here)" in text_of(page)
+    href = re.search(r'<a href="#([^"]+)" class="edge">', page).group(1)
+    assert f'id="{href}"' in page
+
+
+def test_scrolling_tables_and_the_graph_are_focusable_named_and_hinted(rich):
+    # Breaks if a table that scrolls sideways at 375 px cannot be reached from the keyboard, or
+    # the wide graph gives no sign that it scrolls.
+    page = site.render(rich)
+    wraps = re.findall(r'<div class="tablewrap"[^>]*>', page)
+
+    assert len(wraps) == 5  # coverage, boundary table, and one per boundary section (3)
+    for wrap in wraps:
+        assert 'tabindex="0"' in wrap and 'role="region"' in wrap and 'aria-label="' in wrap
+    assert 'aria-label="Runs of C-001 at delegation:planner-&gt;coder"' in page
+    assert "This graph is wider than the screen: scroll sideways." in page
 
 
 # --- safety and determinism --------------------------------------------------------------------
@@ -376,16 +557,16 @@ def test_two_renders_are_byte_identical(rich, tmp_path):
 def test_zero_runs_page_still_shows_the_honesty_strip_and_no_graph():
     page = site.render(load("results_empty.json"))
     text = text_of(page)
-    assert "No runs were pooled." in text
+    assert "No runs were counted." in text
     assert "not measured extraction recall" in text
     # constraints_total counts the whole ledger even though no constraint has a pooled run
-    assert "4 of 5 constraints have a compiled check" in text
+    assert "4 of 5 rules can be graded: each has a compiled check" in text
     assert "16 inconclusive runs" in text
     assert "found 16" in text
-    assert "pooled into a cell 0" in text
+    assert "counted in the rates 0" in text
     assert "not comparable 9" in text
     # reproducibility is null when nothing was pooled
-    assert "No runs were pooled, so there is no reproducibility group." in text
+    assert "No runs were counted, so there is no shared set of conditions." in text
     assert "safe config none recorded" in text
     assert "models none recorded" in text
     assert '<svg class="graph"' not in page
@@ -424,7 +605,7 @@ def test_summary_names_the_recipient_only_on_a_delegation(rich):
     assert (
         "With the rule lost at the handoff <code>return:coder-&gt;planner</code>, the rule was "
         "broken 50% of the time (5 of 10 runs). Blocking alone left task success at 40%. "
-        "NemoGate carried the rule across: task success 90%."
+        "With NemoGate carrying the rule, task success was 90%."
     ) in page
     assert "the planner broke it" not in page
     assert "the coder broke it" in page  # the delegation sentence still names its recipient
@@ -496,13 +677,17 @@ def test_same_layer_edge_is_a_real_arc_and_no_edge_crosses_a_node():
 
 def test_clustered_pooled_rate_is_flagged_in_tooltip_and_table(rich):
     page = site.render(rich)
-    warning = (
+    tooltip = (
         "Clustered: includes forked runs that share a source run, so this interval is too narrow."
+    )
+    warning = (
+        "Not independent: includes forked runs that share a source run, "
+        "so this range is too narrow."
     )
     # the mutated drop cell of the first constraint is clustered, so the pooled edge is too
     assert (
         "(50%, 95% Wilson interval 33% to 67%), pooled over all operators and constraints. "
-        f"{warning} Constraints: C-001, C-002." in page
+        f"{tooltip} Constraints: C-001, C-002." in page
     )
     row = re.search(r'<tr><th scope="row"><code>delegation:planner-&gt;coder</code>.*?</tr>', page)
     assert row
@@ -510,7 +695,7 @@ def test_clustered_pooled_rate_is_flagged_in_tooltip_and_table(rich):
     # the return boundary pools only an unclustered natural cell: no warning there
     ret = re.search(r'<tr><th scope="row"><code>return:coder-&gt;planner</code>.*?</tr>', page)
     assert ret
-    assert "Clustered:" not in ret.group(0)
+    assert "Not independent" not in ret.group(0)
 
 
 def test_unwritable_output_is_a_clean_error(tmp_path, capsys):

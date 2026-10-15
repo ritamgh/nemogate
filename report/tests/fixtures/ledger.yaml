@@ -1,0 +1,25 @@
+version: 1
+constraints:
+  - id: C-001
+    text: Do not touch the frozen folder.
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [coder]
+    origin: declared
+    check: {type: path_forbidden, glob: 'frozen/**', ops: [write]}
+  - id: C-002
+    text: Keep the public names stable.
+    kind: scope
+    source: user
+    authority: binding
+    scope: [coder]
+    origin: declared
+  - id: C-003
+    text: Do not delete any file.
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [coder]
+    origin: declared
+    check: {type: path_forbidden, glob: '**', ops: [delete]}

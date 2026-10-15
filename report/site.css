@@ -24,6 +24,16 @@ h2{font-size:1.45rem;margin:0 0 .6rem}
 h3{font-size:1.15rem}
 h4{font-size:1rem;font-family:var(--sans);font-weight:600}
 .lead{max-width:60ch;color:var(--muted);font-size:1.1rem;margin:.9rem 0 0}
+.verdict-line{max-width:68ch;margin:1.1rem 0 0;font-size:1.12rem;line-height:1.5}
+.key{margin-top:32px}
+.keycols{display:grid;gap:20px 40px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.key h3{margin:0 0 .4rem;font-family:var(--sans);font-size:.95rem;color:var(--muted)}
+.kv.stack>div{flex-direction:column;gap:0}
+.kv.stack dd{text-align:left}
+.tag{color:var(--muted);font-family:var(--sans);font-size:.78rem}
+.scrollhint{display:none}
+details.method{margin-top:12px}
+details.method>summary{cursor:pointer;font-weight:600}
 .note{color:var(--muted);font-size:.9rem;max-width:72ch;margin:.5rem 0}
 section{margin-top:56px}
 .strip{margin-top:40px;padding:20px 0;border-block:1px solid var(--rule-strong)}
@@ -97,7 +107,9 @@ details.trace>summary{cursor:pointer;font-weight:600}
 .side ul{margin:.3rem 0;padding-left:1.2rem}
 .diff{font:.85rem/1.5 var(--mono);margin:6px 0}
 .diff p{margin:0;padding:1px 8px;overflow-wrap:anywhere}
-.diff del,.diff ins{display:block;text-decoration:none}
+.diff p{display:flex;gap:8px;align-items:baseline}
+.diff del,.diff ins{display:block;flex:1;min-width:0;text-decoration:none}
+.diff .tag{flex:none}
 .diff del{background:var(--warn-bg);color:var(--warn-ink)}
 .diff ins{background:var(--good-bg);color:var(--good-ink)}
 .diff del::before{content:"\2212  "}
@@ -108,7 +120,7 @@ details.trace>summary{cursor:pointer;font-weight:600}
 .rules{margin:.4rem 0;padding-left:1.2rem;max-width:72ch}
 .repair{margin-top:20px}
 .patch{margin:12px 0 0;padding:10px 0;overflow-x:auto;background:var(--bg);border:1px solid var(--rule);border-radius:8px;font:.82rem/1.5 var(--mono)}
-.patch span{display:block;padding:0 12px;white-space:pre}
+.patch span{display:block;padding:0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .patch .add{background:var(--good-bg);color:var(--good-ink)}
 .patch .del{background:var(--warn-bg);color:var(--warn-ink)}
 .patch .hunk,.patch .file{color:var(--muted)}
@@ -116,6 +128,7 @@ details.trace>summary{cursor:pointer;font-weight:600}
 footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--rule)}
 @media print{body{background:#fff}.graphwrap{overflow:visible}}
 @media (max-width:639px){
+.scrollhint{display:block}
 table.cells{table-layout:auto;min-width:0}
 table.cells colgroup{display:none}
 table.cells thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
