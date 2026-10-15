@@ -80,12 +80,14 @@ def _read_events(path: Path) -> list[Event]:
 def load_run(folder: Path) -> RunView:
     """One run folder. A fork's `violations.json` steps count `prefix.jsonl` first, then its own
     `trace.jsonl` (replay/README.md), so the fork's events are renumbered to match. A folder
-    `replay.stats` cannot read (bad record, fork.json or carriage.json) or counts as errored
-    (error.json and no record.json) is a ValueError here too,
+    `replay.stats` cannot read (bad record, fork.json or carriage.json), counts as errored
+    (error.json and no record.json) or counts as a mutation no-op is a ValueError here too,
     and its carriage label decides `exercised` with stats' own rule."""
-    loaded, unreadable, errored = stats.load_runs([folder])
-    if unreadable or errored or len(loaded) != 1:
-        raise ValueError(f"{folder}: replay.stats cannot read this run, or it errored")
+    found = stats.load_runs([folder])
+    if found.unreadable or found.errored or found.noop or len(found.runs) != 1:
+        raise ValueError(
+            f"{folder}: replay.stats cannot read this run, or it errored or was a no-op"
+        )
     record = RunRecord.model_validate_json((folder / "record.json").read_text(encoding="utf-8"))
     violations_path = folder / "violations.json"
     violations = (
@@ -109,7 +111,7 @@ def load_run(folder: Path) -> RunView:
         tuple(prefix + own),
         fork_of,
         len(prefix),
-        stats.is_exercised(loaded[0]),
+        stats.is_exercised(found.runs[0]),
     )
 
 

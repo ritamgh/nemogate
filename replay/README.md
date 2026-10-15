@@ -329,7 +329,7 @@ main(): `python -m replay.budget --bucket kill_gate --arms natural mutated --ope
 def wilson(k, n, z=1.96) -> (lo, hi)                  # Wilson score interval, clamped to [0, 1]; ValueError if n < 1
 def newcombe_diff(k1, n1, k2, n2) -> (diff, lo, hi)   # p1 - p2, Newcombe method 10 (hybrid score) from two Wilson intervals
 @dataclass LoadedRun(record: RunRecord, label: str | None, fork_source: str | None)
-def load_runs(paths) -> (list[LoadedRun], unreadable: int)     # reads files only
+def load_runs(paths) -> LoadedRuns(runs, unreadable, errored, noop)     # reads files only; use the names
 def aggregate(runs, *, unreadable, errored=0, noop=0, ledger, extraction_recall) -> dict   # pure: no file, no clock
 ```
 

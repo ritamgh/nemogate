@@ -212,6 +212,22 @@ def test_an_errored_run_folder_is_skipped_never_an_exemplar(tmp_path):
     assert evidence.exemplars[KEY].violating.run_id == "r-20260101T000001-aaa111"
 
 
+def test_a_mutation_noop_run_folder_is_skipped_never_an_exemplar(tmp_path):
+    # Breaks if a run the gate refused to record (error.json from NothingToMutate, no
+    # record.json: replay.stats counts it as mutation_noop) is loaded as a run or reported as
+    # something other than skipped.
+    runs = runs_without(tmp_path)
+    noop = runs / "r-20260101T000007-noop77"
+    shutil.copytree(runs / "r-20260101T000002-bbb222", noop)
+    (noop / "record.json").unlink()
+    (noop / "error.json").write_text('{"error_type": "gate.operators.NothingToMutate"}')
+
+    evidence = load_evidence([runs])
+
+    assert (evidence.read, evidence.skipped) == (8, 1)
+    assert evidence.exemplars[KEY].violating.run_id == "r-20260101T000001-aaa111"
+
+
 def test_no_group_means_no_exemplar_not_an_unfiltered_one():
     # Breaks if a results file with nothing pooled (reproducibility null) shows unfiltered runs.
     evidence = panels.load_trace_evidence([RUN_FOLDERS], None)

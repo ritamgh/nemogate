@@ -151,6 +151,7 @@
   "runs": {
     "found": 8,
     "inconclusive": {
+      "mutation_noop": 0,
       "not_comparable": 1,
       "not_exercised": 0,
       "run_error": 0,

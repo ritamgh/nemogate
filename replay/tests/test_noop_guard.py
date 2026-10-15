@@ -30,7 +30,7 @@ from replay.stats import aggregate, load_runs
 from replay.tests.test_stats import make_record
 from schemas.config import load_config
 from schemas.enums import Arm, Operator
-from schemas.trace import BoundaryIn, BoundaryOut
+from schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
 
 BASE = "00000000-0000-0000-0000-00000000000b"
 FINAL = "00000000-0000-0000-0000-0000000000f1"
@@ -65,17 +65,22 @@ class Task:
     id, constraint, boundary, user_message = "X1", "C-001", BOUNDARY, WITH_RULE
 
 
+class ReturnTask(Task):
+    boundary = "return:coder->planner"
+
+
 class App:
     """Each run builds a new team: the planner delegates the next description in `descriptions`."""
 
     repo_root = "/repo"
 
-    def __init__(self, tmp_path, descriptions):
+    def __init__(self, tmp_path, descriptions, task=Task):
         self.tmp_path = tmp_path
         self.descriptions = list(descriptions)
+        self.task = task
 
     def tasks(self):
-        return [Task()]
+        return [self.task()]
 
     async def base_image(self, client):
         return BASE
@@ -154,18 +159,18 @@ def test_a_drop_with_nothing_to_remove_is_counted_as_mutation_noop_and_the_sweep
     assert '"boundary_in"' not in trace and '"boundary_out"' not in trace
     assert not (noop_dir / "record.json").exists()
 
-    loaded, unreadable, errored, noops = load_runs([tmp_path / "runs"])
-    assert ([r.record.run_id for r in loaded], unreadable, errored, noops) == (
+    got = load_runs([tmp_path / "runs"])
+    assert ([r.record.run_id for r in got.runs], got.unreadable, got.errored, got.noop) == (
         [records[0].run_id],
         0,
         0,
         1,
     )
     results = aggregate(
-        loaded,
-        unreadable=unreadable,
-        errored=errored,
-        noop=noops,
+        got.runs,
+        unreadable=got.unreadable,
+        errored=got.errored,
+        noop=got.noop,
         ledger=full.ledger,
         extraction_recall=None,
     )
@@ -186,6 +191,48 @@ def test_a_drop_with_nothing_to_remove_is_counted_as_mutation_noop_and_the_sweep
     ((key, row),) = status.items()
     assert key[:3] == ("X1", "mutated", "drop")
     assert (row.records, row.errored, row.noop) == (1, 0, 1)
+
+
+def test_a_drop_with_nothing_to_remove_on_a_return_boundary_is_also_a_mutation_noop(tmp_path):
+    # Breaks if a NothingToMutate raised on the way back from a subagent (after it has run, from
+    # the gate's reply hook) loses its type on its way out, so the run is counted as run_error.
+    (tmp_path / "repo" / "migrations").mkdir(parents=True)
+    path = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
+    backend = LocalShellBackend(
+        root_dir=tmp_path, virtual_mode=True, inherit_env=True, env={"PATH": path}
+    )
+    helper = get_model("helper", stub_responses=[picks()])  # no sentence of "Wrote it." fits
+    full = load_ledger(REPO_ROOT / "nemogate.yaml")
+
+    def backend_for(session):
+        session.uuid = FINAL
+        return backend
+
+    runner = Runner(
+        app=App(tmp_path, [WITH_RULE], task=ReturnTask),
+        evaluate=evaluate,
+        make_middleware=lambda run_config: build_middleware(run_config, helper=helper),
+        ledger=full.ledger,
+        config=load_config(REPO_ROOT / "config.yaml"),
+        runs_dir=tmp_path / "runs",
+        client_factory=FakeClient,
+        backend_factory=backend_for,
+        allow_dirty=True,
+    )
+    records = asyncio.run(runner.arun(["X1"], [Arm.mutated], [Operator.drop], 1, "HEAD"))
+
+    assert records == []
+    (run_dir,) = (tmp_path / "runs").iterdir()
+    error = json.loads((run_dir / "error.json").read_text())
+    assert error["error_type"] == "gate.operators.NothingToMutate"
+    assert error["boundary"] == "return:coder->planner"
+    # The reply was never stamped as sent or received at the target boundary.
+    trace = parse_trace_jsonl((run_dir / "trace.jsonl").read_text())
+    assert [e.boundary for e in trace if isinstance(e, BoundaryIn | BoundaryOut)] == [
+        "delegation:planner->coder"
+    ] * 2  # the unmutated delegation only
+    got = load_runs([tmp_path / "runs"])
+    assert (got.runs, got.unreadable, got.errored, got.noop) == ([], 0, 0, 1)
 
 
 def test_the_noop_error_type_is_the_name_the_gate_class_reports():
@@ -285,9 +332,9 @@ def test_stats_counts_a_finished_run_whose_operator_changed_nothing_as_mutation_
     write_run_folder(tmp_path, "c-changed", changed, arm="mutated", operator="compress_100")
     write_run_folder(tmp_path, "d-no-trace", None, arm="mutated", operator="compress_100")
     write_run_folder(tmp_path, "e-natural", same, arm="natural", operator="none")
-    loaded, unreadable, errored, noops = load_runs([tmp_path])
-    assert sorted(r.record.run_id for r in loaded) == ["c-changed", "d-no-trace", "e-natural"]
-    assert (unreadable, errored, noops) == (0, 0, 2)
+    got = load_runs([tmp_path])
+    assert sorted(r.record.run_id for r in got.runs) == ["c-changed", "d-no-trace", "e-natural"]
+    assert (got.unreadable, got.errored, got.noop) == (0, 0, 2)
 
 
 def test_load_runs_counts_only_the_gates_error_type_as_a_noop(tmp_path):
@@ -300,4 +347,5 @@ def test_load_runs_counts_only_the_gates_error_type_as_a_noop(tmp_path):
         folder = tmp_path / run_id
         folder.mkdir()
         (folder / "error.json").write_text(json.dumps({"error_type": error_type}))
-    assert load_runs([tmp_path]) == ([], 0, 2, 1)
+    got = load_runs([tmp_path])
+    assert (got.runs, got.unreadable, got.errored, got.noop) == ([], 0, 2, 1)

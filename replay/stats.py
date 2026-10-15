@@ -15,7 +15,7 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -126,9 +126,17 @@ def _is_noop_error(folder: Path) -> bool:
         return False
 
 
-def load_runs(paths: Iterable[Path | str]) -> tuple[list[LoadedRun], int, int, int]:
-    """(readable runs, run folders whose files are missing or invalid, errored run folders,
-    mutation no-ops).
+class LoadedRuns(NamedTuple):
+    """What `load_runs` found. Read the fields by name: a new one must not break callers."""
+
+    runs: list[LoadedRun]  # readable runs, without the mutation no-ops
+    unreadable: int  # run folders whose files are missing or invalid
+    errored: int  # run folders with error.json and no record.json, not a no-op
+    noop: int  # mutation no-ops
+
+
+def load_runs(paths: Iterable[Path | str]) -> LoadedRuns:
+    """The readable runs and the counts of the folders that are not (`LoadedRuns`).
 
     A folder with error.json and no record.json is an errored run (the runner caught the
     exception and carried on); it is not "unreadable". If that error is the gate's
@@ -152,7 +160,7 @@ def load_runs(paths: Iterable[Path | str]) -> tuple[list[LoadedRun], int, int, i
             noop += 1
         else:
             runs.append(run)
-    return runs, unreadable, errored, noop
+    return LoadedRuns(runs, unreadable, errored, noop)
 
 
 # ---------------------------------------------------------------- aggregation
@@ -358,12 +366,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         recall = None if args.extraction_recall is None else _read_recall(args.extraction_recall)
         ledger = load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
-        runs, unreadable, errored, noop = load_runs(args.paths)
+        loaded = load_runs(args.paths)
         results = aggregate(
-            runs,
-            unreadable=unreadable,
-            errored=errored,
-            noop=noop,
+            loaded.runs,
+            unreadable=loaded.unreadable,
+            errored=loaded.errored,
+            noop=loaded.noop,
             ledger=ledger,
             extraction_recall=recall,
         )
@@ -371,7 +379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # FileNotFoundError, bad recall, bad ledger (YAML or schema), unknown constraint id
         print(f"stats: {' '.join(str(exc).split())}", file=sys.stderr)
         return 2
-    if not runs and not unreadable and not errored and not noop:
+    if not any(loaded):
         print("stats: no run folders found; writing an empty result", file=sys.stderr)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_bytes(render(results).encode("utf-8"))
