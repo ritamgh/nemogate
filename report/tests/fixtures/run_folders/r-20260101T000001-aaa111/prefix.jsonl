@@ -1,0 +1,2 @@
+{"run_id":"r-20260101T000000-000aaa","arm":"natural","operator":"none","boundary":null,"step":0,"agent":"planner","model_id":"model/sut-y","safe_config_hash":"8c5a0a1ec16e","ledger_hash":"1f2e3d4c5b6a","type":"tool_call","tool":"read_file","args":{"path":"src/models.py"},"blocked":false}
+{"run_id":"r-20260101T000000-000aaa","arm":"natural","operator":"none","boundary":null,"step":1,"agent":"planner","model_id":"model/sut-y","safe_config_hash":"8c5a0a1ec16e","ledger_hash":"1f2e3d4c5b6a","type":"tool_result","tool":"read_file","content":"class User: ...","is_error":false}
