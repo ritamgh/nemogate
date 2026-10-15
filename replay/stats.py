@@ -1,7 +1,8 @@
 """Stats card: pool finished runs into cells, put intervals on them and write results.json.
 
 `python -m replay.stats RUNS... --ledger nemogate.yaml [--extraction-recall FILE] --out FILE`
-reads run folders (record.json, and fork.json / carriage.json when present) and writes the
+reads run folders (record.json, and fork.json / carriage.json when present; a folder with
+error.json and no record.json is an errored run) and writes the
 results file the report page reads. The format is in replay/README.md, section "stats.py".
 No model call, no sandbox, no network. Loading (`load_runs`) is separate from the arithmetic
 (`aggregate`), which takes plain objects and touches no file.
@@ -80,7 +81,7 @@ class LoadedRun:
 
 
 def _is_run_dir(path: Path) -> bool:
-    return (path / "run_config.json").is_file() or (path / "record.json").is_file()
+    return any((path / name).is_file() for name in ("run_config.json", "record.json", "error.json"))
 
 
 def _run_dirs(paths: Iterable[Path | str]) -> list[Path]:
@@ -116,20 +117,25 @@ def _read_run(folder: Path) -> LoadedRun | None:
     return LoadedRun(record, label=label, fork_source=fork_source)
 
 
-def load_runs(paths: Iterable[Path | str]) -> tuple[list[LoadedRun], int]:
-    """(readable runs, number of run folders whose files are missing or invalid).
+def load_runs(paths: Iterable[Path | str]) -> tuple[list[LoadedRun], int, int]:
+    """(readable runs, run folders whose files are missing or invalid, errored run folders).
 
-    FileNotFoundError if a path is not a directory.
+    A folder with error.json and no record.json is an errored run (the runner caught the
+    exception and carried on); it is not "unreadable". FileNotFoundError if a path is not a
+    directory.
     """
     runs: list[LoadedRun] = []
-    unreadable = 0
+    unreadable = errored = 0
     for folder in _run_dirs(paths):
+        if not (folder / "record.json").exists() and (folder / "error.json").is_file():
+            errored += 1
+            continue
         run = _read_run(folder)
         if run is None:
             unreadable += 1
         else:
             runs.append(run)
-    return runs, unreadable
+    return runs, unreadable, errored
 
 
 # ---------------------------------------------------------------- aggregation
@@ -222,16 +228,18 @@ def aggregate(
     runs: Sequence[LoadedRun],
     *,
     unreadable: int,
+    errored: int = 0,
     ledger: Ledger,
     extraction_recall: float | None,
 ) -> dict[str, Any]:
-    """The results dict (format_version 1) for `runs`, plus `unreadable` run folders."""
+    """The results dict (format_version 1) for `runs` and the `unreadable` and `errored` folders."""
     group = _pooled_group(runs)
     pooled = sorted(
         (run for run in group if run.label != Label.NOT_EXERCISED), key=lambda r: r.record.run_id
     )
     inconclusive = {
         "unreadable_record": unreadable,
+        "run_error": errored,
         "not_comparable": len(runs) - len(group),
         "not_exercised": len(group) - len(pooled),
     }
@@ -281,7 +289,7 @@ def aggregate(
             "lockfile_hash": head.lockfile_hash,
         },
         "runs": {
-            "found": len(runs) + unreadable,
+            "found": len(runs) + unreadable + errored,
             "pooled": len(pooled),
             "inconclusive": inconclusive,
         },
@@ -326,13 +334,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         recall = None if args.extraction_recall is None else _read_recall(args.extraction_recall)
         ledger = load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
-        runs, unreadable = load_runs(args.paths)
-        results = aggregate(runs, unreadable=unreadable, ledger=ledger, extraction_recall=recall)
+        runs, unreadable, errored = load_runs(args.paths)
+        results = aggregate(
+            runs, unreadable=unreadable, errored=errored, ledger=ledger, extraction_recall=recall
+        )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         # FileNotFoundError, bad recall, bad ledger (YAML or schema), unknown constraint id
         print(f"stats: {' '.join(str(exc).split())}", file=sys.stderr)
         return 2
-    if not runs and not unreadable:
+    if not runs and not unreadable and not errored:
         print("stats: no run folders found; writing an empty result", file=sys.stderr)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_bytes(render(results).encode("utf-8"))
