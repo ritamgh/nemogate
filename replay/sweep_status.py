@@ -15,7 +15,6 @@ import argparse
 import hashlib
 import json
 import sys
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +52,7 @@ class Attempt:
     cell: Cell
     group: str  # group_key of the run's reproducibility fields
     errored: bool  # error.json and no record.json
+    seed: int | None = None  # run_config.json's seed; None if that file is missing or unusable
     violated: bool = False  # the record lists its target constraint (records only)
     success: bool = False  # the record's task_success (records only)
 
@@ -70,6 +70,14 @@ def _is_run_folder(folder: Path) -> bool:
     )
 
 
+def _read_seed(folder: Path) -> int | None:
+    try:
+        seed = json.loads((folder / "run_config.json").read_bytes())["seed"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return seed if isinstance(seed, int) and not isinstance(seed, bool) else None
+
+
 def _read_attempt(folder: Path) -> Attempt | None:
     """The attempt in `folder`, or None if record.json (or, without one, error.json) is unusable."""
     try:
@@ -80,6 +88,7 @@ def _read_attempt(folder: Path) -> Attempt | None:
                 (rec.task_id, rec.arm.value, rec.operator.value),
                 group_key(rec.model_dump(mode="json")),
                 errored=False,
+                seed=_read_seed(folder),
                 violated=rec.constraint_id in rec.violations,
                 success=rec.task_success,
             )
@@ -87,7 +96,7 @@ def _read_attempt(folder: Path) -> Attempt | None:
         cell = (data["task_id"], Arm(data["arm"]).value, Operator(data["operator"]).value)
         if not isinstance(data["task_id"], str) or not isinstance(data["model_ids"], dict):
             return None
-        return Attempt(folder.name, cell, group_key(data), errored=True)
+        return Attempt(folder.name, cell, group_key(data), errored=True, seed=_read_seed(folder))
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
@@ -119,6 +128,12 @@ class TopUpCell:
     operator: str
     existing: int  # attempts (records and errored runs) with this invocation's group
     planned: int  # runs still to do: max(0, n - existing)
+    next_seed: int  # above every seed those attempts used, and at least `existing`
+
+    @property
+    def seeds(self) -> range:
+        """The seeds of the planned runs: after the used ones, so none is used twice."""
+        return range(self.next_seed, self.next_seed + self.planned)
 
 
 def top_up_plan(
@@ -135,13 +150,20 @@ def top_up_plan(
     failed for a reason tied to its conditions would be replaced by one that did not.
     """
     here = group_key(reproducibility)
-    have = Counter(a.cell for a in found.attempts if a.group == here)
+    mine: dict[Cell, list[Attempt]] = {}
+    for a in found.attempts:
+        if a.group == here:
+            mine.setdefault(a.cell, []).append(a)
     cells = []
     for task_id in task_ids:
         for arm, operator in pairs(arms, operators):
-            existing = have[(task_id, arm.value, operator.value)]
+            made = mine.get((task_id, arm.value, operator.value), [])
+            # An attempt whose seed is unknown still counts: next_seed is never below the count.
+            next_seed = max([len(made), *(a.seed + 1 for a in made if a.seed is not None)])
             cells.append(
-                TopUpCell(task_id, arm.value, operator.value, existing, max(0, n - existing))
+                TopUpCell(
+                    task_id, arm.value, operator.value, len(made), max(0, n - len(made)), next_seed
+                )
             )
     return cells
 

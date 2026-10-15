@@ -23,8 +23,13 @@ HERE = {
 }
 
 
+def put_config(folder: Path, seed: int | None):
+    if seed is not None:
+        (folder / "run_config.json").write_text(json.dumps({"seed": seed}))
+
+
 def put_record(runs, run_id, *, task="X1", arm="natural", operator="none", violated=False,
-               success=True, **repro):  # fmt: skip
+               success=True, seed=None, **repro):  # fmt: skip
     fields = {**HERE, **repro}
     record = RunRecord(
         run_id=run_id,
@@ -44,10 +49,11 @@ def put_record(runs, run_id, *, task="X1", arm="natural", operator="none", viola
     folder = runs / run_id
     folder.mkdir(parents=True)
     (folder / "record.json").write_text(record.model_dump_json())
+    put_config(folder, seed)
     return folder
 
 
-def put_error(runs, run_id, *, task="X1", arm="natural", operator="none", **repro):
+def put_error(runs, run_id, *, task="X1", arm="natural", operator="none", seed=None, **repro):
     fields = {**HERE, **repro}
     data = {
         "run_id": run_id,
@@ -63,6 +69,7 @@ def put_error(runs, run_id, *, task="X1", arm="natural", operator="none", **repr
     folder = runs / run_id
     folder.mkdir(parents=True)
     (folder / "error.json").write_text(json.dumps(data))
+    put_config(folder, seed)
     return folder
 
 
@@ -105,6 +112,32 @@ def test_top_up_ignores_orphans_forks_and_other_reproducibility_fields(tmp_path)
     put_error(tmp_path, "r-err-sha", repo_sha="b" * 40)
     put_record(tmp_path, "r-model", model_ids={**HERE["model_ids"], Role.sut: "s2"})
     assert plan(tmp_path, 3) == [("X1", 1, 2)]
+
+
+def seeds_of(runs: Path, n: int) -> list[int]:
+    (cell,) = top_up_plan(scan(runs), HERE, ["X1"], [Arm.natural], [Operator.none], n)
+    return list(cell.seeds)
+
+
+def test_top_up_seeds_start_above_the_largest_used_seed_not_at_the_attempt_count(tmp_path):
+    # Breaks if the next seed is the attempt count: attempts with seeds 3 and 5 (errored one
+    # included) and n=4 would give the new runs seeds 2 and 3, repeating seed 3.
+    put_record(tmp_path, "r-1", seed=3)
+    put_error(tmp_path, "r-2", seed=5)
+    assert seeds_of(tmp_path, 4) == [6, 7]
+
+
+def test_top_up_seeds_fall_back_to_the_attempt_count_when_a_seed_is_unreadable(tmp_path):
+    # Breaks if an attempt with no readable run_config.json is ignored when choosing seeds.
+    put_record(tmp_path, "r-1", seed=0)
+    put_record(tmp_path, "r-2")
+    put_record(tmp_path, "r-3")
+    assert seeds_of(tmp_path, 5) == [3, 4]
+
+
+def test_top_up_seeds_leave_out_other_groups_and_start_at_zero_when_there_is_nothing(tmp_path):
+    put_record(tmp_path, "r-other", seed=9, repo_sha="b" * 40)
+    assert seeds_of(tmp_path, 2) == [0, 1]
 
 
 def test_top_up_counts_per_task_arm_and_operator(tmp_path):

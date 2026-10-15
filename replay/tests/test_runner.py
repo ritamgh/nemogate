@@ -1019,21 +1019,69 @@ def test_error_json_keeps_only_the_last_twenty_traceback_lines(tmp_path):
     assert tail == [*(f"frame {i}" for i in range(81, 100)), "ValueError: deep"]
 
 
-def test_error_json_creates_the_run_folder_when_the_run_died_before_it_existed(
+def test_a_failure_before_the_run_folder_exists_stops_the_sweep_and_keeps_the_traceback(
     tmp_path, monkeypatch
 ):
-    # Breaks if a failure before the run folder exists loses the error (or raises a second,
-    # unrelated FileNotFoundError that hides it).
+    # Breaks if a failure before the folder exists loses the traceback (the wrapper must create
+    # the folder) or is turned into an attempt.
     h = Harness(tmp_path)
 
     def fail(*args, **kwargs):
         raise OSError("disk full")
 
     monkeypatch.setattr(record, "write_ledger", fail)
-    records = h.runner.run(["X1"], [Arm.natural], [Operator.none], 1, "HEAD")
-    assert records == []
-    (bad,) = error_folders(h)
-    assert json.loads((bad / "error.json").read_text())["error_type"] == "builtins.OSError"
+    with pytest.raises(OSError, match="disk full"):
+        sweep_three(h)
+    assert "OSError: disk full" in (h.run_dir() / "error.txt").read_text()
+    assert error_folders(h) == []
+    assert h.app.builds == 0
+
+
+def _raise_value_error(*args, **kwargs):
+    raise ValueError("refused during setup")
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"make_middleware": _raise_value_error},
+        {"client_factory": _raise_value_error},
+        {"backend_factory": _raise_value_error},
+    ],
+    ids=["gate", "sandbox-client", "backend"],
+)
+def test_arun_stops_on_any_failure_during_setup_whatever_its_type(tmp_path, broken):
+    # Breaks if a plain ValueError raised while the run is being set up (the gate refusing, the
+    # sandbox not starting) is recorded as an attempt: every run would fail the same way, and a
+    # top-up would count them and plan nothing.
+    h = Harness(tmp_path, **broken)
+    with pytest.raises(ValueError, match="refused during setup"):
+        sweep_three(h)
+    assert error_folders(h) == []
+    assert h.runner.errors == []
+    assert len(list(h.runs_dir.iterdir())) == 1  # run 2 never started
+
+
+def test_arun_stops_when_the_real_gate_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
+    # The real gate.make_middleware raises ValueError (not ConfigError) for a stale hash.
+    # Breaks if that is carried past: three error.json attempts for n=3 and nothing measured.
+    import gate
+
+    monkeypatch.setattr(gate, "safe_config_hash", lambda config: "stale0000000")
+    h = Harness(tmp_path, make_middleware=gate.make_middleware)
+    with pytest.raises(ValueError, match="stale"):
+        sweep_three(h)
+    assert error_folders(h) == []
+    assert h.app.builds == 0
+
+
+def test_arun_records_a_failure_after_the_agents_ran_as_an_attempt(tmp_path):
+    # Breaks if the setup/execution line sits too early: a run whose gate never wrote a trace
+    # (found only after the agents ran) is an outcome of that run, not a broken sweep.
+    h = Harness(tmp_path, {"write_trace": False})
+    assert h.runner.run(["X1"], [Arm.natural], [Operator.none], 2, "HEAD") == []
+    assert len(error_folders(h)) == 2
+    assert [e.error_type for e in h.runner.errors] == ["builtins.RuntimeError"] * 2
 
 
 @pytest.mark.parametrize(
@@ -1206,3 +1254,15 @@ def test_cli_top_up_refuses_a_checkout_that_is_not_the_ref(tmp_path, monkeypatch
     assert code == 2
     assert "checkout" in capsys.readouterr().err
     assert h.app.builds == 0
+
+
+def test_cli_top_up_never_repeats_a_seed_when_the_earlier_seeds_are_not_contiguous(
+    tmp_path, monkeypatch
+):
+    # Breaks if the next seed is the attempt count: one attempt with seed 3 and n=4 would give
+    # the new runs seeds 1, 2, 3 and repeat seed 3.
+    h = Harness(tmp_path)
+    task = h.app.tasks()[0]
+    asyncio.run(h.runner.run_one(task, Arm.natural, Operator.none, seed=3, repo_ref="HEAD"))
+    assert cli_with(h, monkeypatch, "--tasks", "X1", "--n", "4", "--top-up", "--yes") == 0
+    assert run_dirs_by_cell(h) == {("X1", 3): 1, ("X1", 4): 1, ("X1", 5): 1, ("X1", 6): 1}

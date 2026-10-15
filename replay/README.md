@@ -137,9 +137,10 @@ class Runner:
     async def fork_one(self, source_run_id: str, arm: Arm, operator: Operator, *, seed: int,
                        repo_ref: str = "main") -> RunRecord
     async def arun(self, task_ids, arms, operators, n, repo_ref="main", *,
-                   existing=None) -> list[RunRecord]
+                   seeds=None) -> list[RunRecord]
     def run(self, task_ids, arms, operators, n, repo_ref="main", *,
-            existing=None) -> list[RunRecord]  # asyncio.run
+            seeds=None) -> list[RunRecord]  # asyncio.run
+    # seeds: {(task id, arm, operator): iterable of int} replaces range(n) for those cells
     def reproducibility(self, repo_ref="main") -> dict   # the five fields a run now would carry
     records: list[RunRecord]; errors: list[RunError]     # what the latest arun finished / caught
     async def afork(self, source_run_id, arms, operators, n, repo_ref="main") -> list[RunRecord]
@@ -196,26 +197,31 @@ def run(task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]
 11. `RunRecord(... contree_image=final, checkpoint_id=..., <the five fields from step 1>)` ->
     `run_dir/record.json`; return it.
 
-If any step after the run folder is named raises, write the traceback to `run_dir/error.txt`,
-write `run_dir/error.json` (below) and re-raise: a crashed run has no record (and maybe no
-`boundaries.json`). `arun` runs sequentially (no concurrency in week 1), tasks in the order of
-`task_ids` (KeyError on an unknown id), then pairs, then `n` repetitions with
-`seed = <repetition index>`.
+If any step after the run folder is named raises, write the traceback to `run_dir/error.txt` and
+re-raise: a crashed run has no record (and maybe no `boundaries.json`). `arun` runs sequentially
+(no concurrency in week 1), tasks in the order of `task_ids` (KeyError on an unknown id), then
+pairs, then `n` repetitions with `seed = <repetition index>`.
 
-**A crashed run does not stop the sweep.** `arun` catches an exception raised inside a run (one
-that left `error.json`), appends a `RunError(run_id, task_id, arm, operator, error_type)` to
-`self.errors` and carries on with the next run; finished runs are in `self.records` as they
-come. It still stops, by raising, for:
+**A crashed run does not stop the sweep, a broken setup does.** A run has two phases. *Setup* is
+everything before the agents start: the ledger and run config, `make_middleware` (the real gate
+refuses a stale safe-config hash, a bad arm/operator pair or a ledger it cannot use here, all
+with `ValueError`), the sandbox client, base image and session, the graph build and, for a fork,
+the checkout of the fork point. A failure in setup measures nothing and would repeat in every run,
+so it stops the sweep whatever its type, writes `error.txt` only and is never an attempt.
+*Execution* starts at `graph.ainvoke`. An exception from there on (the agents, the diff, the task
+check, the trace check, the oracle) leaves `error.json`; `arun` appends a
+`RunError(run_id, task_id, arm, operator, error_type)` to `self.errors` and carries on with the
+next run. Finished runs are in `self.records` as they come. Even from execution, `arun` stops
+by raising for:
 
-- the spend cap (`common.SpendCapReached`, AGENTS.md rule 3: stop and tell a human), a config
-  failure (`common.ConfigError`, `common.MissingEnvError`; including a stale safe-config hash,
-  which `get_model` refuses) or any exception that was raised from or while handling one of
-  these. These write `error.txt` but no `error.json`, so they never count as an attempt;
-- any error before a run began: an unknown task id, a checkout that is dirty or not `repo_ref`
+- the spend cap (`common.SpendCapReached`, AGENTS.md rule 3: stop and tell a human),
+  `common.ConfigError`, `common.MissingEnvError`, or any exception raised from or while handling
+  one of these. These write `error.txt` but no `error.json`, so they never count as an attempt;
+- an error before a run began: an unknown task id, a checkout that is dirty or not `repo_ref`
   (checked again before every run), a missing lockfile or config;
 - `KeyboardInterrupt` and `asyncio.CancelledError` (not `Exception`s).
 
-`error.json` (never written next to a `record.json`; `fork_one` crashes get one too):
+`error.json` (`fork_one` crashes get one too, next to their `fork.json`, which is written before anything in a fork run can fail):
 
 ```
 {"run_id", "task_id", "arm", "operator", "constraint_id", "boundary",
@@ -471,7 +477,8 @@ delegations to the same agent are not told apart; planner delegations here are s
   with `record.json` or `error.json`; orphans and forks do not count; an error counts, since
   retrying it would bias the sample) and plans only the shortfall to `--n`. It prints
   `<task> <arm> <operator>: existing E, planned P` per cell, then `planned runs: N`, and still
-  needs `--yes`. New runs get seeds from E up, so they do not repeat earlier seeds. It needs a
+  needs `--yes`. New runs get seeds above the largest one those attempts used (read from each
+  `run_config.json`; at least E), so no seed is used twice even when the earlier seeds are not 0..E-1. It needs a
   clean checkout at `--repo-ref` (exit 2 otherwise), because the fields include `repo_sha`.
 - `python -m replay.runner` also takes `--runs-dir DIR` (default `runs/`), built on
   `default_runner(runs_dir=None)`, which `run()` now calls. `run()` itself is unchanged.

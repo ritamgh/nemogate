@@ -13,7 +13,7 @@ import os
 import subprocess
 import sys
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -73,6 +73,13 @@ class RunError:
     arm: str
     operator: str
     error_type: str  # fully qualified class name
+
+
+class _Phase:
+    """Where a run is: in setup (run config, ledger, gate, sandbox, graph build), where a failure
+    says the sweep itself is wrong and measures nothing, or executing, where it is an outcome."""
+
+    executing = False
 
 
 def _stops_the_sweep(exc: BaseException) -> bool:
@@ -235,10 +242,12 @@ class Runner:
         repro: dict[str, Any],
         fork: "_Fork | None" = None,
     ) -> RunRecord:
-        """One run. If it raises, the traceback goes to `error.txt` and, unless the failure stops
-        the sweep, a summary to `error.json`; the exception is re-raised either way."""
+        """One run. If it raises, the traceback goes to `error.txt`. A failure once the agents have
+        started also gets an `error.json`, unless it is one that stops the sweep; a failure in
+        setup never does. The exception is re-raised either way."""
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
+        phase = _Phase()
         try:
             return await self._execute(
                 run_id,
@@ -250,12 +259,13 @@ class Runner:
                 repo_ref=repo_ref,
                 repro=repro,
                 fork=fork,
+                phase=phase,
             )
         except Exception as exc:
             text = traceback.format_exc()
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / "error.txt").write_text(text, encoding="utf-8")
-            if not _stops_the_sweep(exc):
+            if phase.executing and not _stops_the_sweep(exc):
                 exc.nemogate_run_error = _write_error(  # type: ignore[attr-defined]
                     run_dir, task, arm, operator, repro, exc, text
                 )
@@ -273,6 +283,7 @@ class Runner:
         repo_ref: str,
         repro: dict[str, Any],
         fork: "_Fork | None",
+        phase: _Phase,
     ) -> RunRecord:
         # The gate loads the FULL ledger from this file (and pins run_config.target_constraint
         # itself), so the hash of the file is the hash the record carries. The oracle checks only
@@ -292,9 +303,10 @@ class Runner:
         )
         record.write_json(run_dir / "run_config.json", run_config)
         if fork is not None:
+            # fork.json first: whatever fails next, the folder is known to be a fork.
+            record.write_json(run_dir / "fork.json", fork.origin)
             # The fork resumes in its own copy, so the recorded run is never written to.
             copy_checkpoints(fork.source_dir / CHECKPOINTS, run_dir / CHECKPOINTS)
-            record.write_json(run_dir / "fork.json", fork.origin)
             (run_dir / PREFIX).write_text(
                 "".join(dump_event_jsonl(e) + "\n" for e in fork.prefix), encoding="utf-8"
             )
@@ -308,7 +320,7 @@ class Runner:
             start = fork.origin.crossing.pre_image
         session = (await client.images.use(UUID(start))).session()
         checkpoint_id, crossings, compaction = await self._invoke(
-            session, task, run_config, run_dir, thread_id, fork
+            session, task, run_config, run_dir, thread_id, fork, phase
         )
         record.write_json(
             run_dir / BOUNDARIES,
@@ -406,6 +418,7 @@ class Runner:
         run_dir: Path,
         thread_id: str,
         fork: "_Fork | None",
+        phase: _Phase,
     ) -> tuple[str, tuple[Crossing, ...], dict[str, Any] | None]:
         """Build the graph on `session` and run the task, from the start or (a fork) from the
         fork point; return the final checkpoint id, the boundary crossings and the planner's
@@ -439,6 +452,7 @@ class Runner:
                 )
                 if fork is None:
                     message = {"role": "user", "content": task.user_message}
+                    phase.executing = True
                     await graph.ainvoke({"messages": [message]}, config=config)
                 else:
                     crossing = fork.origin.crossing
@@ -450,6 +464,7 @@ class Runner:
                         },
                     }
                     await _check_fork_point(graph, start, crossing.tool_call_id)
+                    phase.executing = True
                     await graph.ainvoke(None, config=start)
                 state = await graph.aget_state(config)
                 children = await _children(graph, config) if recorder.crossings({}) else {}
@@ -467,11 +482,11 @@ class Runner:
         n: int,
         repo_ref: str = "main",
         *,
-        existing: Mapping[sweep_status.Cell, int] | None = None,
+        seeds: Mapping[sweep_status.Cell, Iterable[int]] | None = None,
     ) -> list[RunRecord]:
         """Every run, one after another: tasks in order, then (arm, operator) pairs, then `n`
-        repetitions with seed = repetition index; `existing` (attempts already made per
-        (task id, arm, operator) values) starts that cell's seeds after them.
+        repetitions with seed = repetition index. `seeds` (per (task id, arm, operator) values)
+        replaces `range(n)` for the cells it names: a top-up's seeds, which skip the used ones.
 
         A run that raises inside its own execution leaves `error.json` in its folder, is added to
         `self.errors` and the sweep goes on; `self.records` holds the finished ones as they come.
@@ -484,8 +499,8 @@ class Runner:
         self.records, self.errors = records, []
         for task in tasks:
             for arm, operator in pairs(arms, operators):
-                first = (existing or {}).get((task.id, arm.value, operator.value), 0)
-                for seed in range(first, n):
+                cell_seeds = (seeds or {}).get((task.id, arm.value, operator.value), range(n))
+                for seed in cell_seeds:
                     try:
                         records.append(
                             await self.run_one(task, arm, operator, seed=seed, repo_ref=repo_ref)
@@ -505,9 +520,9 @@ class Runner:
         n: int,
         repo_ref: str = "main",
         *,
-        existing: Mapping[sweep_status.Cell, int] | None = None,
+        seeds: Mapping[sweep_status.Cell, Iterable[int]] | None = None,
     ) -> list[RunRecord]:
-        return asyncio.run(self.arun(task_ids, arms, operators, n, repo_ref, existing=existing))
+        return asyncio.run(self.arun(task_ids, arms, operators, n, repo_ref, seeds=seeds))
 
     async def afork(
         self,
@@ -735,7 +750,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
     sweep: Runner | None = None
-    existing: dict[sweep_status.Cell, int] | None = None
+    seeds: dict[sweep_status.Cell, range] | None = None
     if args.top_up:
         sweep = default_runner(args.runs_dir)
         try:
@@ -751,7 +766,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{cell.task_id} {cell.arm} {cell.operator}: "
                 f"existing {cell.existing}, planned {cell.planned}"
             )
-        existing = {(c.task_id, c.arm, c.operator): c.existing for c in cells}
+        seeds = {(c.task_id, c.arm, c.operator): c.seeds for c in cells}
         planned = sum(c.planned for c in cells)
     else:
         planned = len(args.tasks) * len(pairs(args.arms, args.operators)) * args.n
@@ -764,7 +779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
     sweep = sweep or default_runner(args.runs_dir)
-    extra = {} if existing is None else {"existing": existing}
+    extra = {} if seeds is None else {"seeds": seeds}
     try:
         records = sweep.run(args.tasks, args.arms, args.operators, args.n, args.repo_ref, **extra)
     except SpendCapReached as exc:
