@@ -64,4 +64,4 @@ PATHs may be run folders or parents of them (searched recursively; anything with
 path is skipped). A run folder is never written: the checkpoint file is copied to a temp folder first.
 A fork's copied history is left out when its source folder is found. A hit is a candidate to read:
 prose or quoted JSON that happens to look like a call is flagged too. `--json OUT` also saves every
-result; OUT may not sit in a run folder.
+result; OUT must be a new file outside every scanned folder and run folder.

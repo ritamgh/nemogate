@@ -12,9 +12,9 @@ native tool call. It also checks the text that crosses a boundary in `trace.json
 A fork's checkpoint file starts as a copy of its source's. Rows that also exist in the source's
 file are the copied history and are skipped, so a fork reports only its own messages; if the
 source folder cannot be found, the whole file is scanned and the run is marked
-`prefix_separated: false`. In `trace.jsonl` a fork's first `prefix.jsonl` lines are the copied
-prefix and are skipped likewise. Run folders are never written. A hit is a candidate to read, not
-a verdict.
+`prefix_separated: false`. A fork's `trace.jsonl` holds only its own events (the copied prefix is
+in `prefix.jsonl`, which is not scanned). Run folders are never written. A hit is a candidate to
+read, not a verdict.
 """
 
 import argparse
@@ -38,8 +38,8 @@ from preflight.probes import _text, looks_like_tool_call_text
 
 CHECKPOINTS = "checkpoints.sqlite"
 TRACE = "trace.jsonl"
-PREFIX = "prefix.jsonl"
 FORK = "fork.json"
+RUN_FILES = ("run_config.json", "record.json", TRACE, CHECKPOINTS)  # what marks a run folder
 TRACE_TYPES = ("final_output", "boundary_in")  # events whose content crossed a boundary as text
 EXCERPT_CHARS = 200
 
@@ -159,13 +159,13 @@ def _write_keys(path: Path) -> set[tuple]:
         return set(con.execute(f"SELECT {_WRITE_KEY} FROM writes WHERE channel = 'messages'"))
 
 
-def _trace_events(run_dir: Path, skip_lines: int) -> Iterator[tuple[int, dict]]:
+def _trace_events(run_dir: Path) -> Iterator[tuple[int, dict]]:
     path = run_dir / TRACE
     if not path.is_file():
         return
     with path.open(encoding="utf-8") as handle:
         for number, line in enumerate(handle):
-            if number >= skip_lines and line.strip():
+            if line.strip():
                 yield number, json.loads(line)
 
 
@@ -173,17 +173,14 @@ def scan_run(run_dir: Path, known: dict[str, Path] | None = None) -> RunScan:
     """Scan one run folder. `known` maps run ids to folders, to find a fork's source."""
     scan = RunScan(run_id=run_dir.name)
     skip: set[tuple] = set()
-    prefix_lines = 0
     if (run_dir / FORK).is_file():
         scan.fork_of = json.loads((run_dir / FORK).read_text(encoding="utf-8"))["source_run_id"]
         source = (known or {}).get(scan.fork_of) or run_dir.parent / scan.fork_of
         scan.prefix_separated = (source / CHECKPOINTS).is_file()
         if scan.prefix_separated:
             skip = _write_keys(source / CHECKPOINTS)
-        if (run_dir / PREFIX).is_file():
-            prefix_lines = len((run_dir / PREFIX).read_text(encoding="utf-8").splitlines())
 
-    events = list(_trace_events(run_dir, prefix_lines))
+    events = list(_trace_events(run_dir))
     root_agent = next((e["agent"] for _, e in events if e.get("boundary") is None), None)
 
     if (run_dir / CHECKPOINTS).is_file():
@@ -279,6 +276,20 @@ def report(scans: Sequence[RunScan]) -> str:
     return "\n".join(lines)
 
 
+def _json_target_problem(out: Path, roots: Iterable[Path]) -> str | None:
+    """Why `out` may not be written, or None. Never replace a file, never write among the runs."""
+    out = out.resolve()
+    if out.exists():
+        return "already exists"
+    for root in roots:
+        if out.is_relative_to(root.resolve()):
+            return f"is inside the scanned folder {root}"
+    for folder in out.parents:
+        if any((folder / name).exists() for name in RUN_FILES):
+            return f"is inside the run folder {folder}"
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m preflight.textcalls", description=__doc__)
     parser.add_argument("run_dirs", nargs="+", type=Path, metavar="RUN_DIR_OR_PARENT")
@@ -288,8 +299,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     scans = scan_all(args.run_dirs)
     if not scans:
         parser.error("no run folder (checkpoints.sqlite or trace.jsonl) under the given paths")
-    if args.json is not None and (args.json.parent / CHECKPOINTS).exists():
-        parser.error(f"--json would write into a run folder: {args.json.parent}")
+    if args.json is not None:
+        problem = _json_target_problem(args.json, args.run_dirs)
+        if problem:
+            parser.error(f"--json {args.json}: {problem}")
     print(report(scans))
     if args.json is not None:
         args.json.write_text(
