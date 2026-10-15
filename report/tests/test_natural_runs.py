@@ -234,3 +234,37 @@ def test_main_writes_the_file(batch, tmp_path, monkeypatch, capsys):
 
     assert out.read_text().startswith("# Natural runs")
     assert "2 counted" in capsys.readouterr().out
+
+
+def test_a_fork_folder_is_not_a_natural_run_even_when_its_arm_is_natural(batch):
+    # Breaks if a natural fork (it repeats its source's planner handoff) is counted as an
+    # independent natural run: it would inflate every count and the carriage rates.
+    fork = make_run(batch, "r-20260101T000006-fff666", ["Rename it."])
+    (fork / "fork.json").write_text(json.dumps({"source_run_id": "r-20260101T000001-aaa111"}))
+
+    rows, excluded = build(batch)
+
+    assert [r.run_id[-6:] for r in rows] == ["aaa111", "bbb222"]
+    assert "fff666" not in [e.run_id[-6:] for e in excluded]
+    assert natural_runs.count_skipped_forks([batch]) == 1
+
+
+def test_a_mutated_fork_is_not_counted_as_a_skipped_natural_fork(batch):
+    # Breaks if the header counts forks that were never candidates: only natural-arm forks are
+    # skipped by this page, the mutated ones are simply not natural runs.
+    fork = make_run(
+        batch, "r-20260101T000007-ggg777", ["Rename it."], arm="mutated", operator="drop"
+    )
+    (fork / "fork.json").write_text(json.dumps({"source_run_id": "r-20260101T000001-aaa111"}))
+
+    assert natural_runs.count_skipped_forks([batch]) == 0
+
+
+def test_the_header_says_how_many_forks_were_skipped(batch):
+    rows, excluded = build(batch)
+
+    page = natural_runs.render(rows, excluded, forks_skipped=3)
+
+    assert (
+        "2 runs counted, 2 excluded, $0.30 spent on the counted runs, 3 fork runs skipped" in page
+    )

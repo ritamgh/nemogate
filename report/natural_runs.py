@@ -4,7 +4,9 @@
 run folders (record.json, run_config.json, trace.jsonl, violations.json, ledger.yaml) and labels
 each in memory with `replay.carriage`; it writes nothing into the folders, so another checkout's
 runs/ can be read as is. A folder with no carriage.json predates the classifier: it is labelled
-from what exists and marked "pre-classifier". Pure local; no model call.
+from what exists and marked "pre-classifier". A folder with fork.json is a fork, not an
+independent natural run: it is skipped and the page header counts the skips. Pure local; no
+model call.
 """
 
 import argparse
@@ -156,17 +158,39 @@ def _row(run_dir: Path, config: RunConfig, messages: dict[str, str]) -> Row:
     return row
 
 
+def _is_natural(config: RunConfig) -> bool:
+    return config.arm == Arm.natural and config.operator == Operator.none
+
+
+def count_skipped_forks(paths: Sequence[Path]) -> int:
+    """How many natural-arm fork folders `collect` leaves out (each has a fork.json)."""
+    seen: set[str] = set()
+    count = 0
+    for run_dir in _run_dirs(paths):
+        config = RunConfig.model_validate_json((run_dir / "run_config.json").read_text())
+        if run_dir.name not in seen and _is_natural(config) and _is_fork(run_dir):
+            seen.add(run_dir.name)
+            count += 1
+    return count
+
+
+def _is_fork(run_dir: Path) -> bool:
+    return (run_dir / "fork.json").is_file()
+
+
 def collect(paths: Sequence[Path], messages: dict[str, str]) -> tuple[list[Row], list[Excluded]]:
     """Rows for natural runs that finished, and the natural runs left out (with the reason).
 
     Runs with an operator, or an arm other than natural, are ignored: they are not natural runs.
+    So are forks (a folder with fork.json): a fork repeats its source's planner handoff, so it is
+    not an independent natural run even when its arm is natural.
     """
     rows: list[Row] = []
     excluded: list[Excluded] = []
     seen: set[str] = set()
     for run_dir in _run_dirs(paths):
         config = RunConfig.model_validate_json((run_dir / "run_config.json").read_text())
-        if run_dir.name in seen or config.arm != Arm.natural or config.operator != Operator.none:
+        if run_dir.name in seen or not _is_natural(config) or _is_fork(run_dir):
             continue
         seen.add(run_dir.name)
         if not (run_dir / "record.json").is_file():
@@ -261,7 +285,7 @@ def _yes_no_plain(flag: bool | None) -> str:
     return "unknown" if flag is None else ("yes" if flag else "no")
 
 
-def render(rows: Sequence[Row], excluded: Sequence[Excluded]) -> str:
+def render(rows: Sequence[Row], excluded: Sequence[Excluded], forks_skipped: int = 0) -> str:
     counts = Counter(r.label for r in rows)
     total_cost = sum(r.cost for r in rows)
     lines = [
@@ -276,7 +300,8 @@ def render(rows: Sequence[Row], excluded: Sequence[Excluded]) -> str:
         "written into them.",
         "",
         f"{len(rows)} runs counted, {len(excluded)} excluded, ${total_cost:.2f} spent on the "
-        "counted runs.",
+        f"counted runs, {forks_skipped} fork runs skipped (a fork repeats its source's planner "
+        "handoff, so it is not an independent natural run).",
         "",
         "## Totals by label",
         "",
@@ -378,9 +403,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     rows, excluded = collect(args.paths, load_user_messages())
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(render(rows, excluded), encoding="utf-8")
+    forks_skipped = count_skipped_forks(args.paths)
+    args.out.write_text(render(rows, excluded, forks_skipped), encoding="utf-8")
     counts = Counter(r.label for r in rows)
-    print(f"wrote {args.out}: {len(rows)} counted, {len(excluded)} excluded")
+    print(
+        f"wrote {args.out}: {len(rows)} counted, {len(excluded)} excluded, "
+        f"{forks_skipped} forks skipped"
+    )
     for label, n in sorted(counts.items()):
         print(f"{label}: {n}")
     return 0
