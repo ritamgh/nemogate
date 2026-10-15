@@ -472,6 +472,7 @@ def test_fork_one_of_a_step_with_several_tool_calls_is_refused_before_any_model_
     fork_dir = world.runs_dir / fork_id
     assert "2 tool calls" in (fork_dir / "error.txt").read_text()
     assert not (fork_dir / "record.json").exists()
+    assert not (fork_dir / "error.json").exists()  # a refused fork is not an attempt
 
 
 def test_fork_one_refuses_a_source_run_of_another_arm(tmp_path):
@@ -661,3 +662,30 @@ def test_fork_one_refuses_to_fork_a_fork(tmp_path):
     with pytest.raises(ValueError, match="itself a fork"):
         world.fork(fork_app(), fork)
     assert world.run_ids() == sorted([source.run_id, fork.run_id])
+
+
+def test_a_fork_that_fails_while_being_set_up_is_still_marked_a_fork_and_is_not_an_attempt(
+    tmp_path, monkeypatch
+):
+    """Catches fork.json being written after the checkpoint copy: a fork that died there would
+    look like an independent run to sweep_status and --top-up."""
+    from replay import runner as runner_module
+    from replay.sweep_status import scan
+
+    world = World(tmp_path)
+    source = world.record(recorded_app())
+
+    def fail(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner_module, "copy_checkpoints", fail)
+    with pytest.raises(OSError, match="disk full"):
+        world.fork(fork_app(), source)
+
+    (fork_id,) = set(world.run_ids()) - {source.run_id}
+    fork_dir = world.runs_dir / fork_id
+    assert (fork_dir / "fork.json").is_file()
+    assert not (fork_dir / "error.json").exists()
+    found = scan(world.runs_dir)
+    assert [a.run_id for a in found.attempts] == [source.run_id]
+    assert (found.orphans, found.forks) == ((), 1)
