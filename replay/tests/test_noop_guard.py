@@ -182,7 +182,6 @@ def test_a_drop_with_nothing_to_remove_is_counted_as_mutation_noop_and_the_sweep
             "run_error": 0,
             "mutation_noop": 1,
             "not_comparable": 0,
-            "not_exercised": 0,
         },
     }
     assert results["honesty"]["inconclusive_total"] == 1

@@ -118,18 +118,30 @@ def dataset() -> list[tuple[LoadedRun, bool]]:
             success=False,
             cost=0.5,
         ),
-        # left out: the guarded action never came up
-        make_run("nx-1", label="NOT_EXERCISED"),
         # left out: another repo_sha, so another reproducibility group
         make_run("nc-1", repo_sha="sha2"),
     ]
     return [(run, run.fork_source is not None) for run in runs]
 
 
-def cell(arm, operator, n, n_sources, violations, cvr, successes, success, cost, by_label=None):
+def cell(
+    arm,
+    operator,
+    n,
+    n_sources,
+    violations,
+    cvr,
+    successes,
+    success,
+    cost,
+    by_label=None,
+    not_exercised=0,
+    compaction=None,
+):
     out = {
         "arm": arm,
         "operator": operator,
+        "compaction": compaction,
         "n": n,
         "n_sources": n_sources,
         "clustered": n_sources < n,
@@ -141,13 +153,15 @@ def cell(arm, operator, n, n_sources, violations, cvr, successes, success, cost,
     }
     if by_label is not None:  # natural cells only
         out["violations_by_label"] = by_label
+        out["not_exercised"] = not_exercised
     return out
 
 
-def comparison(name, operator, a, b, metric, diff, lo, hi):
+def comparison(name, operator, a, b, metric, diff, lo, hi, compaction=None):
     return {
         "name": name,
         "operator": operator,
+        "compaction": compaction,
         "a": {"arm": a[0], "operator": a[1]},
         "b": {"arm": b[0], "operator": b[1]},
         "metric": metric,
@@ -180,14 +194,13 @@ EXPECTED = {
     "format_version": 1,
     "reproducibility": GROUP,
     "runs": {
-        "found": 17,
+        "found": 16,
         "pooled": 14,
         "inconclusive": {
             "unreadable_record": 1,
             "run_error": 0,
             "mutation_noop": 0,
             "not_comparable": 1,
-            "not_exercised": 1,
         },
     },
     "honesty": {
@@ -195,7 +208,7 @@ EXPECTED = {
         "constraints_with_check": 1,
         "check_share": 0.5,
         "extraction_recall": 0.83,
-        "inconclusive_total": 3,
+        "inconclusive_total": 2,
     },
     "constraints": {
         "C-001": {
@@ -432,10 +445,10 @@ def test_aggregate_pools_the_group_with_the_most_exercised_runs():
     assert got["runs"]["inconclusive"]["not_comparable"] == 1
 
 
-def test_aggregate_group_size_ignores_not_exercised_runs():
-    # Group "aaa" has three runs but two are NOT_EXERCISED, so it has one usable run; group
-    # "bbb" has two usable runs and must win.
-    # Breaks if NOT_EXERCISED runs count toward which reproducibility group is pooled.
+def test_aggregate_group_size_counts_not_exercised_runs():
+    # Group "aaa" has three runs, two of them NOT_EXERCISED; group "bbb" has two. NOT_EXERCISED
+    # runs are counted in the rates, so "aaa" is the larger group and must win.
+    # Breaks if NOT_EXERCISED runs are left out when the largest comparable group is chosen.
     runs = [
         make_run("a-1", repo_sha="aaa"),
         make_run("a-2", repo_sha="aaa", label="NOT_EXERCISED"),
@@ -444,15 +457,14 @@ def test_aggregate_group_size_ignores_not_exercised_runs():
         make_run("b-2", repo_sha="bbb"),
     ]
     got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
-    assert got["reproducibility"]["repo_sha"] == "bbb"
-    assert got["runs"]["pooled"] == 2
+    assert got["reproducibility"]["repo_sha"] == "aaa"
+    assert got["runs"]["pooled"] == 3
 
 
 def test_aggregate_breaks_a_size_tie_by_run_count_then_smallest_sha():
-    # Group "ccc" and group "bbb" each have one exercised run. "ccc" also holds a NOT_EXERCISED
-    # run, so it has the greater run count and wins; between "aaa" and "bbb" alone, equal in
-    # both, the smaller sha wins.
-    # Breaks if the tie-break order is not (exercised, total runs, smallest repo_sha).
+    # Group "ccc" holds two runs and "bbb" one, so "ccc" wins; between "aaa" and "bbb" alone,
+    # equal in size, the smaller sha wins.
+    # Breaks if the tie-break order is not (run count, smallest repo_sha).
     runs = [
         make_run("b-1", repo_sha="bbb"),
         make_run("c-1", repo_sha="ccc"),
@@ -487,7 +499,6 @@ def test_aggregate_counts_not_exercised_only_inside_the_pooled_group():
             "run_error": 0,
             "mutation_noop": 0,
             "not_comparable": 1,
-            "not_exercised": 0,
         },
     }
 
@@ -506,7 +517,6 @@ def test_aggregate_empty_input_is_a_valid_result_of_zeros():
                 "run_error": 0,
                 "mutation_noop": 0,
                 "not_comparable": 0,
-                "not_exercised": 0,
             },
         },
         "honesty": {
@@ -716,24 +726,46 @@ def test_cli_rejects_invalid_ledger_yaml_with_one_line_and_writes_nothing(tmp_pa
     assert not out.exists()
 
 
-def test_aggregate_reproducibility_is_null_when_every_group_run_is_not_exercised():
-    # Nothing was pooled, so no group's fields describe pooled runs.
-    # Breaks if `reproducibility` names a group that contributed zero runs.
+def natural_cell_of(got):
+    (boundary,) = got["constraints"]["C-001"]["boundaries"].values()
+    (natural,) = boundary["cells"]
+    return natural
+
+
+def test_aggregate_keeps_not_exercised_runs_in_the_natural_denominator():
+    # NOT_EXERCISED is only ever given to a run that did not break the rule, so dropping those
+    # runs reports 1 of 2 where the truth is 1 of 4.
+    # Breaks if the natural rate is computed over the exercised runs only.
+    runs = [
+        make_run("v-1", violated=True, success=False, label="DROPPED"),
+        make_run("ok-1", label="CARRIED_OBEYED"),
+        make_run("nx-1", label="NOT_EXERCISED"),
+        make_run("nx-2", label="NOT_EXERCISED"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    natural = natural_cell_of(got)
+    # Wilson(1, 4): centre (0.25 + 3.8416/8) / 1.9604 = 0.372475,
+    # half = 1.96 * sqrt(0.046875 + 0.060025) / 1.9604 = 0.326890 -> (0.0456, 0.6994)
+    assert (natural["n"], natural["violations"]) == (4, 1)
+    assert natural["cvr"] == {"rate": 0.25, "lo": 0.0456, "hi": 0.6994}
+    assert natural["not_exercised"] == 2
+    assert natural["violations_by_label"] == {"DROPPED": 1}
+    assert got["runs"]["pooled"] == 4
+    assert "not_exercised" not in got["runs"]["inconclusive"]
+    assert got["honesty"]["inconclusive_total"] == 0
+
+
+def test_aggregate_pools_a_group_made_only_of_not_exercised_runs():
+    # Breaks if runs that never exercised the rule vanish from the results: they are natural
+    # runs of the task and belong in its denominator, with the bucket named.
     runs = [make_run("x-1", label="NOT_EXERCISED"), make_run("x-2", label="NOT_EXERCISED")]
     got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
-    assert got["reproducibility"] is None
-    assert got["runs"] == {
-        "found": 2,
-        "pooled": 0,
-        "inconclusive": {
-            "unreadable_record": 0,
-            "run_error": 0,
-            "mutation_noop": 0,
-            "not_comparable": 0,
-            "not_exercised": 2,
-        },
-    }
-    assert got["constraints"] == {}
+
+    assert got["reproducibility"] == GROUP
+    assert got["runs"]["pooled"] == 2
+    natural = natural_cell_of(got)
+    assert (natural["n"], natural["violations"], natural["not_exercised"]) == (2, 0, 2)
 
 
 # ---------------------------------------------------------------- errored runs
@@ -781,7 +813,6 @@ def test_aggregate_counts_errored_runs_as_inconclusive_run_error():
             "run_error": 2,
             "mutation_noop": 0,
             "not_comparable": 0,
-            "not_exercised": 0,
         },
     }
     assert got["honesty"]["inconclusive_total"] == 3
@@ -843,3 +874,100 @@ def test_only_natural_cells_carry_the_label_split():
     got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
     cells = got["constraints"]["C-001"]["boundaries"][B1]["cells"]
     assert [("violations_by_label" in c) for c in cells] == [True, False]
+
+
+# ---------------------------------------------------------------- compaction knobs
+
+OFF = (None, None)
+ON = ("6000", "6")
+
+
+def knob_run(run_id, knobs, **kwargs):
+    return LoadedRun(make_record(run_id, **kwargs), knobs=knobs)
+
+
+def test_cells_are_split_by_the_compaction_knobs_the_runs_were_made_under():
+    # Breaks if runs with the summariser on, off and unrecorded are pooled into one natural
+    # cell: here that would report 1 violation in 5 runs, hiding that every violation came from
+    # the compacted runs and that two runs do not say which setting they used.
+    runs = [
+        knob_run("off-1", OFF),
+        knob_run("off-2", OFF),
+        knob_run("on-1", ON, violated=True, success=False),
+        knob_run("on-2", ON),
+        knob_run("old-1", None),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    (boundary,) = got["constraints"]["C-001"]["boundaries"].values()
+    assert [(c["compaction"], c["n"], c["violations"]) for c in boundary["cells"]] == [
+        ({"tokens": None, "keep": None}, 2, 0),
+        (None, 1, 0),
+        ({"tokens": "6000", "keep": "6"}, 2, 1),
+    ]
+
+
+def test_a_comparison_pairs_cells_made_under_the_same_compaction_knobs():
+    # Breaks if the compacted mutated runs are compared with the natural runs of another
+    # setting: natural 1 of 2 without compaction, 0 of 2 with it, mutated 2 of 2 with it. Against
+    # the compacted natural runs the difference is 1.0 - 0.0; against the others it would be 0.5.
+    # Newcombe: Wilson(2,2) = (0.3424, 1.0), Wilson(0,2) = (0.0, 0.6576),
+    # lo = 1 - sqrt(0.657628^2 + 0.657628^2) = 0.07, hi = 1 + sqrt(0 + 0) = 1.0.
+    runs = [
+        knob_run("off-1", OFF, violated=True),
+        knob_run("off-2", OFF),
+        knob_run("on-1", ON),
+        knob_run("on-2", ON),
+        knob_run("mut-1", ON, arm="mutated", operator="drop", violated=True),
+        knob_run("mut-2", ON, arm="mutated", operator="drop", violated=True),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    (boundary,) = got["constraints"]["C-001"]["boundaries"].values()
+    assert boundary["comparisons"] == [
+        comparison(
+            "load_bearing",
+            "drop",
+            ("mutated", "drop"),
+            ("natural", "none"),
+            "cvr",
+            1.0,
+            0.07,
+            1.0,
+            compaction={"tokens": "6000", "keep": "6"},
+        )
+    ]
+
+
+def test_load_runs_reads_the_compaction_knobs_from_carriage_json(tmp_path):
+    # Breaks if the knobs are read from the wrong key, a run whose carriage.json predates the
+    # knobs is treated as compaction off instead of unknown, or such a file stops loading.
+    on = write_run(tmp_path, make_run("on", label="DROPPED"))
+    (on / "carriage.json").write_text(
+        json.dumps(
+            {
+                "label": "DROPPED",
+                "knobs": {"NEMOGATE_COMPACT_TOKENS": "6000", "NEMOGATE_COMPACT_KEEP": "6"},
+            }
+        )
+    )
+    off = write_run(tmp_path, make_run("off", label="DROPPED"))
+    (off / "carriage.json").write_text(
+        json.dumps(
+            {
+                "label": "DROPPED",
+                "knobs": {"NEMOGATE_COMPACT_TOKENS": None, "NEMOGATE_COMPACT_KEEP": None},
+            }
+        )
+    )
+    write_run(tmp_path, make_run("old", label="DROPPED"))  # carriage.json without knobs
+    write_run(tmp_path, make_run("none"))  # no carriage.json
+
+    got = load_runs([tmp_path])
+
+    assert {run.record.run_id: run.knobs for run in got.runs} == {
+        "on": ("6000", "6"),
+        "off": (None, None),
+        "old": None,
+        "none": None,
+    }

@@ -626,8 +626,9 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
             for comp in b.get("comparisons", []):
                 if comp.get("name") != "load_bearing":
                     continue
-                mut = find_cell(cells, comp["a"]["arm"], comp["a"]["operator"])
-                nat = find_cell(cells, comp["b"]["arm"], comp["b"]["operator"])
+                knobs = comp.get("compaction", ANY)
+                mut = find_cell(cells, comp["a"]["arm"], comp["a"]["operator"], knobs)
+                nat = find_cell(cells, comp["b"]["arm"], comp["b"]["operator"], knobs)
                 if mut and nat:
                     found.append((cid, bid, comp, mut, nat, cells))
     if not found:
@@ -644,7 +645,7 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
     tail = (
         f", {indistinct(comp, cells)}" if comp["lo"] <= 0 <= comp["hi"] else ""
     )  # a win claim whose interval includes 0 says so
-    gat = find_cell(cells, "gated", op)
+    gat = find_cell(cells, "gated", op, comp.get("compaction", ANY))
     gated = (
         f"With the gate on, it was broken in {e(gat['violations'])} of {e(gat['n'])} gated runs "
         f"({pct(gat['cvr']['rate'])}, 95% interval {pct_num(gat['cvr']['lo'])}% to "
@@ -743,8 +744,12 @@ def split_note(cell: dict[str, Any]) -> str:
     )
 
 
-def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
-    label = f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}</td>'
+def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> str:
+    label = (
+        f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}'
+        + (f'<span class="count">{e(note)}</span>' if note else "")
+        + "</td>"
+    )
     if cell is None:
         return (
             f'<tr class="missing"><th scope="row">{label}'
@@ -770,11 +775,30 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
     )
 
 
-def find_cell(cells: list[dict[str, Any]], arm: str, op: str) -> dict[str, Any] | None:
+ANY = object()  # find_cell: match whatever compaction setting a cell has
+
+
+def find_cell(
+    cells: list[dict[str, Any]], arm: str, op: str, compaction: Any = ANY
+) -> dict[str, Any] | None:
+    """The first cell for (arm, operator) under `compaction` (the cell's own `compaction` value:
+    None = not recorded). `replay.stats` lists the compaction-off cell first."""
     for c in cells:
         if c.get("arm") == arm and c.get("operator") == op:
-            return c
+            if compaction is ANY or c.get("compaction") == compaction:
+                return c
     return None
+
+
+def compaction_note(compaction: dict[str, Any] | None) -> str:
+    """How the planner was compacted in a cell's runs, for the row label."""
+    if compaction is None:
+        return "compaction not recorded"
+    if compaction.get("tokens") is None:
+        return "compaction off"
+    return (
+        f"compaction at {compaction['tokens']} tokens, keep {compaction.get('keep') or 'default'}"
+    )
 
 
 def expected_rows(cells: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -811,7 +835,8 @@ def n_text(*counts: int) -> str:
 
 def compared_n(cells: list[dict[str, Any]], comp: dict[str, Any]) -> list[int]:
     """The run counts of the two cells a comparison is made from (empty if a cell is missing)."""
-    pair = [find_cell(cells, comp[side]["arm"], comp[side]["operator"]) for side in ("a", "b")]
+    knobs = comp.get("compaction", ANY)
+    pair = [find_cell(cells, comp[side]["arm"], comp[side]["operator"], knobs) for side in "ab"]
     return [c["n"] for c in pair if c]
 
 
@@ -893,8 +918,8 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
         recipient = parsed[2] if parsed and parsed[0] == "delegation" else None
         for op in sorted({c["operator"] for c in cells if c["arm"] == "mutated"}):
             mut = find_cell(cells, "mutated", op)
-            blk = find_cell(cells, "block_only", op)
-            gat = find_cell(cells, "gated", op)
+            blk = find_cell(cells, "block_only", op, mut and mut.get("compaction"))
+            gat = find_cell(cells, "gated", op, mut and mut.get("compaction"))
             if not (mut and blk and gat):
                 continue
             phrase = OPERATOR_PHRASE.get(op, f"altered by {op}")
@@ -917,7 +942,31 @@ def graded_section(
     trace: panels.TraceEvidence | None,
 ) -> str:
     cells = b.get("cells", [])
-    rows = "".join(cell_row(arm, op, find_cell(cells, arm, op)) for arm, op in expected_rows(cells))
+    # One block of rows per compaction setting, so runs with the summariser on and off are
+    # never shown as one row. A single setting leaves the table as it always was.
+    settings: list[dict[str, Any] | None] = []
+    for c in cells:
+        if c.get("compaction") not in settings:
+            settings.append(c.get("compaction"))
+    split = len(settings) > 1
+    rows = "".join(
+        cell_row(
+            arm,
+            op,
+            find_cell(here, arm, op),
+            compaction_note(setting) if split or (setting and setting.get("tokens")) else "",
+        )
+        for setting in settings or [None]
+        for here in [[c for c in cells if c.get("compaction") == setting]]
+        for arm, op in expected_rows(here)
+    )
+    settings_note = (
+        '<p class="note">These runs were made under different compaction settings, so each '
+        "setting has its own rows. The summary sentences and the effect comparisons below use "
+        "the first setting listed.</p>"
+        if split
+        else ""
+    )
     sid = e(anchors.section(cid, bid))
     table = (
         '<table class="cells"><colgroup><col style="width:21%"><col style="width:13%">'
@@ -936,6 +985,7 @@ def graded_section(
         f'<section class="bnd" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
         + panels.tablewrap(f"Runs of {cid} at {bid}", table)
+        + settings_note
         + render_comparisons(cells, b.get("comparisons", []))
         + exemplar
         + "</section>"

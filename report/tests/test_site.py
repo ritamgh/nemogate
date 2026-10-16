@@ -776,3 +776,33 @@ def test_page_says_what_the_gate_and_repair_each_fix_and_what_neither_does(rich)
     assert "checked on the files an agent changed, such as frozen files," in section
     assert "are graded after the run. The gate does not block them" in section
     assert not re.search(r"\bT[1-8]\b|C-00\d", section)
+
+
+# --- cells split by the compaction knobs -------------------------------------------------------
+
+
+def test_cells_made_under_different_compaction_settings_each_get_a_row():
+    # Breaks if the table finds a cell by (arm, operator) alone: the compacted natural runs
+    # (2 of 4 broken) would be hidden behind the uncompacted ones (0 of 4), with no sign that
+    # a second setting exists.
+    off = {**make_cell("natural", "none", 4, 0, 4), "compaction": {"tokens": None, "keep": None}}
+    on = {**make_cell("natural", "none", 4, 2, 2), "compaction": {"tokens": "6000", "keep": "6"}}
+    page = site.render(
+        one_constraint({"delegation:planner->coder": {"cells": [off, on], "comparisons": []}})
+    )
+
+    text = text_of(article(page, "C-900"))
+    assert "none compaction off" in text
+    assert "none compaction at 6000 tokens, keep 6" in text
+    assert "different compaction settings, so each setting has its own rows" in text
+
+
+def test_a_single_compaction_setting_adds_nothing_to_the_table():
+    # Breaks if every table starts carrying a compaction label when nothing was split.
+    off = {**make_cell("natural", "none", 4, 0, 4), "compaction": {"tokens": None, "keep": None}}
+    page = site.render(
+        one_constraint({"delegation:planner->coder": {"cells": [off], "comparisons": []}})
+    )
+
+    text = text_of(article(page, "C-900"))
+    assert "compaction" not in text
