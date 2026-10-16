@@ -32,9 +32,9 @@ Changes:
   - **Tools:** the agents use Deep Agents' built-in `delete`, not a custom `delete_file`, so C-003 checks `approval_before("delete")` (FACTS §7). The reference app has three custom tools: `run_tests`, `request_approval`, `http_get`. The gate's modes are observe, mutate, `block_only` and `gated`; "enforce" in earlier text means `gated`. The return boundary has no separate return schema: fail-closed is the output-rule check in the 2026-10-13 entry.
   - **Operators:** `drop` and `hedge` ask the helper for sentence numbers (`hedge` also for the vague replacement text) and edit the message in code, because free-form rewriting returned the delegation unchanged on the live helper (FACTS §6). If no sentence carries the rule, the gate raises `NothingToMutate` (merged, #37). Replay counts such a run as a labelled non-sample `mutation_noop` and never retries it, because retrying would bias the sample towards runs where the planner kept the rule (`ritgh/noop-guard`, PR #45).
   - **Natural-drop tasks:** T9 is T6's request inside a long pasted message; T10 is T3's cleanup in a ticket that states four rules of four kinds (target C-003). Neither is held out. A natural drop is rare with a short planner context, so the planner-compaction knob (`NEMOGATE_COMPACT_TOKENS` and `NEMOGATE_COMPACT_KEEP`, planner only) induces them. The report states the rate without compaction separately from the rate with it; so far 1 drop in 10 runs where compaction did not fire (4 with the knob off, 6 with it on but never triggered; see `results/natural-runs.md`, column "Compaction fired"). The compaction boundary as a gate target is still not built (Scope).
-  - **Sweep policy:** the main sweep uses independent runs, so the intervals are clean. Forks are for the paired demo, and a cell that pools forks is flagged as clustered by source. An error while a run is being set up stops the sweep; an error after the agents have started is recorded as an attempt (`error.json`, reason `run_error`) and counts toward N (sweep driver, PR #40, in review).
-  - **Results format:** `results/results.json` is `format_version` 1: constraint, then boundary, then cells (Wilson interval) and comparisons (Newcombe interval). Inconclusive runs are counted by reason (`unreadable_record`, `run_error`, `mutation_noop`, `not_comparable`, `not_exercised`) and never pooled. The shape is in `replay/README.md` (stats, PR #35, in review); the checklists below say which parts are merged.
-  - **Preflight:** it is a validity check of the instrument (serving works as assumed), not a finding. Its tool-call-as-text probe found no failure, and a scan of saved runs found 0 tool calls returned as text in 1,474 AI messages over 36 live runs (scan, PR #43, in review). The earlier claim that it reproduces NAT #2274 is withdrawn.
+  - **Sweep policy:** the main sweep uses independent runs, so the intervals are clean. Forks are for the paired demo, and a cell that pools forks is flagged as clustered by source. An error while a run is being set up stops the sweep; an error after the agents have started is recorded as an attempt (`error.json`, reason `run_error`) and counts toward N (sweep driver, PR #40).
+  - **Results format:** `results/results.json` is `format_version` 1: constraint, then boundary, then cells (Wilson interval) and comparisons (Newcombe interval). Inconclusive runs are counted by reason (`unreadable_record`, `run_error`, `mutation_noop`, `not_comparable`, `not_exercised`) and never pooled. The shape is in `replay/README.md` (stats, PR #35).
+  - **Preflight:** it is a validity check of the instrument (serving works as assumed), not a finding. Its tool-call-as-text probe found no failure, and a scan of saved runs found 0 tool calls returned as text in 1,474 AI messages over 36 live runs (scan, PR #43). The earlier claim that it reproduces NAT #2274 is withdrawn.
   - **Proposed (needs both owners), video:** deferred; B decides after the sweep (2026-10-16, PR #44). In 0:20–0:50, "Why it happens", lead with handoff loss (facts survive compression, rules don't) and cite arXiv 2608.11242, "Lost in Context Compaction", as related single-agent work. The preflight gets one line at most, since the tool-call-as-text failure did not occur on our setup.
   - **Decided (A proposed, B agreed 2026-10-16, PR #44), Oct 19 sweep:** focused cells (1–2 tasks × 4 arms × `drop`, about 15 runs per cell) instead of every task thin. Start with T6; add a second task only if the budget allows. Recompute the cost from the measured cost per run, where a mutated run costs about 3× a natural one.
   - **Decided (A proposed, B agreed 2026-10-16, PR #44), who writes the repair patch:** option 1. `sut` (Super) writes the patch, as the C5 row, the 2026-10-13 entry and `repair/__main__.py` (`get_model(Role.sut)`) already have it. AGENTS.md rule 1 is amended to allow it (PR #47); the code stays.
@@ -444,7 +444,7 @@ Person A
 - [x] Repo skeleton, licence, `schemas/` folder, formatter and lint setup
 - [x] `common/llm.py`: `get_model(role)` with per-call token and cost logging; `config.yaml` loader
 - [ ] Name check: GitHub, PyPI and a web search for "NemoGate" collisions
-- [ ] C0 preflight: the four probes and the cost probe; write the safe config and its hash (probes ran as scripts and the safe config is set; the `preflight/` module is PR #41, in review)
+- [x] C0 preflight: the four probes and the cost probe; write the safe config and its hash (`preflight/` module, PR #41)
 - [x] Reference app: planner, coder, reviewer on ContreeSandbox with the sample repo and the three custom tools
 - [x] Six tasks with check scripts, from the drafts in Kickoff (T9 and T10 added since, Changes 2026-10-16)
 - [x] Two held-out tasks (T7, T8) written and sealed by Oct 12; not run until the final sweep (see the generality rule)
@@ -470,8 +470,8 @@ Person A
 
 - [x] C4 record: checkpoint ID and Contree image ID at each boundary
 - [x] C4 fork and arms runner, using B's mutate and gate modes
-- [ ] Stats: Wilson and difference intervals; run records into `results.json` (PR #35, in review)
-- [ ] C6 first version: boundary graph and per-constraint cards from `results.json` (PR #36, in review)
+- [x] Stats: Wilson and difference intervals; run records into `results.json` (PR #35)
+- [x] C6 first version: boundary graph and per-constraint cards from `results.json` (PR #36)
 
 Person B
 
@@ -486,7 +486,8 @@ Both, Oct 19: first full sweep, within the budget-check number.
 
 Person A
 
-- [ ] C6: trace diff, patch view, coverage panel (PR #42, in review); deploy on Serverless Endpoints (not started)
+- [x] C6: trace diff, patch view, coverage panel (PR #42)
+- [ ] C6: deploy on Serverless Endpoints (not started)
 - [ ] Final sweep for the headline numbers, plus one run of the held-out tasks, reported separately
 - [ ] Stretch: compaction boundary, or a second small Deep Agents app run with no pipeline changes
 
