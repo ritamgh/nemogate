@@ -664,6 +664,150 @@ def test_fork_is_the_sync_wrapper_of_afork(tmp_path):
     assert len(out) == 1
 
 
+# ---- apaired / paired ------------------------------------------------------------------------
+
+
+def stub_paired(h: Harness, calls: list, *, source_errors=(), fork_raises=None):
+    """run_one records a source `r-src-<seed>`; fork_one records its fork. `source_errors` are
+    the seeds whose source run errors; `fork_raises` maps (source id, arm) to an exception."""
+
+    async def run_one(task, arm, operator, *, seed, repo_ref="main"):
+        calls.append(("run", task.id, arm, operator, seed))
+        if seed in source_errors:
+            exc = RuntimeError("boom")
+            exc.nemogate_run_error = runner.RunError(
+                f"r-err-{seed}", task.id, arm.value, operator.value, "builtins.RuntimeError"
+            )
+            raise exc
+        return SimpleNamespace(run_id=f"r-src-{task.id}-{seed}")
+
+    async def fork_one(source_run_id, arm, operator, *, seed, repo_ref="main"):
+        calls.append(("fork", source_run_id, arm, operator, seed))
+        raised = (fork_raises or {}).get((source_run_id, arm))
+        if raised is not None:
+            raise raised
+        return SimpleNamespace(run_id=f"r-fork-{arm.value}-{source_run_id}")
+
+    h.runner.run_one, h.runner.fork_one = run_one, fork_one
+
+
+def test_apaired_forks_every_arm_from_one_natural_source_with_the_same_seed(tmp_path):
+    """Catches arms that each get their own recording (the Oct 16 failure: different planner
+    delegations per arm), or a fork whose seed differs from its source's."""
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    out = asyncio.run(
+        h.runner.apaired(["X1", "X2"], [Arm.block_only, Arm.gated], [Operator.drop], 2, "HEAD")
+    )
+    expected = []
+    for task in ("X1", "X2"):
+        for seed in (0, 1):
+            src = f"r-src-{task}-{seed}"
+            expected += [
+                ("run", task, Arm.natural, Operator.none, seed),
+                ("fork", src, Arm.block_only, Operator.drop, seed),
+                ("fork", src, Arm.gated, Operator.drop, seed),
+            ]
+    assert calls == expected
+    # the sources are in the result too, so the spend they caused is visible
+    assert len(out) == 12
+
+
+def test_apaired_with_natural_among_the_arms_runs_that_arm_once_per_seed(tmp_path):
+    """Catches a natural arm run twice per seed (once as the arm, once as the source), which
+    would double its n and its cost."""
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    asyncio.run(
+        h.runner.apaired(
+            ["X1"], [Arm.natural, Arm.mutated], [Operator.none, Operator.drop], 1, "HEAD"
+        )
+    )
+    assert calls == [
+        ("run", "X1", Arm.natural, Operator.none, 0),
+        ("fork", "r-src-X1-0", Arm.mutated, Operator.drop, 0),
+    ]
+
+
+def test_apaired_skips_the_forks_of_an_errored_source_and_goes_on(tmp_path):
+    """Catches forks attempted from a source that has no recording, or one errored source
+    ending the whole sweep."""
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls, source_errors={0})
+    out = asyncio.run(h.runner.apaired(["X1"], [Arm.gated], [Operator.drop], 2, "HEAD"))
+    assert calls == [
+        ("run", "X1", Arm.natural, Operator.none, 0),
+        ("run", "X1", Arm.natural, Operator.none, 1),
+        ("fork", "r-src-X1-1", Arm.gated, Operator.drop, 1),
+    ]
+    assert [e.run_id for e in h.runner.errors] == ["r-err-0"]
+    assert len(out) == 2
+
+
+def test_apaired_reports_a_source_that_never_crossed_the_boundary_and_goes_on(tmp_path):
+    """Catches a natural run whose planner never delegated stopping the sweep (it is data, not
+    a setup error), or being skipped without a trace."""
+    h = Harness(tmp_path)
+    calls: list = []
+    no_point = {("r-src-X1-0", Arm.block_only): runner.NoForkPoint("never crossed")}
+    stub_paired(h, calls, fork_raises=no_point)
+    asyncio.run(h.runner.apaired(["X1"], [Arm.block_only, Arm.gated], [Operator.drop], 2, "HEAD"))
+    assert calls == [
+        ("run", "X1", Arm.natural, Operator.none, 0),
+        ("fork", "r-src-X1-0", Arm.block_only, Operator.drop, 0),  # refused: no gated fork tried
+        ("run", "X1", Arm.natural, Operator.none, 1),
+        ("fork", "r-src-X1-1", Arm.block_only, Operator.drop, 1),
+        ("fork", "r-src-X1-1", Arm.gated, Operator.drop, 1),
+    ]
+    assert h.runner.unforkable == ["r-src-X1-0"]
+
+
+def test_apaired_keeps_the_other_arm_when_one_fork_errors(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    boom = RuntimeError("boom")
+    boom.nemogate_run_error = runner.RunError(
+        "r-bad", "X1", "block_only", "drop", "builtins.RuntimeError"
+    )
+    stub_paired(h, calls, fork_raises={("r-src-X1-0", Arm.block_only): boom})
+    out = asyncio.run(
+        h.runner.apaired(["X1"], [Arm.block_only, Arm.gated], [Operator.drop], 1, "HEAD")
+    )
+    assert [c[2] for c in calls[1:]] == [Arm.block_only, Arm.gated]
+    assert [e.run_id for e in h.runner.errors] == ["r-bad"]
+    assert len(out) == 2  # the source and the gated fork
+
+
+def test_apaired_stops_for_a_setup_error_like_arun(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls, fork_raises={("r-src-X1-0", Arm.gated): ValueError("knobs differ")})
+    with pytest.raises(ValueError, match="knobs differ"):
+        asyncio.run(h.runner.apaired(["X1"], [Arm.gated], [Operator.drop], 2, "HEAD"))
+    assert len(calls) == 2
+
+
+def test_apaired_with_an_unknown_task_id_raises_keyerror_before_any_run(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    with pytest.raises(KeyError, match="nope"):
+        asyncio.run(h.runner.apaired(["X1", "nope"], [Arm.gated], [Operator.drop], 1))
+    assert calls == []
+
+
+def test_paired_is_the_sync_wrapper_of_apaired(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    out = h.runner.paired(["X1"], [Arm.mutated], [Operator.hedge], 1)
+    assert calls[1] == ("fork", "r-src-X1-0", Arm.mutated, Operator.hedge, 0)
+    assert len(out) == 2
+
+
 # ---- default run() --------------------------------------------------------------------------
 
 
@@ -702,6 +846,7 @@ CLI_ARGS = [
     "--arms", "natural", "gated",
     "--operators", "none", "drop",
     "--n", "3",
+    "--independent",
 ]  # fmt: skip
 
 
@@ -795,6 +940,65 @@ def test_cli_runs_dir_sends_the_run_folders_to_that_directory(monkeypatch, tmp_p
     assert runner.main([*CLI_ARGS, "--runs-dir", str(target), "--yes"]) == 0
     assert seen[0] == target
     assert seen[1][3] == 3
+
+
+PAIRED_ARGS = [
+    "--tasks", "X1", "X2",
+    "--arms", "block_only", "gated",
+    "--operators", "drop",
+    "--n", "3",
+]  # fmt: skip
+
+
+def test_cli_pairs_the_arms_by_default_and_counts_the_natural_sources(monkeypatch, capsys):
+    """Catches a default sweep that runs each arm from its own recording, or a run count that
+    leaves out the natural source runs the forks need (they cost like any other run)."""
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "run", _no_run)
+    assert runner.main(PAIRED_ARGS) == 1
+    out = capsys.readouterr()
+    # 2 tasks x 3 seeds = 6 natural sources, each forked into 2 arms = 12 forks
+    assert "planned runs: 18" in out.out
+    assert "paired: 6 natural sources, 12 forks" in out.out
+    assert "python -m replay.budget" in out.err + out.out
+
+
+def test_cli_independent_runs_each_arm_from_its_own_recording(monkeypatch, capsys):
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    assert runner.main([*PAIRED_ARGS, "--independent"]) == 1
+    out = capsys.readouterr().out
+    assert "planned runs: 12" in out
+    assert "paired" not in out
+
+
+def test_cli_with_yes_runs_the_paired_sweep_and_lists_unforkable_sources(monkeypatch, capsys):
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    got = []
+
+    class FakeDefaultRunner:
+        errors: list = []
+        unforkable = ["r-no-delegation"]
+
+        def paired(self, task_ids, arms, operators, n, repo_ref):
+            got.append((task_ids, arms, operators, n, repo_ref))
+            return []
+
+        def run(self, *args):
+            raise AssertionError("a paired sweep must not run independent arms")
+
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: FakeDefaultRunner())
+    assert runner.main([*PAIRED_ARGS, "--yes"]) == 1  # a source without a fork point is a shortfall
+    assert got == [(["X1", "X2"], [Arm.block_only, Arm.gated], [Operator.drop], 3, "main")]
+    assert "no fork point, not forked: r-no-delegation" in capsys.readouterr().out
+
+
+def test_cli_top_up_refuses_a_paired_sweep(monkeypatch, capsys):
+    """Catches --top-up planning from counts that leave out forks, which would re-run
+    sources it already has."""
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "default_runner", _no_run)
+    assert runner.main([*PAIRED_ARGS, "--top-up", "--yes"]) == 2
+    assert "--independent" in capsys.readouterr().err
 
 
 def git_repo_ignoring_runs(tmp_path: Path) -> Path:

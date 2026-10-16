@@ -124,6 +124,46 @@ def test_plan_with_no_pairs_is_an_error():
         )
 
 
+def _blocking_plan(**kw) -> Plan:
+    return plan(
+        bucket="kill_gate",
+        cost_per_run=0.05,
+        arms=[Arm.block_only, Arm.gated],
+        operators=[Operator.drop],
+        n_tasks=1,
+        config=CONFIG,
+        spent_usd=0.0,
+        **kw,
+    )
+
+
+def test_plan_of_a_paired_sweep_pays_for_the_natural_source_of_every_fork():
+    # 6.0 / (0.05 * (2 forks + 1 natural source) * 1 task) = 40. Breaks if the sources are left
+    # out of the divisor (that gives 60 and spends a third more than the check printed).
+    p = _blocking_plan()
+    assert (p.pairs, p.source_runs, p.n) == (2, 1, 40)
+    assert p.planned_usd == pytest.approx(6.0)
+
+
+def test_plan_of_independent_runs_has_no_source_runs():
+    p = _blocking_plan(independent=True)
+    assert (p.pairs, p.source_runs, p.n) == (2, 0, 60)
+
+
+def test_plan_does_not_pay_twice_for_a_natural_arm_that_is_the_source():
+    # natural x none is a pair of its own, and it is the source: 2 pairs, no extra run.
+    p = plan(
+        bucket="kill_gate",
+        cost_per_run=0.05,
+        arms=[Arm.natural, Arm.gated],
+        operators=[Operator.none, Operator.drop],
+        n_tasks=1,
+        config=CONFIG,
+        spent_usd=0.0,
+    )
+    assert (p.pairs, p.source_runs, p.n) == (2, 0, 60)
+
+
 def test_plan_rejects_an_unknown_bucket():
     with pytest.raises(ValueError):
         plan(
@@ -203,3 +243,15 @@ def test_cli_requires_exactly_one_cost_source(spend_log, tmp_path):
         main([*KILL_GATE, "--tasks", "A"])
     with pytest.raises(SystemExit):
         main([*KILL_GATE, "--tasks", "A", "--cost-per-run", "0.05", "--from-runs", str(tmp_path)])
+
+
+def test_cli_counts_the_natural_sources_of_a_paired_sweep_unless_told_independent(
+    spend_log, capsys
+):
+    blocking = ["--bucket", "kill_gate", "--arms", "block_only", "gated", "--operators", "drop"]
+    assert main([*blocking, "--tasks", "T", "--cost-per-run", "0.05"]) == 0
+    paired = capsys.readouterr().out.splitlines()
+    assert "extra natural source runs per repetition: 1" in paired
+    assert paired[-1] == "N per arm per task: 40"
+    assert main([*blocking, "--tasks", "T", "--cost-per-run", "0.05", "--independent"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "N per arm per task: 60"
