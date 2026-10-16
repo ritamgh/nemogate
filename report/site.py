@@ -3,7 +3,7 @@
 `uv run python -m report.site --results results/results.json --out results/site/index.html
 [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]`
 
-Reads the file `replay/stats.py` writes (format_version 1, nested constraint -> boundary -> cells)
+Reads the file `replay/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
 and renders a header (reproducibility group, run accounting, honesty strip), a boundary graph
 (inline SVG, built only from the boundary ids in the data) and one card per constraint. The
 evidence panels (coverage, the trace at the violating action, the repair patch) live in
@@ -25,7 +25,7 @@ from typing import Any
 from report import panels
 from schemas.ledger import Ledger, load_ledger_yaml
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 Z = 1.96  # the stats file uses 95% Wilson intervals; the graph re-pools cells with the same z
 
 ARM_ORDER = ("natural", "mutated", "block_only", "gated")
@@ -87,6 +87,13 @@ FIXES = (
         "blocks a tool call that breaks a rule it can check before the call (path, tool and "
         "approval rules), whatever the cause, so it also stops a rule that arrived but was "
         "ignored. Gated also holds back a reply that misses an output rule.",
+    ),
+    (
+        "Reading a 0 in the blocking arms",
+        "A 0 broken in the block-only and gated arms comes from blocking: the gate refuses the "
+        "action with the same check that grades the run, so both arms get it by construction. "
+        "Whether carrying the rule adds anything over blocking, such as finishing the task where "
+        "blocking leaves the agent stuck, is the hypothesis being measured, not a result.",
     ),
     (
         "Repair",
@@ -559,6 +566,19 @@ def render_header(results: dict[str, Any], verdict: str) -> str:
         f"<div><dt>{e(REASON_LABEL.get(r, r.replace('_', ' ')))}</dt><dd>{e(reasons[r])}</dd></div>"
         for r in sorted(reasons)
     )
+    errored = runs.get("errored_cost") or {}
+    errored_items = ""
+    if errored.get("count"):
+        unknown = errored.get("cost_unknown", 0)
+        plural = "run" if errored["count"] == 1 else "runs"
+        detail = f"{errored['count']} {plural}" + (
+            f", {unknown} with no recorded cost" if unknown else ""
+        )
+        errored_items = (
+            "<h3>Money in no rate</h3>"
+            '<dl class="kv"><div><dt>spent on errored runs</dt>'
+            f"<dd>{e(money(errored['cost_usd']))} ({e(detail)})</dd></div></dl>"
+        )
     honesty = results["honesty"]
     recall = honesty.get("extraction_recall")
     recall_text = "not measured" if recall is None else pct(recall)
@@ -598,7 +618,7 @@ them</span></li>
 <dl class="kv"><div><dt>found</dt><dd>{e(runs.get("found", 0))}</dd></div>
 <div><dt>counted in the rates</dt><dd>{e(runs.get("pooled", 0))}</dd></div></dl>
 <h3>Left out, by reason</h3>
-<dl class="kv">{reason_items}</dl>
+<dl class="kv">{reason_items}</dl>{errored_items}
 </div>
 <div>
 <h2>Models</h2>
@@ -613,6 +633,13 @@ them</span></li>
 
 
 # --- verdict and key --------------------------------------------------------------------------
+
+
+BLOCKING_ZERO = (
+    " That 0 comes from blocking: the block-only arm refuses the same action with the same "
+    "check, so it gets 0 by construction and the figure does not show that carrying the rule "
+    "helps."
+)
 
 
 def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
@@ -651,7 +678,7 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
     gated = (
         f"With the gate on, it was broken in {e(gat['violations'])} of {e(gat['n'])} gated runs "
         f"({pct(gat['cvr']['rate'])}, 95% interval {pct_num(gat['cvr']['lo'])}% to "
-        f"{pct_num(gat['cvr']['hi'])}%)."
+        f"{pct_num(gat['cvr']['hi'])}%)." + (BLOCKING_ZERO if gat["violations"] == 0 else "")
         if gat
         else "There are no gated runs of this case yet."
     )
@@ -986,6 +1013,176 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
     return out
 
 
+# --- cost, time and blocking per arm ---------------------------------------------------------
+
+ATTEMPT_HEAD = "Attempted the rule's action"
+BLOCKING_ARMS = ("block_only", "gated")  # the arms whose gate refuses actions
+
+
+def fixed(x: float, digits: int) -> str:
+    """x to `digits` decimals, halves rounded up (the page's convention, as `pct_num`)."""
+    scale = 10**digits
+    return f"{math.floor(x * scale + 0.5 + 1e-9) / scale:.{digits}f}"
+
+
+def money(x: float) -> str:
+    return f"${fixed(x, 3)}"
+
+
+def one_decimal(x: float) -> str:
+    return fixed(x, 1)
+
+
+def whole(x: float) -> str:
+    return fixed(x, 0)
+
+
+def mean_text(st: dict[str, Any], fmt: Any, unit: str = "", label: str = "") -> str:
+    """ "mean unit label (lo to hi unit)"; the interval is left out for a single run."""
+    lead = f"{e(fmt(st['mean']))}{e(unit)}"
+    if label:
+        lead += f" {e(label)}"
+    if st.get("lo") is None:
+        return f'<span class="rate">{lead}</span>'
+    interval = f"({e(fmt(st['lo']))} to {e(fmt(st['hi']))}{e(unit)})"
+    return (
+        f'<span class="rate">{lead}</span> '
+        f'<span class="ci" title="95% bootstrap interval">{interval}</span>'
+    )
+
+
+def runs_note(n: int) -> str:
+    return f"mean of {e(n)} runs" if n > 1 else "1 run, no interval"
+
+
+def line(text: str) -> str:
+    return f'<span class="count">{text}</span>'
+
+
+def cost_td(m: dict[str, Any]) -> str:
+    cost = m["cost"]
+    return mean_text(cost, money) + line(runs_note(cost["n"]))
+
+
+def wall_td(m: dict[str, Any]) -> str:
+    wall = m["wall_seconds"]
+    if not wall["n"]:
+        return '<span class="notrun">unknown</span>' + line("no timing recorded")
+    note = runs_note(wall["n"])
+    if wall.get("unknown"):
+        note += f"; {e(wall['unknown'])} not timed"
+    return mean_text(wall, whole, " s") + line(note)
+
+
+def attempt_td(m: dict[str, Any]) -> str:
+    att = m.get("attempt_rate")
+    if att is None:
+        why = "not about a tool or path" if m.get("blocks") else "no trace to count from"
+        return f'<span class="notrun">{e(why)}</span>'
+    return (
+        f'<span class="rate">{pct(att["rate"])}</span> '
+        '<span class="ci" title="95% Wilson interval">'
+        f"({pct_num(att['lo'])}&ndash;{pct_num(att['hi'])}%)</span>"
+        + line(f"{e(att['k'])} of {e(att['n'])} runs, blocked or not")
+    )
+
+
+def after_block_td(arm: str, m: dict[str, Any]) -> str:
+    if arm not in BLOCKING_ARMS:
+        return '<span class="notrun">no gate in this arm, nothing is blocked</span>'
+    b = m.get("blocks")
+    if b is None:
+        return '<span class="notrun">no trace to count from</span>'
+    parts = [mean_text(b["blocked"], one_decimal, label="blocked calls per run")]
+    parts.append(line(mean_text(b["repeats"], one_decimal, label="repeated after a block per run")))
+    if b.get("carry_over"):
+        label = "carried into a later delegation per run"
+        parts.append(line(mean_text(b["carry_over"], one_decimal, label=label)))
+    if b.get("replan"):
+        r = b["replan"]
+        parts.append(
+            line(f"re-planned the same action in {e(r['k'])} of {e(r['n'])} next delegations")
+        )
+    if b.get("stuck"):
+        st = b["stuck"]
+        parts.append(line(f"stuck: {e(st['k'])} of {e(st['n'])} blocked runs failed the task"))
+    else:
+        parts.append(line("no run was blocked"))
+    if b.get("recovery"):
+        rec = b["recovery"]
+        shares = []
+        if rec["cost_usd_est"]["mean"] is not None:
+            shares.append(f"about {money(rec['cost_usd_est']['mean'])}")
+        if rec["seconds_est"]["mean"] is not None:
+            shares.append(f"{whole(rec['seconds_est']['mean'])} s")
+        extra = f" ({e(' and '.join(shares))}, shared out by step)" if shares else ""
+        steps = f"{round(rec['steps']['mean'], 1):g}"
+        parts.append(line(f"recovery: {e(steps)} steps after the first block{extra}"))
+    return "".join(parts)
+
+
+def arm_metrics_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> str:
+    head = (
+        f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}'
+        + (f'<span class="count">{e(note)}</span>' if note else "")
+        + "</td>"
+    )
+    if cell is None:
+        return (
+            f'<tr class="missing"><th scope="row">{head}'
+            '<td colspan="4" class="notrun">not run</td></tr>'
+        )
+    m = cell.get("arm_metrics")
+    if not m:
+        return (
+            f'<tr><th scope="row">{head}'
+            '<td colspan="4" class="notrun">not in this results file</td></tr>'
+        )
+    return (
+        f'<tr><th scope="row">{head}<td data-label="Cost per run">{cost_td(m)}</td>'
+        f'<td data-label="Wall time per run">{wall_td(m)}</td>'
+        f'<td data-label="{e(ATTEMPT_HEAD)}">{attempt_td(m)}</td>'
+        f'<td data-label="After a block">{after_block_td(arm, m)}</td></tr>'
+    )
+
+
+def render_arm_metrics(cid: str, bid: str, cells: list[dict[str, Any]]) -> str:
+    """Cost, wall time, attempts and what happened after a block, per arm and operator, with one
+    block of rows per compaction setting like the table above it.
+    Empty when no cell has `arm_metrics` (a results file from before format_version 2)."""
+    if not any(c.get("arm_metrics") for c in cells):
+        return ""
+    settings = compaction_settings(cells)
+    split = len(settings) > 1
+    rows = "".join(
+        arm_metrics_row(
+            arm,
+            op,
+            find_cell(here, arm, op),
+            compaction_note(setting) if split or (setting and setting.get("tokens")) else "",
+        )
+        for setting in settings or [None]
+        for here in [[c for c in cells if c.get("compaction") == setting]]
+        for arm, op in expected_rows(here)
+    )
+    table = (
+        '<table class="cells arms"><colgroup><col style="width:14%"><col style="width:10%">'
+        '<col style="width:18%"><col style="width:16%"><col style="width:16%">'
+        '<col style="width:26%"></colgroup><thead><tr>'
+        '<th scope="col">Arm</th><th scope="col">Operator</th>'
+        '<th scope="col">Cost per run</th><th scope="col">Wall time per run</th>'
+        f'<th scope="col">{e(ATTEMPT_HEAD)}</th>'
+        '<th scope="col">After a block</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+    return (
+        '<p class="note">Cost and time per run, with 95% bootstrap intervals. Attempted counts '
+        "calls at the forbidden action whether or not the gate let them through, so a blocked "
+        "call is an attempt that failed, not one that never happened.</p>"
+        + panels.tablewrap(f"Cost, time and blocking of {cid} at {bid}", table)
+    )
+
+
 def graded_section(
     cid: str,
     bid: str,
@@ -1034,6 +1231,7 @@ def graded_section(
         f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
         + panels.tablewrap(f"Runs of {cid} at {bid}", table)
         + settings_note
+        + render_arm_metrics(cid, bid, cells)
         + (
             render_comparisons_by_setting(cells, b.get("comparisons", []), settings)
             if split

@@ -9,7 +9,7 @@ uv run python -m report.site --results results/results.json --out results/site/i
     [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]
 ```
 
-Reads the `results.json` that `replay/stats.py` writes (`format_version` 1; any other version is
+Reads the `results.json` that `replay/stats.py` writes (`format_version` 2; any other version is
 refused with exit code 2) and writes one self-contained HTML file: inline CSS and SVG, no script,
 no font, CDN or other network request. The output depends only on the input, so two runs are
 byte-identical. Generated pages are not committed.
@@ -18,13 +18,17 @@ What it shows:
 
 - Top: one plain verdict line made from the data (the largest rule effect among graded
   constraints, preferring one whose interval excludes 0, with its runs, interval and what the
-  gated runs did in the same case; "No comparison has enough runs yet" when there is none), then
-  a key defining the four arms and the operators in method words.
-- Under the key, "What each part fixes": three static lines. The gate blocks a tool call that
+  gated runs did in the same case; when gated was never broken it adds that the 0 comes from
+  blocking, which block-only gets by construction; "No comparison has enough runs yet" when there
+  is none), then a key defining the four arms and the operators in method words.
+- Under the key, "What each part fixes": four static lines. The gate blocks a tool call that
   breaks a rule checkable before the call (path, tool and approval rules), whatever the cause, and
   gated also holds back a reply that misses an output rule (`gate/policy.py`, `gate/middleware.py`);
   repair targets rules lost in the handoff (`repair/menu.py`); rules checked on the filesystem diff
-  are graded after the run and not blocked (docs/SPEC.md, predicate table).
+  are graded after the run and not blocked (docs/SPEC.md, predicate table). A fourth line
+  says a 0 broken in the block-only and gated arms comes from blocking (the gate refuses with
+  the check that grades the run, so both get it by construction) and that whether carrying the
+  rule adds anything over blocking is the hypothesis being measured, not a result.
 - Header: the reproducibility group (short hashes, with the full value in the tooltip, and the
   model ids), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
@@ -49,6 +53,13 @@ What it shows:
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
   `has_check: false` is tagged Not graded and shows no rate, comparison or trace (only a count of
   its runs); its cells are also left out of the boundary graph's pooled rates.
+- Under each cell table, "Cost and time per run": per arm and operator, mean cost and wall time
+  with 95% bootstrap intervals (unknown time is said, not shown as 0), the attempt rate, and for
+  the block_only and gated arms what happened after a block (blocked calls and repeats per run,
+  carry-over, re-plans, runs stuck, recovery steps with the cost and time shares marked as
+  estimates). A cell without `arm_metrics` (older file) shows "not in this results file", and a
+  page with none prints no table. The header's run block adds "Money in no rate": what errored
+  runs cost.
 - A one-sentence summary per (boundary, operator), only when the mutated violation rate, the
   block-only success and the gated success all exist. It uses those cells' numbers and nothing
   else.
