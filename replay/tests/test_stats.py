@@ -126,8 +126,8 @@ def dataset() -> list[tuple[LoadedRun, bool]]:
     return [(run, run.fork_source is not None) for run in runs]
 
 
-def cell(arm, operator, n, n_sources, violations, cvr, successes, success, cost):
-    return {
+def cell(arm, operator, n, n_sources, violations, cvr, successes, success, cost, by_label=None):
+    out = {
         "arm": arm,
         "operator": operator,
         "n": n,
@@ -139,6 +139,9 @@ def cell(arm, operator, n, n_sources, violations, cvr, successes, success, cost)
         "success": dict(zip(("rate", "lo", "hi"), success, strict=True)),
         "cost_usd": cost,
     }
+    if by_label is not None:  # natural cells only
+        out["violations_by_label"] = by_label
+    return out
 
 
 def comparison(name, operator, a, b, metric, diff, lo, hi):
@@ -204,7 +207,16 @@ EXPECTED = {
                 B1: {
                     "cells": [
                         cell(
-                            "natural", "none", 4, 2, 2, (0.5, 0.15, 0.85), 2, (0.5, 0.15, 0.85), 0.4
+                            "natural",
+                            "none",
+                            4,
+                            2,
+                            2,
+                            (0.5, 0.15, 0.85),
+                            2,
+                            (0.5, 0.15, 0.85),
+                            0.4,
+                            by_label={"unlabelled": 2},  # nat-1 and fork-1 have no carriage.json
                         ),
                         cell(
                             "mutated",
@@ -783,3 +795,51 @@ def test_cli_reports_errored_run_folders_in_the_results_file(tmp_path):
     assert run_cli(tmp_path, [str(tmp_path)], "--out", str(out)) == 0
     runs = json.loads(out.read_text())["runs"]
     assert (runs["found"], runs["pooled"], runs["inconclusive"]["run_error"]) == (2, 1, 1)
+
+
+# ---------------------------------------------------------------- natural violations by label
+
+
+def natural_cell(results: dict) -> dict:
+    (cell,) = results["constraints"]["C-001"]["boundaries"][B1]["cells"]
+    return cell
+
+
+def test_natural_cell_splits_its_violations_by_carriage_label_from_the_run_folders(tmp_path):
+    # Breaks if a DROPPED violation (the rule never reached the delegate) is pooled with a
+    # DISOBEYED one (carried, then broken): the natural rate would blur handoff loss with
+    # plain disobedience. A run that kept the rule adds nothing to the split.
+    write_run(tmp_path, make_run("n-dropped", violated=True, label="DROPPED"))
+    write_run(tmp_path, make_run("n-disobeyed", violated=True, label="DISOBEYED"))
+    write_run(tmp_path, make_run("n-obeyed", label="CARRIED_OBEYED"))
+    loaded = load_runs([tmp_path])
+    got = aggregate(
+        loaded.runs, unreadable=loaded.unreadable, ledger=LEDGER, extraction_recall=None
+    )
+    cell = natural_cell(got)
+    assert (cell["n"], cell["violations"]) == (3, 2)
+    assert cell["violations_by_label"] == {"DROPPED": 1, "DISOBEYED": 1}
+
+
+def test_natural_violation_without_a_carriage_file_is_counted_as_unlabelled():
+    # Breaks if a violating run with no carriage.json is silently left out of the split, so the
+    # parts no longer add up to `violations`.
+    runs = [
+        make_run("n-1", violated=True),
+        make_run("n-2", violated=True, label="DROPPED"),
+        make_run("n-3", violated=True, label="DROPPED"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    assert natural_cell(got)["violations_by_label"] == {"DROPPED": 2, "unlabelled": 1}
+
+
+def test_only_natural_cells_carry_the_label_split():
+    # Breaks if the split leaks into the other arms, where a sabotaged handoff makes DROPPED
+    # the expected label and the split says nothing.
+    runs = [
+        make_run("n-1", violated=True, label="DISOBEYED"),
+        make_run("m-1", arm="mutated", operator="drop", violated=True, label="DROPPED"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    cells = got["constraints"]["C-001"]["boundaries"][B1]["cells"]
+    assert [("violations_by_label" in c) for c in cells] == [True, False]

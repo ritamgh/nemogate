@@ -709,3 +709,70 @@ def test_unwritable_output_is_a_clean_error(tmp_path, capsys):
     assert err.count("\n") == 1
     assert site.main(["--results", str(src), "--out", "/dev/null/index.html"]) == 2
     assert capsys.readouterr().err.startswith("report.site: ")
+
+
+# --- natural violations split by carriage label --------------------------------------------------
+
+
+def natural_split(page: dict, split: dict | None) -> dict:
+    """`rich` with C-002's natural cell (3 violations in 10 runs) carrying `split`, if any."""
+    out = copy.deepcopy(page)
+    for cell in out["constraints"]["C-002"]["boundaries"]["delegation:planner->coder"]["cells"]:
+        if cell["arm"] == "natural":
+            assert cell["violations"] == 3
+            if split is not None:
+                cell["violations_by_label"] = split
+    return out
+
+
+def test_natural_cell_says_how_many_violations_were_dropped_and_how_many_disobeyed(rich):
+    # Breaks if a dropped rule and a disobeyed one are shown as one undifferentiated rate again.
+    page = site.render(natural_split(rich, {"DROPPED": 1, "DISOBEYED": 2}))
+    text = text_of(article(page, "C-002"))
+    assert "3 of 10 broken: 1 rule dropped in the handoff, 2 rules carried but disobeyed" in text
+
+
+def test_natural_split_names_a_run_that_could_not_be_classified(rich):
+    # Breaks if a violation with no usable label vanishes from the sentence, so the parts no
+    # longer add up to the violation count.
+    page = site.render(natural_split(rich, {"DROPPED": 1, "unlabelled": 1, "UNKNOWN": 1}))
+    text = text_of(article(page, "C-002"))
+    assert "3 of 10 broken: 1 rule dropped in the handoff, 2 not classified" in text
+
+
+def test_natural_split_is_only_shown_in_the_natural_row(rich):
+    # Breaks if the sentence is repeated on a sabotaged arm, where "dropped" is by design.
+    data = natural_split(rich, {"DROPPED": 3})
+    for cell in data["constraints"]["C-002"]["boundaries"]["delegation:planner->coder"]["cells"]:
+        if cell["arm"] == "mutated":
+            cell["violations_by_label"] = {"DROPPED": 8}
+    text = text_of(article(site.render(data), "C-002"))
+    assert text.count("broken:") == 1
+
+
+@pytest.mark.parametrize("split", [None, {}])
+def test_natural_cell_without_a_split_renders_as_before(rich, split):
+    # Breaks if an older results file (no field) fails to render or shows an empty sentence.
+    text = text_of(article(site.render(natural_split(rich, split)), "C-002"))
+    assert "broken:" not in text
+    assert "Natural none 10 30% (11–60%) 3 of 10 runs 70% (40–89%) 7 of 10 runs" in text
+
+
+# --- what each part fixes -----------------------------------------------------------------------
+
+
+def test_page_says_what_the_gate_and_repair_each_fix_and_what_neither_does(rich):
+    # Breaks if the page claims more than the code does: the gate blocks only checks decidable
+    # before the call, repair acts on rules lost in the handoff, frozen files are graded after.
+    page = site.render(rich)
+    text = text_of(page)
+    assert "What each part fixes" in text
+    section = text.split("What each part fixes", 1)[1].split("What these numbers can")[0]
+    assert "blocks a tool call that breaks a rule it can check before the call" in section
+    assert "path, tool and approval rules" in section
+    assert "rule that arrived but was ignored" in section
+    assert "Gated also holds back a reply that misses an output rule" in section
+    assert "Repair targets rules lost in the handoff" in section
+    assert "checked on the files an agent changed, such as frozen files," in section
+    assert "are graded after the run. The gate does not block them" in section
+    assert not re.search(r"\bT[1-8]\b|C-00\d", section)

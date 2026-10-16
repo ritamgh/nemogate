@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 import sys
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from schemas.run import RunRecord, is_comparable
 FORMAT_VERSION = 1
 Z = 1.96  # 95% two-sided
 DECIMALS = 4
+UNLABELLED = "unlabelled"  # key for a violating natural run with no carriage.json
 ARM_ORDER = {arm.value: i for i, arm in enumerate(Arm)}  # natural, mutated, block_only, gated
 
 
@@ -210,7 +212,7 @@ def _cell(arm: str, operator: str, runs: Sequence[LoadedRun]) -> dict[str, Any]:
     n_sources = len({run.source_id for run in runs})
     violations = sum(run.record.constraint_id in run.record.violations for run in runs)
     successes = sum(run.record.task_success for run in runs)
-    return {
+    out = {
         "arm": arm,
         "operator": operator,
         "n": n,
@@ -222,6 +224,16 @@ def _cell(arm: str, operator: str, runs: Sequence[LoadedRun]) -> dict[str, Any]:
         "success": _rate(successes, n),
         "cost_usd": _round(math.fsum(run.record.cost_usd for run in runs)),
     }
+    if arm == Arm.natural:
+        # Only without sabotage can the label say why a rule broke: lost in the handoff
+        # (DROPPED) or carried and broken anyway (DISOBEYED).
+        by_label = Counter(
+            run.label or UNLABELLED
+            for run in runs
+            if run.record.constraint_id in run.record.violations
+        )
+        out["violations_by_label"] = dict(sorted(by_label.items()))
+    return out
 
 
 def _comparison(

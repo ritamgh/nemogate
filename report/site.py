@@ -81,6 +81,24 @@ KEY_OPERATORS = (
     ("hedge", "the rule is reworded as vague advice."),
     ("compress_100", "the handoff is summarised to 100 words."),
 )
+FIXES = (
+    (
+        "The gate (block-only and gated arms)",
+        "blocks a tool call that breaks a rule it can check before the call (path, tool and "
+        "approval rules), whatever the cause, so it also stops a rule that arrived but was "
+        "ignored. Gated also holds back a reply that misses an output rule.",
+    ),
+    (
+        "Repair",
+        "Repair targets rules lost in the handoff. Its fixes are instructions that make sure the "
+        "rule reaches the agent.",
+    ),
+    (
+        "Checked after the run",
+        "Rules checked on the files an agent changed, such as frozen files, are graded after the "
+        "run. The gate does not block them.",
+    ),
+)
 SIDE_ARC = 52  # how far a same-column edge bows out to the right
 
 
@@ -559,7 +577,7 @@ def render_header(results: dict[str, Any], verdict: str) -> str:
 sabotaging the handoff and counting how often the rule was then broken.</p>
 {verdict}
 </header>
-{render_key()}
+{render_key()}{render_fixes()}
 <section aria-labelledby="honesty-h" class="strip">
 <h2 id="honesty-h">What these numbers can and cannot tell you</h2>
 <ul class="honesty">
@@ -659,6 +677,14 @@ def render_key() -> str:
     )
 
 
+def render_fixes() -> str:
+    items = "".join(f"<div><dt>{e(k)}</dt><dd>{e(v)}</dd></div>" for k, v in FIXES)
+    return (
+        '<section aria-labelledby="fixes-h" class="key"><h2 id="fixes-h">What each part fixes</h2>'
+        f'<dl class="kv stack">{items}</dl></section>'
+    )
+
+
 # --- constraint cards -------------------------------------------------------------------------
 
 
@@ -692,6 +718,35 @@ def fraction_cell(count: int, n: int, stat: dict[str, Any]) -> str:
     )
 
 
+def _rules(n: int) -> str:
+    return f"{n} rule" if n == 1 else f"{n} rules"
+
+
+def split_note(cell: dict[str, Any]) -> str:
+    """For a natural cell with `violations_by_label`: why the broken runs broke, in words.
+
+    A rule dropped in the handoff is what the mutated arm models; one carried and broken anyway
+    is plain disobedience. Empty when the field is absent or empty (older results files).
+    """
+    split = cell.get("violations_by_label") or {}
+    dropped = split.get("DROPPED", 0)
+    disobeyed = split.get("DISOBEYED", 0)
+    other = sum(split.values()) - dropped - disobeyed
+    parts = []
+    if dropped:
+        parts.append(f"{_rules(dropped)} dropped in the handoff")
+    if disobeyed:
+        parts.append(f"{_rules(disobeyed)} carried but disobeyed")
+    if other:
+        parts.append(f"{other} not classified")
+    if not parts:
+        return ""
+    return (
+        f'<span class="count split">{e(cell["violations"])} of {e(cell["n"])} broken: '
+        f"{e(', '.join(parts))}</span>"
+    )
+
+
 def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
     label = f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}</td>'
     if cell is None:
@@ -709,6 +764,8 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
             "so these ranges are too narrow.</span>"
         )
     cvr = fraction_cell(cell["violations"], n, cell["cvr"])
+    if cell.get("arm") == "natural":
+        cvr += split_note(cell)
     success = fraction_cell(cell["successes"], n, cell["success"])
     return (
         f'<tr><th scope="row">{label}<td data-label="Runs">{n_text}{warn}</td>'

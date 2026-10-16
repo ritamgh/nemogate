@@ -20,6 +20,11 @@ What it shows:
   constraints, preferring one whose interval excludes 0, with its runs, interval and what the
   gated runs did in the same case; "No comparison has enough runs yet" when there is none), then
   a key defining the four arms and the operators in method words.
+- Under the key, "What each part fixes": three static lines. The gate blocks a tool call that
+  breaks a rule checkable before the call (path, tool and approval rules), whatever the cause, and
+  gated also holds back a reply that misses an output rule (`gate/policy.py`, `gate/middleware.py`);
+  repair targets rules lost in the handoff (`repair/menu.py`); rules checked on the filesystem diff
+  are graded after the run and not blocked (docs/SPEC.md, predicate table).
 - Header: the reproducibility group (short hashes, with the full value in the tooltip, and the
   model ids), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
@@ -36,7 +41,9 @@ What it shows:
   boundary; the table links to all of them.
 - One card per constraint: rule text, kind, a Graded / Not graded tag, and per boundary a
   table of cells (arm, operator, runs, violation rate and task success with their 95% Wilson
-  intervals and a small interval bar). A cell that was not run prints "not run", not 0. A cell with
+  intervals and a small interval bar). A `natural` cell whose results carry `violations_by_label`
+  adds one line under the violation rate, such as "2 of 3 broken: 1 rule dropped in the handoff,
+  1 rule carried but disobeyed"; without the field (older results files) nothing is added. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
   (`load_bearing`) and gate effect on task success (`ledger_value`) are shown with their interval,
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
