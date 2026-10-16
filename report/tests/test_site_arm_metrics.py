@@ -99,7 +99,7 @@ def test_cost_and_time_of_each_compaction_setting_get_their_own_row():
         cost=stat(0.1, 0.08, 0.12, 4),
     )
     on = with_metrics(
-        {**make_cell("natural", "none", 4, 2, 2), "compaction": {"tokens": "6000", "keep": "6"}},
+        {**make_cell("natural", "none", 4, 2, 2), "compaction": {"tokens": 6000, "keep": 6}},
         cost=stat(0.25, 0.2, 0.3, 4),
     )
     page = one_constraint({"delegation:a->b": {"cells": [off, on], "comparisons": []}})
