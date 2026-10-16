@@ -90,10 +90,13 @@ FIXES = (
     ),
     (
         "Reading a 0 in the blocking arms",
-        "A 0 broken in the block-only and gated arms comes from blocking: the gate refuses the "
-        "action with the same check that grades the run, so both arms get it by construction. "
-        "Whether carrying the rule adds anything over blocking, such as finishing the task where "
-        "blocking leaves the agent stuck, is the hypothesis being measured, not a result.",
+        "For a path, tool or approval rule, a 0 broken in the block-only and gated arms comes "
+        "from blocking: the gate refuses the action with the same check that grades the run, so "
+        "both arms get it by construction. Other rules are not refused before the call (frozen "
+        "files and output rules are graded after the run), so a 0 there is a measured result, "
+        "not a construction. Whether carrying the rule adds anything over blocking, such as "
+        "finishing the task where blocking leaves the agent stuck, is the hypothesis being "
+        "measured, not a result.",
     ),
     (
         "Repair",
@@ -540,6 +543,13 @@ def short(value: Any) -> str:
     return f'<code title="{e(text)}">{e(text[:12])}</code>'
 
 
+def errored_detail(row: dict[str, Any]) -> str:
+    """ "2 runs, 1 with no recorded cost" for an `errored_cost` row (the total or one arm)."""
+    unknown = row.get("cost_unknown", 0)
+    plural = "run" if row["count"] == 1 else "runs"
+    return f"{row['count']} {plural}" + (f", {unknown} with no recorded cost" if unknown else "")
+
+
 def render_header(results: dict[str, Any], verdict: str) -> str:
     repro = results.get("reproducibility") or {}
     models = repro.get("model_ids") or {}
@@ -569,15 +579,16 @@ def render_header(results: dict[str, Any], verdict: str) -> str:
     errored = runs.get("errored_cost") or {}
     errored_items = ""
     if errored.get("count"):
-        unknown = errored.get("cost_unknown", 0)
-        plural = "run" if errored["count"] == 1 else "runs"
-        detail = f"{errored['count']} {plural}" + (
-            f", {unknown} with no recorded cost" if unknown else ""
+        detail = errored_detail(errored)
+        per_arm = "".join(
+            f"<div><dt>errored, {e(ARM_LABEL.get(arm, arm))}</dt>"
+            f"<dd>{e(money(row['cost_usd']))} ({e(errored_detail(row))})</dd></div>"
+            for arm, row in sorted((errored.get("by_arm") or {}).items())
         )
         errored_items = (
             "<h3>Money in no rate</h3>"
             '<dl class="kv"><div><dt>spent on errored runs</dt>'
-            f"<dd>{e(money(errored['cost_usd']))} ({e(detail)})</dd></div></dl>"
+            f"<dd>{e(money(errored['cost_usd']))} ({e(detail)})</dd></div>{per_arm}</dl>"
         )
     honesty = results["honesty"]
     recall = honesty.get("extraction_recall")
@@ -642,6 +653,16 @@ BLOCKING_ZERO = (
 )
 
 
+def blocking_made_the_zero(body: dict[str, Any], gated: dict[str, Any]) -> bool:
+    """Is a gated cell's 0 broken something blocking can explain? Only for a rule the gate refuses
+    before the call (`blocked_before_call`, from the gate's own policy), and not when the cell's
+    traces show no gated run was blocked at all."""
+    if gated["violations"] != 0 or not body.get("blocked_before_call"):
+        return False
+    blocks = (gated.get("arm_metrics") or {}).get("blocks")
+    return blocks is None or blocks["runs_with_block"] > 0
+
+
 def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
     """One plain sentence from the data: the largest rule effect (sabotaged versus natural
     violation rate) and what the gated runs did in the same case. Only graded constraints count.
@@ -678,7 +699,8 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
     gated = (
         f"With the gate on, it was broken in {e(gat['violations'])} of {e(gat['n'])} gated runs "
         f"({pct(gat['cvr']['rate'])}, 95% interval {pct_num(gat['cvr']['lo'])}% to "
-        f"{pct_num(gat['cvr']['hi'])}%)." + (BLOCKING_ZERO if gat["violations"] == 0 else "")
+        f"{pct_num(gat['cvr']['hi'])}%)."
+        + (BLOCKING_ZERO if blocking_made_the_zero(results["constraints"][cid], gat) else "")
         if gat
         else "There are no gated runs of this case yet."
     )
@@ -1037,18 +1059,27 @@ def whole(x: float) -> str:
     return fixed(x, 0)
 
 
+BOOTSTRAP_FROM = 5  # replay.intervals.MIN_FOR_BOOTSTRAP; used for a cell written without a basis
+
+
 def mean_text(st: dict[str, Any], fmt: Any, unit: str = "", label: str = "") -> str:
-    """ "mean unit label (lo to hi unit)"; the interval is left out for a single run."""
+    """ "mean unit label (lo to hi unit)"; no interval for a single run. The interval is a 95%
+    bootstrap one from five runs; with fewer it is the lowest to the highest value, said to be a
+    range (a bootstrap of two or three values gives just that and would claim far more)."""
     lead = f"{e(fmt(st['mean']))}{e(unit)}"
     if label:
         lead += f" {e(label)}"
     if st.get("lo") is None:
         return f'<span class="rate">{lead}</span>'
-    interval = f"({e(fmt(st['lo']))} to {e(fmt(st['hi']))}{e(unit)})"
-    return (
-        f'<span class="rate">{lead}</span> '
-        f'<span class="ci" title="95% bootstrap interval">{interval}</span>'
-    )
+    basis = st.get("basis") or ("bootstrap" if st["n"] >= BOOTSTRAP_FROM else "range")
+    span = f"{e(fmt(st['lo']))} to {e(fmt(st['hi']))}{e(unit)}"
+    if basis == "range":
+        interval = f"(range {span})"
+        title = "Lowest to highest of the runs; too few runs for an interval"
+    else:
+        interval = f"({span})"
+        title = "95% bootstrap interval"
+    return f'<span class="rate">{lead}</span> <span class="ci" title="{e(title)}">{interval}</span>'
 
 
 def runs_note(n: int) -> str:
@@ -1095,13 +1126,21 @@ def after_block_td(arm: str, m: dict[str, Any]) -> str:
         return '<span class="notrun">no trace to count from</span>'
     parts = [mean_text(b["blocked"], one_decimal, label="blocked calls per run")]
     parts.append(line(mean_text(b["repeats"], one_decimal, label="repeated after a block per run")))
-    if b.get("carry_over"):
+    if b.get("carry_over") and b["carry_over"]["n"]:
         label = "carried into a later delegation per run"
         parts.append(line(mean_text(b["carry_over"], one_decimal, label=label)))
     if b.get("replan"):
         r = b["replan"]
         parts.append(
             line(f"re-planned the same action in {e(r['k'])} of {e(r['n'])} next delegations")
+        )
+    if b.get("n_ambiguous"):
+        k = b["n_ambiguous"]
+        parts.append(
+            line(
+                f"carry-over and re-plans leave out {e(k)} {'run' if k == 1 else 'runs'} with "
+                "several task calls at once"
+            )
         )
     if b.get("stuck"):
         st = b["stuck"]
@@ -1176,9 +1215,12 @@ def render_arm_metrics(cid: str, bid: str, cells: list[dict[str, Any]]) -> str:
         f"<tbody>{rows}</tbody></table>"
     )
     return (
-        '<p class="note">Cost and time per run, with 95% bootstrap intervals. Attempted counts '
-        "calls at the forbidden action whether or not the gate let them through, so a blocked "
-        "call is an attempt that failed, not one that never happened.</p>"
+        '<p class="note">Cost and time per run, with a 95% bootstrap interval from five runs and '
+        "the lowest to highest value (a range, not an interval) from fewer. Means cover graded "
+        "runs only; the money spent on errored runs, per arm, is not in them and is listed "
+        "under Money in no rate at the top. Attempted counts calls at the forbidden action "
+        "whether or not the gate let them through, so a blocked call is an attempt that failed, "
+        "not one that never happened.</p>"
         + panels.tablewrap(f"Cost, time and blocking of {cid} at {bid}", table)
     )
 

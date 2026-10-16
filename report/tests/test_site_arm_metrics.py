@@ -4,11 +4,19 @@ that credits blocking (not NemoGate) for "broken 0 of N". Cells are built by han
 import re
 
 from report import site
-from report.tests.test_site import make_cell, one_constraint, rich, text_of  # noqa: F401
+from report.tests.test_site import (  # noqa: F401
+    FORMAT_V1_DELEGATION,
+    make_cell,
+    one_constraint,
+    raise_c002_effect,
+    rich,
+    text_of,
+    verdict_text,
+)
 
 
-def stat(mean, lo, hi, n):
-    return {"n": n, "mean": mean, "lo": lo, "hi": hi}
+def stat(mean, lo, hi, n, basis="range"):
+    return {"n": n, "mean": mean, "lo": lo, "hi": hi, "basis": None if lo is None else basis}
 
 
 def rate(k, n, r, lo, hi):
@@ -65,11 +73,11 @@ def test_cost_time_and_blocking_are_shown_per_arm_with_their_intervals():
     # Breaks if the per-arm numbers in results.json never reach the page.
     text = text_of(metrics_table(site.render(metrics_page())))
 
-    assert "Block-only drop $0.110 ($0.067 to $0.153) mean of 2 runs" in text
-    assert "150 s (100 to 200 s) mean of 2 runs" in text
+    assert "Block-only drop $0.110 (range $0.067 to $0.153) mean of 2 runs" in text
+    assert "150 s (range 100 to 200 s) mean of 2 runs" in text
     assert "50% (9–91%) 1 of 2 runs, blocked or not" in text
-    assert "1.0 blocked calls per run (0.0 to 2.0)" in text
-    assert "0.5 repeated after a block per run (0.0 to 1.0)" in text
+    assert "1.0 blocked calls per run (range 0.0 to 2.0)" in text
+    assert "0.5 repeated after a block per run (range 0.0 to 1.0)" in text
     assert "re-planned the same action in 1 of 3 next delegations" in text
     assert "stuck: 1 of 1 blocked runs failed the task" in text
     assert "recovery: 4 steps after the first block" in text
@@ -98,8 +106,11 @@ def test_cost_and_time_of_each_compaction_setting_get_their_own_row():
 
     text = text_of(metrics_table(site.render(page)))
 
-    assert "none compaction off $0.100 ($0.080 to $0.120) mean of 4 runs" in text
-    assert "none compaction at 6000 tokens, keep 6 $0.250 ($0.200 to $0.300) mean of 4 runs" in text
+    assert "none compaction off $0.100 (range $0.080 to $0.120) mean of 4 runs" in text
+    assert (
+        "none compaction at 6000 tokens, keep 6 $0.250 (range $0.200 to $0.300) mean of 4 runs"
+        in text
+    )
 
 
 def test_arms_without_a_gate_do_not_get_block_counts():
@@ -149,8 +160,164 @@ def test_the_gate_note_says_a_zero_comes_from_blocking_and_gated_is_a_hypothesis
     text = text_of(site.render(rich))
     section = text.split("What each part fixes", 1)[1].split("What these numbers can")[0]
 
-    assert "A 0 broken in the block-only and gated arms comes from blocking" in section
+    assert "For a path, tool or approval rule, a 0 broken in the block-only and gated" in section
+    assert "comes from blocking" in section
     assert "by construction" in section
+    assert "a 0 there is a measured result" in section  # other rules are not blocked ahead
     assert "Whether carrying the rule adds anything over blocking" in section
     assert "is the hypothesis being measured, not a result" in section
     assert "not a result" in section
+
+
+# --- a 0 is credited to blocking only where blocking can have produced it ------------------------
+
+
+def verdict_page(rich, *, blocked_before_call, gated_blocks=None):  # noqa: F811
+    raise_c002_effect(rich)
+    body = rich["constraints"]["C-002"]
+    body["blocked_before_call"] = blocked_before_call
+    if gated_blocks is not None:
+        cells = body["boundaries"][FORMAT_V1_DELEGATION]["cells"]
+        gated = next(c for c in cells if c["arm"] == "gated" and c["operator"] == "drop")
+        with_metrics(gated, blocks={**BLOCKS, "runs_with_block": gated_blocks})
+    return verdict_text(site.render(rich))
+
+
+def test_no_blocking_credit_for_a_rule_the_gate_does_not_block_before_the_call(rich):  # noqa: F811
+    # Breaks if a re-pin's 0 on a frozen-file or output rule is explained away as blocking.
+    text = verdict_page(rich, blocked_before_call=False)
+
+    assert "0 of 10 gated runs" in text
+    assert "comes from blocking" not in text
+
+
+def test_no_blocking_credit_when_no_gated_run_was_blocked(rich):  # noqa: F811
+    # The gated runs never tried the action (0 runs with a block), so blocking did not make
+    # the 0.
+    text = verdict_page(rich, blocked_before_call=True, gated_blocks=0)
+
+    assert "0 of 10 gated runs" in text
+    assert "comes from blocking" not in text
+
+
+def test_blocking_credit_when_a_gated_run_was_blocked_on_a_rule_the_gate_blocks(rich):  # noqa: F811
+    text = verdict_page(rich, blocked_before_call=True, gated_blocks=2)
+
+    assert text.endswith("not show that carrying the rule helps.")
+    assert "That 0 comes from blocking" in text
+
+
+def test_no_blocking_credit_when_gated_was_broken_at_all(rich):  # noqa: F811
+    raise_c002_effect(rich)
+    body = rich["constraints"]["C-002"]
+    body["blocked_before_call"] = True
+    cells = body["boundaries"][FORMAT_V1_DELEGATION]["cells"]
+    gated = next(c for c in cells if c["arm"] == "gated" and c["operator"] == "drop")
+    gated.update({"violations": 3, "cvr": {"rate": 0.3, "lo": 0.1, "hi": 0.6}})
+
+    assert "comes from blocking" not in verdict_text(site.render(rich))
+
+
+# --- errored runs: per arm, and the per-run means cover graded runs only -----------------------
+
+
+def test_errored_cost_is_listed_per_arm(rich):  # noqa: F811
+    # Breaks if by_arm stays in the JSON only: a reader comparing per-run cost of two arms must
+    # see which arm the money on errored runs belongs to.
+    rich["runs"]["errored_cost"] = {
+        "count": 3,
+        "cost_usd": 0.35,
+        "cost_unknown": 1,
+        "by_arm": {
+            "block_only": {"count": 1, "cost_usd": 0.1101, "cost_unknown": 0},
+            "gated": {"count": 2, "cost_usd": 0.24, "cost_unknown": 1},
+        },
+    }
+
+    text = text_of(site.render(rich))
+
+    assert "spent on errored runs $0.350 (3 runs, 1 with no recorded cost)" in text
+    assert "errored, Block-only $0.110 (1 run)" in text
+    assert "errored, Gated (NemoGate) $0.240 (2 runs, 1 with no recorded cost)" in text
+
+
+def test_the_per_run_cost_table_says_it_covers_graded_runs_only():
+    # Breaks if the table lets a reader take a survivor-only mean for what the arm costs.
+    text = text_of(site.render(metrics_page()))
+
+    assert "Means cover graded runs only" in text
+    assert "the money spent on errored runs, per arm," in text
+    assert "Money in no rate" in text
+
+
+# --- few runs: a range, not a 95% interval -------------------------------------------------
+
+
+def test_the_mean_of_fewer_than_five_runs_is_labelled_a_range_not_an_interval():
+    # Breaks if two runs' lowest and highest value is titled "95% bootstrap interval".
+    page = site.render(metrics_page())
+    table = metrics_table(page)
+
+    assert 'title="95% bootstrap interval"' not in table
+    assert 'title="Lowest to highest of the runs; too few runs for an interval"' in table
+
+
+def test_the_mean_of_five_runs_keeps_its_bootstrap_interval():
+    cell = with_metrics(
+        make_cell("block_only", "drop", 5, 0, 5), cost=stat(0.14, 0.116, 0.164, 5, "bootstrap")
+    )
+    page = one_constraint({"delegation:a->b": {"cells": [cell], "comparisons": []}})
+
+    table = metrics_table(site.render(page))
+
+    assert "$0.140 ($0.116 to $0.164) mean of 5 runs" in text_of(table)
+    assert 'title="95% bootstrap interval"' in table
+
+
+def test_a_cell_from_before_basis_was_written_is_judged_by_its_run_count():
+    old = {"n": 3, "mean": 0.2, "lo": 0.1, "hi": 0.3}  # no "basis" key
+    cell = with_metrics(make_cell("block_only", "drop", 3, 0, 3), cost=old)
+    page = one_constraint({"delegation:a->b": {"cells": [cell], "comparisons": []}})
+
+    assert "(range $0.100 to $0.300)" in text_of(metrics_table(site.render(page)))
+
+
+# --- runs whose carry-over could not be placed ---------------------------------------------
+
+
+def test_runs_with_concurrent_task_calls_are_said_not_to_be_counted_in_carry_over_and_replans():
+    blocks = {**BLOCKS, "n_ambiguous": 1}
+    page = one_constraint(
+        {
+            "delegation:a->b": {
+                "cells": [with_metrics(make_cell("block_only", "drop", 2, 0, 1), blocks=blocks)],
+                "comparisons": [],
+            }
+        }
+    )
+
+    text = text_of(metrics_table(site.render(page)))
+
+    assert "carry-over and re-plans leave out 1 run with several task calls at once" in text
+
+
+def test_a_cell_where_every_run_is_ambiguous_shows_no_carry_over_number_and_does_not_crash():
+    blocks = {
+        **BLOCKS,
+        "n_ambiguous": 2,
+        "carry_over": stat(None, None, None, 0),
+        "replan": None,
+    }
+    page = one_constraint(
+        {
+            "delegation:a->b": {
+                "cells": [with_metrics(make_cell("block_only", "drop", 2, 0, 1), blocks=blocks)],
+                "comparisons": [],
+            }
+        }
+    )
+
+    text = text_of(metrics_table(site.render(page)))
+
+    assert "carried into a later delegation" not in text
+    assert "carry-over and re-plans leave out 2 runs with several task calls at once" in text

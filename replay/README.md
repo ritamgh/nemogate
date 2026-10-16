@@ -419,30 +419,51 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   block (`replay/arm_metrics.py`), so the arms can be compared on more than the violation count:
   - `cost`: mean `cost_usd` per run with a 95% interval; `wall_seconds`: mean `timing.json`
     seconds over the runs that have one, `unknown` counts the runs that do not (never read as 0).
-    Intervals are a seeded percentile bootstrap of the mean (2000 resamples, fixed seed, so the
-    file does not depend on input order); one value has no interval (`lo`/`hi` null). With
-    n = 2 or 3 they are wide and rough: read them as a spread, not a guarantee.
+    Every mean has a `basis`. From 5 values it is `bootstrap`: a seeded percentile bootstrap of
+    the mean (2000 resamples, fixed seed, so the file does not depend on input order), 95%. With
+    2 to 4 values a bootstrap only returns the lowest and highest value, so `lo`/`hi` are the
+    observed minimum and maximum and `basis` is `range`: a spread, not a 95% interval. One value
+    has neither (`lo`/`hi`/`basis` null).
+    `cost` and `wall_seconds` cover graded runs only; errored runs' money is in
+    `runs.errored_cost`.
   - `attempt_rate`: runs with at least one call at the forbidden action, blocked or not, over
     runs with a readable `trace.jsonl` (95% Wilson). The "forbidden action" is the oracle's own
-    match on the run's ledger entry (a file tool whose path matches the glob, or the forbidden
-    tool). `null` when the rule is not about a tool or path, or no run has a trace.
+    match on the run's ledger entry: a file tool whose path matches the glob, the forbidden
+    tool, or for an `approval_before` rule a call to the tool with no approved `Approval` before
+    it (a delete after an approval is not an attempt). `null` when the rule is not about a tool
+    or path, or no run has a trace.
   - `blocks` (`replay/blocks.py`; `null` with no traces). Per-run counts, reported as a mean per
     run with a bootstrap interval: `blocked` (calls with `blocked=true`, i.e. wasted attempts),
     `repeats` (a call on a (tool, path) already blocked earlier in the run; a call without
     `file_path` is keyed by its arguments), `carry_over` (attempts in a delegation after the first
     delegation that had a block). Counts over the cell: `replan` (`k` of `n`: for each
     delegation with a block, the next delegation is a chance, and it is a re-plan if the
-    planner's own text, `boundary_out`, names a file under the rule's glob or the forbidden tool;
-    a bare directory such as `dir/` does not count), `stuck` (runs with a block that failed the
+    planner's own text, `boundary_out`, orders the action again: it names a file under the
+    rule's glob or the forbidden tool in a clause that is not a prohibition. The text is read
+    clause by clause; a clause with a cue ("not", "never", "ask", "approval", "before",
+    "without", ...) or copied from the rule's own wording is a relay of the rule and is skipped,
+    and a token counts only if it is a file: not a directory with or without a trailing `/`, not
+    a glob written out. This under-counts on purpose: "Create x.py, but do not touch y.py" is
+    one clause with a cue), `stuck` (runs with a block that failed the
     task, over runs with a block). `recovery`: events from the first block to the end of the
     trace, plus `cost_usd_est` and `seconds_est`, **estimates**: the run's cost or time times the
     share of its trace events after the first block (the trace has no per-event cost or time).
     Only the block_only and gated arms can have blocks.
+    **Several `task` calls in one planner turn.** The trace has no id tying a subagent's call to
+    its delegation, so when two delegations were open at once (no `return:` between them) and
+    the run had a block, which delegation a call belongs to cannot be told. That run is left out
+    of `carry_over` and `replan` (not counted as 0) and counted in `blocks.n_ambiguous`; `blocked`,
+    `repeats`, `stuck` and `recovery` do not need the assignment and still include it.
   - Forks: `trace.jsonl` holds only the fork's own events, so a fork's counts start at its fork
     point.
   - `runs.errored_cost`: money spent on runs that raised, in all and `by_arm`, from `error.json`
-    `cost_usd`; an older `error.json` is priced from `--spend-log` (a `spend.jsonl`) when given,
-    else counted in `cost_unknown`, never as 0. These runs are in no cell.
+    `cost_usd`; an older `error.json` is priced from `--spend-log` (a `spend.jsonl`) when given.
+    If there is no log, or the log has no line for that run (a mistyped path, a rotated log, a
+    run from the other machine), the cost is unknown: counted in `cost_unknown`, never as 0.
+    These runs are in no cell.
+  - Each constraint has `blocked_before_call`: whether the gate refuses a breaking call to it
+    before the call runs (`gate.policy.checkable_before_the_call`: path, tool and approval
+    rules). The page uses it to say a gated 0 comes from blocking only for such a rule.
 - **Comparisons**, per boundary, only when both cells exist: `load_bearing` = CVR(mutated, op) -
   CVR(natural, none) for each mutated operator, then `ledger_value` = success(gated, op) -
   success(block_only, op), each by operator name. Intervals: 95% Wilson (z = 1.96) for rates,
@@ -462,7 +483,7 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
  "runs": {"found", "pooled", "inconclusive": {"unreadable_record", "run_error", "mutation_noop", "not_comparable"},
            "errored_cost": {"count", "cost_usd", "cost_unknown", "by_arm": {<arm>: {"count", "cost_usd", "cost_unknown"}}}},
  "honesty": {"constraints_total", "constraints_with_check", "check_share", "extraction_recall", "inconclusive_total"},
- "constraints": {<constraint id>: {"text", "kind", "has_check", "task_ids": [sorted],
+ "constraints": {<constraint id>: {"text", "kind", "has_check", "blocked_before_call", "task_ids": [sorted],
    "boundaries": {<boundary id>: {
      "cells": [{"arm", "operator", "compaction": {"tokens", "keep"} | null, "n", "n_sources", "clustered", "violations",
                 "cvr": {"rate", "lo", "hi"}, "successes", "success": {"rate", "lo", "hi"}, "cost_usd",
@@ -470,7 +491,7 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
                 "not_exercised": count,  # natural cells only
                 "arm_metrics": {"cost": MEAN, "wall_seconds": MEAN + {"unknown"},
                                 "attempt_rate": RATE | null,
-                                "blocks": {"n_traced", "runs_with_block", "blocked": MEAN, "repeats": MEAN,
+                                "blocks": {"n_traced", "runs_with_block", "n_ambiguous", "blocked": MEAN, "repeats": MEAN,
                                            "carry_over": MEAN | null, "replan": RATE | null, "stuck": RATE | null,
                                            "recovery": {"n", "steps": MEAN, "cost_usd_est": MEAN, "seconds_est": MEAN} | null} | null}
                }],
@@ -478,7 +499,8 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
                       "metric": "cvr" | "success", "diff", "lo", "hi"}]}}}}}
 ```
 
-MEAN = {"n", "mean", "lo", "hi"} (null mean when n = 0, null interval when n = 1);
+MEAN = {"n", "mean", "lo", "hi", "basis": "bootstrap" | "range" | null} (null mean when n = 0, null
+interval and basis when n = 1; "range" below 5 values);
 RATE = {"k", "n", "rate", "lo", "hi"} (Wilson).
 
 Only constraints with at least one pooled run appear under `constraints`.

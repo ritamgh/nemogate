@@ -356,13 +356,25 @@ def raise_c002_effect(data: dict) -> None:
 
 def test_verdict_states_the_largest_effect_with_its_runs_interval_and_the_gated_result(rich):
     # Breaks if the page opens without a plain result, or picks a smaller effect, or leaves out
-    # the counts, the interval or what the gate did in the same case.
+    # the counts, the interval or what the gate did in the same case. C-002 is not a rule the
+    # gate blocks before the call here, so a 0 is not credited to blocking.
     raise_c002_effect(rich)
 
     assert verdict_text(site.render(rich)) == (
         "Largest effect found. At C-002 on delegation:planner->coder, with the rule lost, it was "
         "broken in 8 of 10 runs (80%) against 3 of 10 with no sabotage (30%): +60 pp (95% "
         "interval +20 pp to +90 pp). With the gate on, it was broken in 0 of 10 gated runs "
+        "(0%, 95% interval 0% to 28%)."
+    )
+
+
+def test_verdict_credits_blocking_for_a_zero_only_on_a_rule_the_gate_blocks_before_the_call(rich):
+    # Breaks if the sentence is added for any rule: a frozen-file or output rule is never refused
+    # before the call, so block-only does not get 0 for it "by construction".
+    raise_c002_effect(rich)
+    rich["constraints"]["C-002"]["blocked_before_call"] = True
+
+    assert verdict_text(site.render(rich)).endswith(
         "(0%, 95% interval 0% to 28%). That 0 comes from blocking: the block-only arm refuses "
         "the same action with the same check, so it gets 0 by construction and the figure does "
         "not show that carrying the rule helps."
