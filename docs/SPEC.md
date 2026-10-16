@@ -38,6 +38,7 @@ Changes:
   - **Proposed (needs both owners), video:** deferred; B decides after the sweep (2026-10-16, PR #44). In 0:20–0:50, "Why it happens", lead with handoff loss (facts survive compression, rules don't) and cite arXiv 2608.11242, "Lost in Context Compaction", as related single-agent work. The preflight gets one line at most, since the tool-call-as-text failure did not occur on our setup.
   - **Decided (A proposed, B agreed 2026-10-16, PR #44), Oct 19 sweep:** focused cells (1–2 tasks × 4 arms × `drop`, about 15 runs per cell) instead of every task thin. Start with T6; add a second task only if the budget allows. Recompute the cost from the measured cost per run, where a mutated run costs about 3× a natural one.
   - **Decided (A proposed, B agreed 2026-10-16, PR #44), who writes the repair patch:** option 1. `sut` (Super) writes the patch, as the C5 row, the 2026-10-13 entry and `repair/__main__.py` (`get_model(Role.sut)`) already have it. AGENTS.md rule 1 is amended to allow it (PR #47); the code stays.
+  - **Demo hosting (A):** the results page is served on GitHub Pages from the `gh-pages` branch. The hackathon rules encourage Serverless Endpoints for this track "though neither is required", a runtime call to the Token Factory API already meets the platform rule, and the hackathon's credits are Token Factory only (AI Cloud credit comes only from the in-person events), so an endpoint would bill a card. The container setup for Serverless Endpoints stays as an option (PR #51).
 
 ### Accounts and environment
 
@@ -274,7 +275,7 @@ The split is by vertical slice, so both people write core code and both own some
 | C2 | Boundary gate | Deep Agents middleware on the delegation and return boundaries. Modes: observe, mutate, block-only, gated (earlier called enforce). Fail-closed on a reply that misses an output rule (Changes, 2026-10-13) | B | C1, C3 |
 | C4 | Replay engine | Records a run with LangGraph checkpoint IDs and Contree image IDs at each boundary. Forks before the boundary, runs each arm N times, aggregates results with intervals | A | R, C2 hooks |
 | C5 | Repair agent | Ultra picks fixes from a closed menu, Super writes the patch in a git worktree on a local branch (see Changes, 2026-10-13 and 2026-10-16), a C4 subset re-runs, accept or reject, PR-ready diff | B | C4 |
-| C6 | Report page | Boundary graph with edges coloured by violation rate, per-constraint cards, trace diff at the violating action, the patch, a coverage panel. Served on Nebius Serverless Endpoints | A | C4 results format |
+| C6 | Report page | Boundary graph with edges coloured by violation rate, per-constraint cards, trace diff at the violating action, the patch, a coverage panel. Served on GitHub Pages (Changes, 2026-10-16); Nebius Serverless Endpoints optional | A | C4 results format |
 
 Submission work is split the same way: A edits the video and owns the live demo URL; B writes the README, the Devpost text and the feedback writeup. Both record their own components' segments.
 
@@ -337,7 +338,7 @@ nemogate/
   gate/        [B]  middleware: observe, mutate, block-only, gated
   replay/      [A]  record, fork, run(), stats, budget check
   repair/      [B]  closed fix menu, patch writer, accept/reject
-  report/      [A]  results page on Serverless Endpoints
+  report/      [A]  results page on GitHub Pages
   schemas/     [both] formats, run config, enums
 config.yaml    [both] model IDs, prices, temperatures, safe config
 runs/          gitignored: one folder per run
@@ -487,7 +488,7 @@ Both, Oct 19: first full sweep, within the budget-check number.
 Person A
 
 - [x] C6: trace diff, patch view, coverage panel (PR #42)
-- [ ] C6: deploy on Serverless Endpoints (not started)
+- [ ] C6: publish on GitHub Pages (`report/README.md`, "Publishing on GitHub Pages"); Serverless Endpoints optional
 - [ ] Final sweep for the headline numbers, plus one run of the held-out tasks, reported separately
 - [ ] Stretch: compaction boundary, or a second small Deep Agents app run with no pipeline changes
 
