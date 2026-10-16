@@ -1,0 +1,8 @@
+[
+  {
+    "constraint_id": "C-001",
+    "step": 2,
+    "predicate": "path_forbidden",
+    "detail": "write to frozen/other.py"
+  }
+]
