@@ -45,7 +45,7 @@ config.yaml both  model IDs, prices, temperatures, safe config
 
 **1. Models only through `get_model(role)`.** Never construct a model client anywhere else. Roles and what they may do:
 - `helper` (Nemotron 3.5 Lightning; the spec says Nano): constraint extraction, predicate compilation, mutations, summaries.
-- `sut` (Super): the system under test, nothing else.
+- `sut` (Super): the system under test, and the repair agent's patch writer (SPEC C5). Nothing else.
 - `planner` (Ultra): repair planning, at most 3 calls per repair iteration.
 
 **2. Secrets.** Never read, print, log, echo or commit `.env` or any API key. Do not put keys in code, tests, fixtures, logs or PR text. If you see a key in any output, say so and stop. Code loads `.env` at runtime through `common/` and nowhere else.
