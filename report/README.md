@@ -80,6 +80,64 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   no numbers table, the raw text is shown escaped. The
   summary does not say which constraint, arm or operator the numbers came from; the page says so.
 
+## Deploying the results page (Nebius Serverless Endpoints)
+
+`serve.py` is a stdlib file server for `results/site/` (GET and HEAD only, no directory listing,
+`/healthz` returns 200, port from `--port` or `$PORT`, default 8080). `Dockerfile` copies it and
+the built page into a `python:3.12-slim` image that runs as a non-root user. The root
+`.dockerignore` lets only those files into the build context, so `.env` never enters it. Local
+check, no cloud: `uv run python -m report.serve --dir results/site` then open
+`http://localhost:8080/`. The facts below are in `docs/FACTS.md` section 11; most are from the
+docs and not yet confirmed by a real deploy.
+
+Run from the repo root. Placeholders: `<region>` (the project's region, for example `eu-north1`),
+`<subnet-id>` (only if the project has more than one subnet), `<tag>` (for example the short
+commit hash).
+
+```
+# 1. Build the page (needs results/results.json; add --runs/--repair/--ledger as for the full page)
+uv run python -m report.site --results results/results.json --out results/site/index.html
+
+# 2. One-time: create a registry and let Docker authenticate to it (do not run docker as root)
+export REGION_ID=<region>
+export REGISTRY_PATH=$(nebius registry create --name nemogate-report --format json \
+    | jq -r ".metadata.id" | cut -d- -f 2)
+nebius registry configure-helper
+
+# 3. Build and push
+IMAGE=cr.$REGION_ID.nebius.cloud/$REGISTRY_PATH/nemogate-report:<tag>
+docker build --platform linux/amd64 -f report/Dockerfile -t "$IMAGE" .
+docker push "$IMAGE"
+
+# 4. Create the endpoint (CPU only, smallest preset, 20 GiB disk, no token: the page is public)
+nebius ai endpoint create --name nemogate-report --image "$IMAGE" --container-port 8080 \
+    --platform cpu-d3 --preset 2vcpu-8gb --disk-size 20Gi [--subnet-id <subnet-id>]
+
+# 5. Wait for it to be running (about five minutes), then read the public URL
+nebius ai endpoint list
+nebius ai endpoint get <endpoint-id> --format json \
+    | jq -r '.status.public_endpoints[] | select(startswith("https://"))' | head -1
+curl -fsS <url>/healthz        # ok
+
+# Update the page: rebuild step 1, push a new <tag>, then delete the endpoint and repeat step 4
+# (an in-place image change was not read in the docs).
+# Stop billing: stop keeps the endpoint without compute charges; delete removes it.
+nebius ai endpoint stop --id <endpoint-id>
+nebius ai endpoint delete --id <endpoint-id>
+```
+
+If no `https://` URL shows up in `status.public_endpoints`, add `--public` to step 4 (the
+quickstart's example uses it; the docs say it is not required). The page holds run data and is
+public with this command; add `--auth token` for a private endpoint, then every request needs an
+`Authorization: Bearer <token>` header, which a browser visit does not send.
+
+Cost: a running endpoint bills Compute VM and disk prices until it is stopped or deleted; there is
+no scale-to-zero in the docs. The price page lists the AMD EPYC Genoa class "from $0.13" per hour
+(4 vCPUs and up), so a 2 vCPU endpoint is at or below about $3 a day; this is not confirmed for
+the preset. The registry stores the image and may bill for it. Stop the endpoint after the demo.
+
+Tests: `uv run pytest report/tests/test_serve.py` (real sockets on 127.0.0.1, no cloud).
+
 ## Natural runs page (`natural_runs.py`)
 
 `uv run python -m report.natural_runs --out results/natural-runs.md RUN_DIR_OR_PARENT...` writes a
