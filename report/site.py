@@ -718,10 +718,6 @@ def fraction_cell(count: int, n: int, stat: dict[str, Any]) -> str:
     )
 
 
-def _rules(n: int) -> str:
-    return f"{n} rule" if n == 1 else f"{n} rules"
-
-
 def split_note(cell: dict[str, Any]) -> str:
     """For a natural cell with `violations_by_label`: why the broken runs broke, in words.
 
@@ -734,9 +730,9 @@ def split_note(cell: dict[str, Any]) -> str:
     other = sum(split.values()) - dropped - disobeyed
     parts = []
     if dropped:
-        parts.append(f"{_rules(dropped)} dropped in the handoff")
+        parts.append(f"{dropped} lost in the handoff")
     if disobeyed:
-        parts.append(f"{_rules(disobeyed)} carried but disobeyed")
+        parts.append(f"{disobeyed} carried but disobeyed")
     if other:
         parts.append(f"{other} not classified")
     if not parts:

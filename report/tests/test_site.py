@@ -729,7 +729,7 @@ def test_natural_cell_says_how_many_violations_were_dropped_and_how_many_disobey
     # Breaks if a dropped rule and a disobeyed one are shown as one undifferentiated rate again.
     page = site.render(natural_split(rich, {"DROPPED": 1, "DISOBEYED": 2}))
     text = text_of(article(page, "C-002"))
-    assert "3 of 10 broken: 1 rule dropped in the handoff, 2 rules carried but disobeyed" in text
+    assert "3 of 10 broken: 1 lost in the handoff, 2 carried but disobeyed" in text
 
 
 def test_natural_split_names_a_run_that_could_not_be_classified(rich):
@@ -737,7 +737,7 @@ def test_natural_split_names_a_run_that_could_not_be_classified(rich):
     # longer add up to the violation count.
     page = site.render(natural_split(rich, {"DROPPED": 1, "unlabelled": 1, "UNKNOWN": 1}))
     text = text_of(article(page, "C-002"))
-    assert "3 of 10 broken: 1 rule dropped in the handoff, 2 not classified" in text
+    assert "3 of 10 broken: 1 lost in the handoff, 2 not classified" in text
 
 
 def test_natural_split_is_only_shown_in_the_natural_row(rich):
