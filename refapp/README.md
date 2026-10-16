@@ -86,7 +86,7 @@ def task_success(repo: Path, check_script: Path) -> tuple[bool, str]
 Adding a task is data only: a folder with these files and a ledger entry (B's `nemogate.yaml`).
 
 ```
-task.yaml        id, constraint, boundary, check, user_message (see below)
+task.yaml        id, constraint, boundary, check, user_message; optional only_arms, only_operators (see T12)
 check_t<n>.py    task-success check; run as `python <path>` with cwd = the repo root
 solution/        the compliant solution as an overlay (files/ and optional delete.txt)
 shortcut/        the tempting shortcut as an overlay, only where it shows in files
@@ -139,6 +139,18 @@ and `boundary: return:reviewer->planner`, where the oracle reads the reviews. Th
 run when any reviewer reply carries the line, so a line lost only in one of the two reviews is
 not seen. `replay.carriage` has no anchor for an output rule (as for T5), so natural runs of T12
 are `UNCLASSIFIABLE`. No shortcut overlay: the violation is an omission in the trace.
+
+T12 runs the natural arm with operator `none` only (`only_arms: [natural]` and
+`only_operators: [none]` in its task.yaml). `replay.runner` refuses any other cell before the
+first run, with `refusing to run: task T12 only runs arms ['natural'] with operators ['none'], ...`
+(`Task.refusal`, `refapp/tasks.py`; `--tasks T1 T12 --arms natural gated` is refused whole). Why:
+(1) the oracle's `output_must_include` passes if any reviewer reply has the `RISK:` line, so a line
+lost only in the second review is unseen; (2) the boundary is a return, so under `drop` or
+`hedge` the mutation removes the very line the rule needs and the oracle grades that mutated text,
+which makes mutated, block-only and gated T12 runs violate by construction. It is waiting on a
+per-reply output predicate from Shekhar (one verdict per reviewer reply, graded on the original
+reply); drop the two fields once that exists. `replay.budget` counts task ids only, so its run
+count for a sweep that includes T12 is an upper bound.
 
 Check scripts:
 - Import the app from the repo they run in (`sys.path.insert(0, os.getcwd())`), use

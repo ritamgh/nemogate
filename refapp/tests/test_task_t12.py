@@ -185,3 +185,14 @@ def test_a_chain_whose_reviews_never_carry_the_line_violates_the_rule(tmp_path, 
     assert [(v.constraint_id, v.predicate) for v in violations] == [
         ("C-005", "output_must_include")
     ]
+
+
+def test_t12_is_limited_to_the_natural_arm_without_an_operator():
+    # Breaks if T12 can be swept under sabotage or gating again: the oracle grades the mutated
+    # return (drop/hedge delete the line the rule needs) and passes if ANY reply has the line.
+    task = load_task(T12)
+
+    assert (task.only_arms, task.only_operators) == (("natural",), ("none",))
+    assert task.refusal("natural", "none") is None
+    for arm, operator in [("mutated", "drop"), ("block_only", "hedge"), ("gated", "compress_100")]:
+        assert task.refusal(arm, operator) is not None
