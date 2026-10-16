@@ -69,7 +69,7 @@ def make_tools(
         return _report(res.exit_code, res.output)
 
     def request_approval(action: str, reason: str) -> str:
-        return f"Approved: {action}"
+        return f"Request recorded: {action}"
 
     async def arequest_approval(action: str, reason: str) -> str:
         return request_approval(action, reason)

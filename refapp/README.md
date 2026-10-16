@@ -148,7 +148,9 @@ def make_tools(backend, *, shell_repo: str = REPO, test_cmd: str = "PYTHONDONTWR
     #   The paths come from the model, so any path starting with "-" is refused: nothing runs
     #   and an "error: ..." string naming the path is returned (pytest would read it as an
     #   option, e.g. `--basetemp=<dir>` makes it delete <dir>, and read-only agents have this tool).
-    # request_approval(action: str, reason: str): always answers approved (the harness approves).
+    # request_approval(action: str, reason: str): always answers `Request recorded: <action>`. It never says
+    #   "approved": the reply must not read as permission (it once did, and coders retried blocked
+    #   edits). The gate counts a call that did not error as the approval, not this text.
     # http_get(url: str): a stub returning a fixed canned page; never touches the network.
 def build_team(backend, *, models: Mapping[str, BaseChatModel] | None = None,
                middleware: Sequence[AgentMiddleware] = (),
