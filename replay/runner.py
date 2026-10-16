@@ -39,7 +39,7 @@ from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
 from schemas.ledger import Ledger, load_ledger_yaml
 from schemas.run import RunRecord
-from schemas.trace import Approval, BoundaryOut, dump_event_jsonl, parse_trace_jsonl
+from schemas.trace import BoundaryOut, dump_event_jsonl, parse_trace_jsonl
 
 ROOT = record.ROOT
 LEDGER_PATH = ROOT / "nemogate.yaml"
@@ -215,12 +215,8 @@ class Runner:
                 f"{task.boundary}, but the run recorded {source.constraint_id} at {source.boundary}"
             )
         prefix = _prefix(source_dir, crossing)
-        if arm in (Arm.block_only, Arm.gated) and any(isinstance(e, Approval) for e in prefix):
-            raise ValueError(
-                f"cannot fork {source_run_id} under the {arm.value} arm: an approval was given "
-                "before the fork point, and the gate has no way yet to be told of it, so it could "
-                "block an action that was authorised"
-            )
+        # A blocking arm's gate reads the prefix (gate.PRIOR_EVENTS) and so still honours an
+        # approval given before the fork point.
         fork = _Fork(
             source_dir,
             recording,

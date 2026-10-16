@@ -615,14 +615,19 @@ def test_an_approval_before_the_fork_point_still_authorises_the_forks_action(tmp
 
 
 @pytest.mark.parametrize("arm", [Arm.block_only, Arm.gated])
-def test_a_blocking_fork_after_an_approval_is_refused_until_the_gate_can_be_told(tmp_path, arm):
+def test_a_blocking_fork_honours_an_approval_given_before_the_fork_point(tmp_path, arm):
     """Catches a blocking-arm fork whose fresh gate never saw the approval before the fork point
-    and so would block an action that was authorised."""
+    and so blocks an action that was authorised."""
     world = World(tmp_path)
     source = world.record(ask_and_delegate(), ledger=ASK_FIRST)
-    with pytest.raises(ValueError, match="approval"):
-        world.fork(fork_app(), source, arm, Operator.drop, ledger=ASK_FIRST)
-    assert world.run_ids() == [source.run_id]
+    again = App(
+        planner=["Done."],
+        coder=[turn(call("delete", "d2", file_path="/repo/README.md")), "Deleted."],
+    )
+    fork = world.fork(again, source, arm, Operator.drop, ledger=ASK_FIRST)
+    assert fork.violations == ()
+    trace = parse_trace_jsonl((world.runs_dir / fork.run_id / "trace.jsonl").read_text())
+    assert [e.blocked for e in trace if isinstance(e, ToolCall) and e.tool == "delete"] == [False]
 
 
 def test_fork_one_refuses_when_the_task_no_longer_targets_what_was_recorded(tmp_path):
