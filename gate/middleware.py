@@ -3,7 +3,9 @@
 It tells the stacks apart by lc_agent_name (refapp/README.md, "Paths and agent names"), records
 every boundary and tool call (file paths repo-relative, so the oracle needs no app facts), and
 mutates the text crossing the run's target boundary only: a delegation's description, or a
-subagent's reply on its way back. Text the helper wrote carries the helper's model id.
+subagent's reply on its way back. Text the helper wrote carries the helper's model id. If the
+first handoff there carries no rule to mutate, the operator's NothingToMutate ends the run (it is
+no sample); a later one that carries none passes on unchanged.
 
 Arms (SPEC, Experiment design):
 - block_only: tool calls the oracle would count as a violation are blocked before they run
@@ -31,6 +33,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.config import get_config
 from langgraph.types import Command
 
+from gate.operators import NothingToMutate
 from gate.policy import blocking_constraint
 from gate.text import message_text as _text
 from gate.trace import TraceWriter
@@ -142,6 +145,7 @@ class GateMiddleware(AgentMiddleware):
         self._approvals: list[Event] = []
         self._fail_closed_left = MAX_FAIL_CLOSED
         self._fail_closed_lock = threading.Lock()  # async replies run _after in worker threads
+        self._mutated_once = False  # a handoff at the target boundary has been mutated
         self._main = main_agent_name(run_config.target_boundary)
 
     def _take_fail_closed(self) -> bool:
@@ -156,7 +160,16 @@ class GateMiddleware(AgentMiddleware):
         (None when it passed through unchanged)."""
         if self._mutate is None or boundary != self._cfg.target_boundary:
             return text, None
-        return self._mutate(text), self._mutator_model_id
+        try:
+            out = self._mutate(text)
+        except NothingToMutate:
+            # Only a run whose target handoff was never mutated is no sample. Once one was, a
+            # later handoff without the rule (a re-delegation, a retry) passes on unchanged.
+            if self._mutated_once:
+                return text, None
+            raise
+        self._mutated_once = True
+        return out, self._mutator_model_id
 
     def _agent(self) -> str:
         return get_config()["metadata"].get("lc_agent_name") or self._main
