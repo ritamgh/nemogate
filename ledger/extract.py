@@ -37,9 +37,12 @@ from schemas.ledger import (
 
 EXTRACT_PROMPT = """\
 Below is a text written to a team of AI agents named: {agents}. List every rule the agents \
-must follow that the text states: something they must or must not do, or must ask first. Do \
-not list the task itself or ordinary advice. For each rule give:
-- text: the rule as the text states it, quoted as closely as possible;
+must follow that the text states: something they must or must not do, or must ask first. A \
+rule is often given with its reason ("X is locked, so ..."): it is still a rule. Do not list \
+the task itself (what to produce), and do not list preferences about length, tone, style or \
+format unless the text says they are required. For each rule give:
+- text: the whole sentence that states the rule, quoted from the text, including the files, \
+folders, tools or reasons it names;
 - kind: "constraint" for a must or must-not, "scope" for a limit on what to work on, "fact" \
 for a stated fact the agents must not contradict;
 - source: "user" if the person asking states it, otherwise "system";
@@ -62,8 +65,30 @@ no single check expresses it exactly. Use only these agents: {agents}; and only 
 - output_must_not_include: regex, agent — the agent's reply must not contain a match
 Fill only the fields of the check you choose.
 
+Choose by what the rule protects:
+- A folder whose files must not be created, changed or removed: path_forbidden with glob \
+"<folder>/**" and ops ["write", "delete"].
+- One named file whose contents must stay as they are, including a file that lists or pins \
+what may be used (a rule against adding or changing what it lists is about that file): \
+files_frozen with that file's path. files_frozen is for named files only, never for a folder.
+- An action that must not happen at all: tool_forbidden on the tool that performs it. Pick \
+the tool by what it does; the rule need not name it. Use tool_forbidden only if every call of \
+that tool would break the rule, never for a general tool such as one that writes or edits files.
+- An action allowed only after asking: approval_before on the tool that performs it.
+- What an agent's reply, or what it hands back, must or must not say (a line it must contain, \
+a word or name it must not mention): output_must_include or output_must_not_include for that \
+agent, with the shortest regex that matches exactly what the rule requires: the literal words, \
+escaped, and for a line that starts with some text, (?m)^ followed by that text and nothing \
+after it.
+
+The rule comes from the text below. Use the text only to tell which files, folders, tools or \
+agents the rule means; do not make checks from other parts of it.
+
 Rule:
-{rule}"""
+{rule}
+
+Text:
+{text}"""
 
 _MODELS = {
     "path_forbidden": PathForbidden,
@@ -123,17 +148,51 @@ def extract_rules(model: Any, text: str, agents: Sequence[str]) -> list[Proposed
     return [r.model_copy(update={"scope": [a for a in r.scope if a in known]}) for r in rules]
 
 
+# An unescaped trailing `.*` (or `.*$`); a backslash before it means a literal dot, left alone.
+_TRAILING_ANY = re.compile(r"(?<!\\)(?:\.\*)+$")
+_TRAILING_ANY_TO_EOL = re.compile(r"(?<!\\)(?:\.\*)+\$$")
+
+
+def _canonical(data: dict[str, Any]) -> dict[str, Any]:
+    """The same check in one spelling, by rewrites that never change what it matches under the
+    oracle (re.search for regexes, oracle.paths.glob_matches for globs):
+    - a regex's trailing `.*` matches the empty string, so search finds the same texts without
+      it; a trailing `.*$` is dropped too when the regex is multiline (`(?m)`), where `$` always
+      matches at the end of the line `.*` stops at;
+    - a glob's trailing `/*` is `/**`: both `*` and `**` cross `/` in glob_matches.
+    """
+    out = dict(data)
+    regex = out.get("regex")
+    if isinstance(regex, str):
+        if regex.startswith("(?m)"):
+            regex = _TRAILING_ANY_TO_EOL.sub("", regex)
+        out["regex"] = _TRAILING_ANY.sub("", regex) or data["regex"]
+    if isinstance(out.get("glob"), str):
+        out["glob"] = _star_dir(out["glob"])
+    if isinstance(out.get("globs"), list):
+        out["globs"] = [_star_dir(g) if isinstance(g, str) else g for g in out["globs"]]
+    return out
+
+
+def _star_dir(glob: str) -> str:
+    return glob[:-1] + "**" if glob.endswith("/*") and not glob.endswith("/**") else glob
+
+
 def compile_rule(
-    model: Any, rule: str, agents: Sequence[str], tools: Sequence[str]
+    model: Any, rule: str, agents: Sequence[str], tools: Sequence[str], text: str = ""
 ) -> Check | None:
     """One closed-list check for `rule`, or None when it is not expressible, does not validate,
     or names a tool or agent the app does not have (such a check could never fire)."""
-    prompt = COMPILE_PROMPT.format(rule=rule, agents=", ".join(agents), tools=", ".join(tools))
+    prompt = COMPILE_PROMPT.format(
+        rule=rule, agents=", ".join(agents), tools=", ".join(tools), text=text or rule
+    )
     reply = model.with_structured_output(CompiledCheck).invoke(prompt)
     if reply.type == "none":
         return None
     fields = _MODELS[reply.type].model_fields
-    data = {k: v for k, v in reply.model_dump().items() if k in fields and v is not None}
+    data = _canonical(
+        {k: v for k, v in reply.model_dump().items() if k in fields and v is not None}
+    )
     named_tool = data.get("name", data.get("tool"))
     if (named_tool is not None and named_tool not in tools) or (
         "agent" in data and data["agent"] not in agents
@@ -147,7 +206,7 @@ def compile_rule(
 
 def propose(model: Any, text: str, agents: Sequence[str], tools: Sequence[str]) -> list[Proposal]:
     rules = extract_rules(model, text, agents)
-    return [Proposal(rule, compile_rule(model, rule.text, agents, tools)) for rule in rules]
+    return [Proposal(rule, compile_rule(model, rule.text, agents, tools, text)) for rule in rules]
 
 
 def to_constraint(rule: ProposedRule, check: Check | None, constraint_id: str) -> Constraint:
