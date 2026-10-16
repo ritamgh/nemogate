@@ -383,6 +383,14 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   counts distinct sources (a fork under `fork.json`'s `source_run_id`, any other run under its
   own id); `clustered` is `n_sources < n`. Nothing is deduplicated: a fork is not an
   independent sample, so the report flags the cell and the intervals are not corrected.
+- **Natural violations by carriage label.** A `natural` cell also has `violations_by_label`: the
+  runs that broke the rule, counted by the `label` in their `carriage.json`, for example
+  `{"DROPPED": 1, "DISOBEYED": 1}`. Only a `DROPPED` violation is rule loss in the handoff
+  (what the mutated arm models); `DISOBEYED` is a rule that was carried and broken anyway. A
+  violating run with no `carriage.json` counts under `"unlabelled"`, so the values always sum to
+  `violations`. A label with no violating run is absent (`{}` when nothing broke). Cells of the
+  other arms do not have the field. It is optional: a reader must treat a missing field as
+  "no split known" (`format_version` stays 1).
 - **Comparisons**, per boundary, only when both cells exist: `load_bearing` = CVR(mutated, op) -
   CVR(natural, none) for each mutated operator, then `ledger_value` = success(gated, op) -
   success(block_only, op), each by operator name. Intervals: 95% Wilson (z = 1.96) for rates,
@@ -404,7 +412,9 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
  "constraints": {<constraint id>: {"text", "kind", "has_check", "task_ids": [sorted],
    "boundaries": {<boundary id>: {
      "cells": [{"arm", "operator", "n", "n_sources", "clustered", "violations",
-                "cvr": {"rate", "lo", "hi"}, "successes", "success": {"rate", "lo", "hi"}, "cost_usd"}],
+                "cvr": {"rate", "lo", "hi"}, "successes", "success": {"rate", "lo", "hi"}, "cost_usd",
+                "violations_by_label": {<carriage label | "unlabelled">: count}  # natural cells only
+               }],
      "comparisons": [{"name", "operator", "a": {"arm", "operator"}, "b": {"arm", "operator"},
                       "metric": "cvr" | "success", "diff", "lo", "hi"}]}}}}}
 ```

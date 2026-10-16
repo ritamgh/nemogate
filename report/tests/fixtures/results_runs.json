@@ -22,7 +22,8 @@
                 "rate": 1.0
               },
               "successes": 2,
-              "violations": 0
+              "violations": 0,
+              "violations_by_label": {}
             },
             {
               "arm": "mutated",
