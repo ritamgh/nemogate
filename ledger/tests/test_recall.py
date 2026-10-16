@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from ledger import load_ledger
 from ledger.extract import _canonical, compile_rule, propose
 from ledger.recall import load_cases, main
 from ledger.tests.test_extract import AGENTS, TOOLS, Spy, structured
@@ -13,6 +14,7 @@ from oracle.paths import glob_matches
 from schemas.ledger import OutputMustInclude, ToolForbidden
 
 DEV = Path(__file__).parent / "fixtures" / "recall_dev.yaml"
+ROOT = Path(__file__).resolve().parents[2]
 TEXTS = [
     "",
     "\n",
@@ -85,15 +87,17 @@ def test_compile_sees_the_text_the_rule_came_from():
     assert spy.prompts[1].endswith(f"Rule:\nNever call fetch.\n\nText:\n{text}")
 
 
-def test_the_development_set_is_valid_and_apart_from_the_reference_app():
+def test_the_development_set_is_valid_and_shares_no_check_with_the_reference_ledger():
     agents, tools, cases = load_cases(DEV)
     assert len(cases) >= 10 and any(c.expect is None for c in cases)
     names = {c.expect.model_dump().get(k) for c in cases if c.expect for k in ("name", "tool")}
     assert names - {None} <= set(tools)
-    # Tuned here, held out there (AGENTS.md rule 5): no agent and no task text in common.
+    # What this checks, no more: other agent names, and no expected check equal to a check in
+    # the reference ledger. The dev cases do share the reference rules' categories and some
+    # shapes (FACTS §6), so the reference tasks are not a clean held-out set for these prompts.
     assert not set(agents) & {"planner", "coder", "reviewer"}
-    for case in cases:
-        assert "migrations" not in case.text and "RISK" not in case.text
+    reference = {c.check for c in load_ledger(ROOT / "nemogate.yaml").ledger.constraints}
+    assert not {c.expect for c in cases if c.expect} & reference
 
 
 def test_recall_cli_counts_hits_and_extras(tmp_path, capsys):
@@ -116,7 +120,10 @@ def test_recall_cli_counts_hits_and_extras(tmp_path, capsys):
     out = tmp_path / "out.json"
     assert main(["--cases", str(cases), "--out", str(out)], model=model) == 0
     assert "recall 1/1; extra checks 1 over 2 texts" in capsys.readouterr().out
-    assert json.loads(out.read_text())["matched"] == 1
+    result = json.loads(out.read_text())
+    assert result["matched"] == 1
+    assert result["rows"][0]["matched_rule"] == "Never call fetch."
+    assert result["rows"][1]["matched_rule"] is None
 
 
 def test_recall_cli_refuses_without_live(monkeypatch, capsys):

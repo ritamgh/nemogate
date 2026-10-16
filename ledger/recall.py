@@ -97,14 +97,21 @@ def main(argv: Sequence[str] | None = None, *, model: Any = None) -> int:
     rows, matched, extra = [], 0, 0
     for rep in range(args.reps):
         for case in cases:
-            checks = [p.check for p in propose(model, case.text, agents, tools)]
+            proposals = propose(model, case.text, agents, tools)
+            checks = [p.check for p in proposals]
             hit = case.expect is not None and case.expect in checks
+            # Which extracted rule compiled to the hit, so a reader can see it was the right one
+            # (compile sees the whole text, so a stray rule could compile to the expected check).
+            by = next((p.rule.text for p in proposals if hit and p.check == case.expect), None)
             more = [c for c in checks if c is not None and c != case.expect]
             matched += hit
             extra += len(more)
             mark = "-" if case.expect is None else ("ok  " if hit else "MISS")
             print(f"{mark} {case.name}: {[_dump(c) for c in checks]}")
+            if by is not None:
+                print(f"     from rule: {by!r}")
             rows.append({"rep": rep, "name": case.name, "expect": _dump(case.expect), "hit": hit,
+                         "matched_rule": by, "rules": [p.rule.text for p in proposals],
                          "checks": [_dump(c) for c in checks], "extra": len(more)})  # fmt: skip
     total = len(stated) * args.reps
     print(f"recall {matched}/{total}; extra checks {extra} over {len(cases) * args.reps} texts")
