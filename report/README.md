@@ -80,6 +80,27 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   no numbers table, the raw text is shown escaped. The
   summary does not say which constraint, arm or operator the numbers came from; the page says so.
 
+## Publishing on GitHub Pages
+
+The demo URL is the results page served by GitHub Pages from the `gh-pages` branch, which holds
+only the built page (`index.html`) and an empty `.nojekyll`. The page is built locally, because
+its trace and patch panels read `runs/`, which is not in git. From the repo root:
+
+```
+uv run python -m replay.stats runs/r-* --ledger nemogate.yaml --out results/results.json
+uv run python -m report.site --results results/results.json --out results/site/index.html \
+    --runs runs --ledger nemogate.yaml [--repair runs/repair]
+git fetch origin gh-pages && git worktree add /tmp/nemogate-pages gh-pages
+cp results/site/index.html /tmp/nemogate-pages/index.html
+git -C /tmp/nemogate-pages commit -am "Publish results page" && git -C /tmp/nemogate-pages push
+git worktree remove /tmp/nemogate-pages
+```
+
+Pages serves it at `https://ritamgh.github.io/nemogate/` a minute or so after the push. Whatever
+is on `gh-pages` is public, so publish only pages built from runs you mean to show. Serving on
+Nebius Serverless Endpoints instead is optional (the hackathon encourages it but does not require
+it, and its credits are Token Factory only).
+
 ## Natural runs page (`natural_runs.py`)
 
 `uv run python -m report.natural_runs --out results/natural-runs.md RUN_DIR_OR_PARENT...` writes a
