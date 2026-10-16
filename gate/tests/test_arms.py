@@ -341,6 +341,8 @@ def test_a_later_handoff_that_still_comes_out_empty_passes_on_unchanged(tmp_path
     # ending a run whose earlier handoffs were mutated. The trace marks it: its boundary_in is
     # stamped with the system under test's model id, not the helper's (mutated text always
     # differs from what was sent, NothingToMutate guarantees it), so stats can count such runs.
+    # Not the helper's id means passed through OR replaced by the gate (a gated fail-closed reply
+    # on a return also has no writer); the fail-closed text tells those two apart.
     texts, writers = three_delegations(
         tmp_path, backend, arm, [picks(2), picks(2), picks(1, 2), picks(1, 2)]
     )

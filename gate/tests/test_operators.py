@@ -341,6 +341,36 @@ def _live_parse_error(content, finish="stop"):
     raise AssertionError("the SDK parsed a reply that should not parse")
 
 
+def _langchain_parse_error(content, refusal=None):
+    """What langchain_openai's json_schema parser raises on an empty reply or a refusal (A's
+    review of #55): its own parser, so a change in langchain fails here, loudly."""
+    from langchain_core.messages import AIMessage
+    from langchain_openai.chat_models.base import _oai_structured_outputs_parser
+
+    from gate.operators import Picks
+
+    extra = {"refusal": refusal} if refusal else {}
+    try:
+        _oai_structured_outputs_parser(
+            AIMessage(content=content or "", additional_kwargs=extra), Picks
+        )
+    except Exception as exc:  # noqa: BLE001 - the point is to capture whatever it raises
+        return exc
+    raise AssertionError("langchain parsed a reply that should not parse")
+
+
+def test_only_langchains_empty_reply_value_error_counts_as_unparsed():
+    # A ValueError from anywhere else (a config refusal in common/llm.py, a bug) must propagate.
+    for error in (
+        ValueError("with_structured_output(method='json_mode') conflicts"),
+        KeyError("x"),
+    ):
+        helper = Scripted(error)
+        with pytest.raises(type(error)):
+            make_operator(Operator.drop, "rule", helper)(DELEGATION)
+        assert helper.calls == 1
+
+
 class Scripted:
     """A helper whose structured calls raise or answer in turn, as a live model can."""
 
@@ -364,8 +394,10 @@ class Scripted:
         _live_parse_error("not json"),  # pydantic ValidationError
         _live_parse_error('{"numbers": [1', "length"),  # openai LengthFinishReasonError
         _live_parse_error('{"nums": 3}'),  # valid JSON, wrong shape
+        _langchain_parse_error(""),  # empty reply: plain ValueError from langchain's parser
+        _langchain_parse_error(None, refusal="I can't help with that."),  # OpenAIRefusalError
     ],
-    ids=["not-json", "cut-off", "wrong-shape"],
+    ids=["not-json", "cut-off", "wrong-shape", "empty", "refusal"],
 )
 def test_a_live_reply_that_does_not_parse_is_asked_again_then_raises_unparsed(error):
     # Ritam's review of #55: live, a bad structured reply raises instead of returning None, so a

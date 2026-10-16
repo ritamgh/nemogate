@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain_core.exceptions import OutputParserException
+from langchain_openai.chat_models.base import OpenAIRefusalError
 from openai import ContentFilterFinishReasonError, LengthFinishReasonError
 from pydantic import BaseModel, ValidationError
 
@@ -179,13 +180,24 @@ def _chosen(text: str, numbers: list[int]) -> list[tuple[int, int, int]]:
 # that is not valid JSON for the schema raises pydantic's ValidationError, one cut off at the
 # length limit LengthFinishReasonError (reproduced offline with
 # openai.lib._parsing._completions.parse_chat_completion, FACTS §6). The stub returns None.
+# langchain_openai's json_schema parser (`_oai_structured_outputs_parser`) raises
+# OpenAIRefusalError on a refusal and a plain ValueError on an empty reply (found by A reviewing
+# #55); that ValueError is matched by its message only, so no other ValueError is swallowed.
 # Nothing broader is caught: a spend cap, a missing key or a transport error must propagate.
 _UNPARSED = (
     ValidationError,
     OutputParserException,
     LengthFinishReasonError,
     ContentFilterFinishReasonError,
+    OpenAIRefusalError,
 )
+_EMPTY_STRUCTURED = "Structured Output response does not have a 'parsed' field"
+
+
+def _unparsed(exc: Exception) -> bool:
+    if isinstance(exc, _UNPARSED):
+        return True
+    return type(exc) is ValueError and str(exc).startswith(_EMPTY_STRUCTURED)
 
 
 def _ask(op: Operator, model: Any, schema: type[BaseModel], prompt: str) -> Any:
@@ -195,7 +207,9 @@ def _ask(op: Operator, model: Any, schema: type[BaseModel], prompt: str) -> Any:
     for _ in range(2):
         try:
             answer = model.with_structured_output(schema).invoke(prompt)
-        except _UNPARSED as exc:
+        except Exception as exc:
+            if not _unparsed(exc):
+                raise
             answer, error = None, exc
         if answer is not None:
             return answer
