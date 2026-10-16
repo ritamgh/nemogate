@@ -53,7 +53,10 @@ def put_record(runs, run_id, *, task="X1", arm="natural", operator="none", viola
     return folder
 
 
-def put_error(runs, run_id, *, task="X1", arm="natural", operator="none", seed=None, **repro):
+def put_error(
+    runs, run_id, *, task="X1", arm="natural", operator="none", seed=None,
+    error_type="builtins.ValueError", **repro,
+):  # fmt: skip
     fields = {**HERE, **repro}
     data = {
         "run_id": run_id,
@@ -62,7 +65,7 @@ def put_error(runs, run_id, *, task="X1", arm="natural", operator="none", seed=N
         "operator": operator,
         **fields,
         "model_ids": {str(role): name for role, name in fields["model_ids"].items()},
-        "error_type": "builtins.ValueError",
+        "error_type": error_type,
         "message": "boom",
         "traceback_tail": "",
     }
@@ -205,13 +208,13 @@ def test_status_prints_one_row_per_cell_and_group(tmp_path, capsys):
     group_b = sweep_status.group_hash(sweep_status.group_key({**HERE, "repo_sha": "b" * 40}))
     rows = [line.split() for line in out[1:4]]
     assert out[0].split() == [
-        "task", "arm", "operator", "group", "records", "errored", "violations", "successes",
+        "task", "arm", "operator", "group", "records", "errored", "noop", "violations", "successes",
     ]  # fmt: skip
     assert sorted(rows) == sorted(
         [
-            ["X1", "natural", "none", group_a, "2", "1", "1", "1"],
-            ["X1", "natural", "none", group_b, "1", "0", "0", "1"],
-            ["X1", "mutated", "drop", group_a, "1", "0", "1", "1"],
+            ["X1", "natural", "none", group_a, "2", "1", "0", "1", "1"],
+            ["X1", "natural", "none", group_b, "1", "0", "0", "0", "1"],
+            ["X1", "mutated", "drop", group_a, "1", "0", "0", "1", "1"],
         ]
     )
     assert [r[1] for r in rows] == ["natural", "natural", "mutated"]  # arm order, not alphabetical
@@ -219,6 +222,22 @@ def test_status_prints_one_row_per_cell_and_group(tmp_path, capsys):
     assert "  r-orphan" in out
     assert "forks (not counted): 0" in out
     assert any(line.strip().startswith(group_b) and "repo_sha=" + "b" * 12 in line for line in out)
+
+
+def test_status_counts_a_mutation_noop_apart_from_errors_and_top_up_still_counts_it(tmp_path):
+    # Breaks if a NothingToMutate run is shown under errored (hiding that it is expected), is
+    # not shown, or is not an attempt (top-up would retry it, biasing the sample towards runs
+    # where the planner kept the rule).
+    put_error(tmp_path, "r-1", arm="mutated", operator="drop", seed=0)
+    put_error(
+        tmp_path, "r-2", arm="mutated", operator="drop", seed=1,
+        error_type="gate.operators.NothingToMutate",
+    )  # fmt: skip
+    ((key, row),) = sweep_status.status_rows(scan(tmp_path)).items()
+    assert key[:3] == ("X1", "mutated", "drop")
+    assert (row.records, row.errored, row.noop) == (0, 1, 1)
+    (cell,) = top_up_plan(scan(tmp_path), HERE, ["X1"], [Arm.mutated], [Operator.drop], 5)
+    assert (cell.existing, cell.planned, cell.next_seed) == (2, 3, 2)
 
 
 def test_status_tasks_filter_and_missing_directory(tmp_path, capsys):

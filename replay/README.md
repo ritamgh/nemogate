@@ -231,7 +231,8 @@ by raising for:
 
 The five reproducibility fields are the run's own, so `--top-up` and `sweep_status` attribute the
 attempt to the right conditions. `stats.py` counts a folder with `error.json` and no
-`record.json` under the inconclusive reason `run_error`.
+`record.json` under the inconclusive reason `run_error`, unless its `error_type` is
+`gate.operators.NothingToMutate`: see "Mutation no-ops" under "stats.py".
 
 `fork_one(source_run_id, arm, operator, *, seed, repo_ref)`: a new run (new run id and folder)
 that continues the recorded run `runs_dir/<source_run_id>/` from just before its first crossing
@@ -292,7 +293,10 @@ defaults (live, after `python -m replay.budget`).
 
 `uv run python -m replay.sweep_status --runs-dir DIR [--tasks ID...]` prints one row per
 `(task, arm, operator, group)`: `records` (finished runs), `errored` (`error.json`, no
-`record.json`), and among the records `violations` (the run's target constraint is in its
+`record.json`, and not a no-op), `noop` (`error.json` whose `error_type` is the gate's
+`NothingToMutate`: a drop or hedge that found no rule sentence to change; also a finished run
+whose operator left its target handoff as it was, as `stats.py` counts it, see "Mutation
+no-ops"; still an attempt, so `--top-up` does not retry it), and among the records `violations` (the run's target constraint is in its
 `violations`) and `successes` (`task_success`). `group` is the first 8 hex of the sha256 of the
 five reproducibility fields, so runs from different commits, ledgers or configs never share a
 row; a legend below the table spells each group out. Then the orphans (run folders with neither
@@ -326,8 +330,8 @@ main(): `python -m replay.budget --bucket kill_gate --arms natural mutated --ope
 def wilson(k, n, z=1.96) -> (lo, hi)                  # Wilson score interval, clamped to [0, 1]; ValueError if n < 1
 def newcombe_diff(k1, n1, k2, n2) -> (diff, lo, hi)   # p1 - p2, Newcombe method 10 (hybrid score) from two Wilson intervals
 @dataclass LoadedRun(record: RunRecord, label: str | None, fork_source: str | None)
-def load_runs(paths) -> (list[LoadedRun], unreadable: int)     # reads files only
-def aggregate(runs, *, unreadable, ledger, extraction_recall) -> dict   # pure: no file, no clock
+def load_runs(paths) -> LoadedRuns(runs, unreadable, errored, noop)     # reads files only; use the names
+def aggregate(runs, *, unreadable, errored=0, noop=0, ledger, extraction_recall) -> dict   # pure: no file, no clock
 ```
 
 `uv run python -m replay.stats RUNS_DIR_OR_PARENT... --ledger nemogate.yaml [--extraction-recall FILE] --out results/results.json`
@@ -344,6 +348,29 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
 - **Errored runs.** A folder with `error.json` and no `record.json` (the runner caught the
   run's exception, see "runner.py") counts as `run_error`, not `unreadable_record`; with both
   files the record wins.
+- **Mutation no-ops.** A drop or hedge that finds no sentence carrying the rule (the planner
+  already left it out) is correct behaviour, but the run is no sample of the mutation. The gate
+  raises `gate.operators.NothingToMutate` while the agents run; the exception reaches the runner
+  with its type intact (docs/FACTS.md §4), so `error.json` has `error_type`
+  `gate.operators.NothingToMutate` and the folder counts as `mutation_noop`, not `run_error`.
+  The expected name is derived from the imported class (`replay/noop.py`), so renaming it in
+  `gate` breaks a test. Such a run is counted and labelled, never retried (retrying would bias
+  the sample towards runs where the planner kept the rule), and is never pooled. Second line,
+  for operators with no check in the gate (`compress_*`): a finished run in the `mutated`,
+  `block_only` or `gated` arm with an operator other than `none` also counts as `mutation_noop`
+  when, at its target boundary, the `boundary_in.content` texts are the `boundary_out.content`
+  texts, each as often as it was sent (compared without surrounding whitespace). The trace has
+  no key that ties an in to its out, and concurrent handoffs interleave, so they are compared
+  as multisets, not paired in order. The gate
+  writes `boundary_out` as the sender's text and `boundary_in` as what the receiver got, which is
+  the operator's output; under `gated` a delegation also carries the pinned-rules block, which is
+  cut off first using the gate's own format (`gate.middleware.REPIN`). A gated reply the gate
+  replaced with its fail-closed message differs from what was sent, so it is not judged a no-op.
+  Known limit: the trace does not keep the operator's output when the gate replaces it, so a
+  fail-closed reply after an operator that changed nothing stays a sample (the gate would have
+  to record the operator's text first).
+  A run with no readable `trace.jsonl`, or no handoff at the target, is not judged and stays a
+  sample.
 - **Pooling.** Runs are grouped with `schemas.run.is_comparable` (the five reproducibility
   fields). The group with the most runs that are not `NOT_EXERCISED` is pooled; ties go to the
   group with more runs in all, then the smaller `repo_sha` (and, if still tied, the smaller model ids and hashes in
@@ -364,7 +391,7 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
 - **Honesty block.** `check_share` is constraints with a check over constraints declared in the
   ledger (`null` for an empty ledger); `extraction_recall` is the `recall` in the
   `--extraction-recall` JSON file (`{"recall": 0.83}`, in [0, 1]), `null` when not measured;
-  `inconclusive_total` sums the four reasons. With no pooled run (also when every run in the group is `NOT_EXERCISED`) `reproducibility` is `null`.
+  `inconclusive_total` sums the five reasons. With no pooled run (also when every run in the group is `NOT_EXERCISED`) `reproducibility` is `null`.
 - **Output.** Sorted keys, two-space indent, floats rounded to 4 decimals, trailing newline; no
   paths or timestamps, so the same runs give a byte-identical file in any argument order.
 
@@ -373,7 +400,7 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
 ```
 {"format_version": 1,
  "reproducibility": {"model_ids": {role: id}, "safe_config_hash", "ledger_hash", "repo_sha", "lockfile_hash"} | null,
- "runs": {"found", "pooled", "inconclusive": {"unreadable_record", "run_error", "not_comparable", "not_exercised"}},
+ "runs": {"found", "pooled", "inconclusive": {"unreadable_record", "run_error", "mutation_noop", "not_comparable", "not_exercised"}},
  "honesty": {"constraints_total", "constraints_with_check", "check_share", "extraction_recall", "inconclusive_total"},
  "constraints": {<constraint id>: {"text", "kind", "has_check", "task_ids": [sorted],
    "boundaries": {<boundary id>: {
