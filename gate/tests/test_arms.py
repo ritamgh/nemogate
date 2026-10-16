@@ -3,6 +3,7 @@
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
+from gate import NothingToMutate
 from gate.tests.stubs import picks
 from gate.tests.test_end_to_end import APP, RULES, call, delegate, run
 from oracle import evaluate
@@ -203,3 +204,43 @@ def test_block_only_passes_a_reply_through_unchecked(tmp_path, backend):
     )
     assert returned(trace) == ["Fine."]
     assert len(evaluate(ledger, trace, [])) == 1
+
+
+def test_a_later_handoff_without_the_rule_passes_on_once_one_was_mutated(tmp_path, backend):
+    # Breaks if every handoff must carry the rule: a re-delegation that no longer states it
+    # would raise NothingToMutate and throw away a run whose first handoff was mutated.
+    trace, _ = run(
+        tmp_path,
+        backend,
+        ledger=LEDGER,
+        arm="mutated",
+        operator="drop",
+        planner=[
+            delegate("coder", SENT),
+            delegate("coder", "Now add a test."),
+            AIMessage(content="Done."),
+        ],
+        coder=[AIMessage(content="Added it."), AIMessage(content="Tested it.")],
+        helper=[picks(2), picks()],
+    )
+    assert handoff(trace) == [DROPPED, "Now add a test."]
+    writers = [
+        e.model_id
+        for e in trace
+        if isinstance(e, BoundaryIn) and e.boundary == "delegation:planner->coder"
+    ]
+    assert writers[0] != writers[1]  # only the mutated text is the helper's
+
+
+def test_a_run_whose_first_target_handoff_has_no_rule_raises(tmp_path, backend):
+    with pytest.raises(NothingToMutate):
+        run(
+            tmp_path,
+            backend,
+            ledger=LEDGER,
+            arm="mutated",
+            operator="drop",
+            planner=[delegate("coder", "Add a priority field."), AIMessage(content="Done.")],
+            coder=[AIMessage(content="Added it.")],
+            helper=[picks()],
+        )
