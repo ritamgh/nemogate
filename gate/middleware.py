@@ -24,7 +24,7 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -133,6 +133,7 @@ class GateMiddleware(AgentMiddleware):
         mutator_model_id: str | None = None,
         block: bool = False,
         gated: bool = False,
+        prior: Sequence[Event] = (),
     ) -> None:
         super().__init__()
         self._cfg = run_config
@@ -142,11 +143,20 @@ class GateMiddleware(AgentMiddleware):
         self._mutator_model_id = mutator_model_id
         self._block = block or gated
         self._gated = gated
+        # A fork's events before the fork point (steps 0..n-1): its approvals still count. This
+        # run's own steps start at 0 again, so they are compared shifted past the prior ones.
+        self._prior_approvals = [e for e in prior if isinstance(e, Approval)]
+        self._step_offset = len(prior)
         self._approvals: list[Event] = []
         self._fail_closed_left = MAX_FAIL_CLOSED
         self._fail_closed_lock = threading.Lock()  # async replies run _after in worker threads
         self._mutated_once = False  # a handoff at the target boundary has been mutated
         self._main = main_agent_name(run_config.target_boundary)
+
+    def _after_prior(self, event: Any) -> Any:
+        if not self._step_offset:
+            return event
+        return event.model_copy(update={"step": event.step + self._step_offset})
 
     def _take_fail_closed(self) -> bool:
         with self._fail_closed_lock:
@@ -210,7 +220,11 @@ class GateMiddleware(AgentMiddleware):
         candidate = self._writer.preview(
             ToolCall, agent=agent, boundary=self._inbound(agent), tool=call["name"], args=args
         )
-        hit = blocking_constraint(self._ledger, self._approvals, candidate)
+        hit = blocking_constraint(
+            self._ledger,
+            [*self._prior_approvals, *map(self._after_prior, self._approvals)],
+            self._after_prior(candidate),
+        )
         if hit is None:
             return None
         reason = BLOCKED_GATED.format(rule=hit.text) if self._gated else BLOCKED

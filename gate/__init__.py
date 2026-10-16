@@ -5,6 +5,7 @@ build_team(subagent_middleware=...) (schemas/contracts.py). Every refusal happen
 any agent runs, so a run that would measure nothing never spends credit.
 """
 
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -19,6 +20,11 @@ from schemas.config import load_config
 from schemas.enums import Arm, Operator, Role
 from schemas.ledger import ApprovalBefore, Ledger, PathForbidden
 from schemas.run import RunConfig
+from schemas.trace import Event, parse_trace_jsonl
+
+# A fork's run folder holds the source's events before the fork point under this name, next to
+# trace.jsonl (replay/runner.py writes it before the gate is built; replay/README.md "Forks").
+PRIOR_EVENTS = "prefix.jsonl"
 
 
 def _check_arm(run_config: RunConfig) -> None:
@@ -43,6 +49,13 @@ def _check_app(ledger: Ledger) -> None:
         )
     if isinstance(check, ApprovalBefore) and ledger.app.approval_tool is None:
         raise ValueError("approval_before needs app.approval_tool in the ledger")
+
+
+def prior_events(run_config: RunConfig) -> list[Event]:
+    """The events before the fork point if this run is a fork, else none. A blocking arm needs
+    them: an approval given before the fork point still authorises an action after it."""
+    path = Path(run_config.trace_path).parent / PRIOR_EVENTS
+    return parse_trace_jsonl(path.read_text(encoding="utf-8")) if path.is_file() else []
 
 
 def build_middleware(run_config: RunConfig, *, helper: Any | None = None) -> list[AgentMiddleware]:
@@ -78,6 +91,7 @@ def build_middleware(run_config: RunConfig, *, helper: Any | None = None) -> lis
             mutator_model_id=config.models[Role.helper].id,
             block=run_config.arm is Arm.block_only,
             gated=run_config.arm is Arm.gated,
+            prior=prior_events(run_config),
         )
     ]
 
@@ -86,4 +100,4 @@ def make_middleware(run_config: RunConfig) -> list[AgentMiddleware]:
     return build_middleware(run_config)
 
 
-__all__ = ["NothingToMutate", "build_middleware", "make_middleware"]
+__all__ = ["PRIOR_EVENTS", "NothingToMutate", "build_middleware", "make_middleware"]

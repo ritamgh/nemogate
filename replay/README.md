@@ -250,9 +250,7 @@ of its target boundary. It reads only that folder, so it works from a new proces
    `app.tasks()[source.task_id]` (KeyError if gone) now has another constraint or boundary than
    the source record's `constraint_id`/`boundary`; the source trace has no gapless run of
    events (steps 0..n-1) up to the gate's first `boundary_out` at the crossing's delegation (the
-   prefix, below); the arm is `block_only` or `gated` and the prefix holds an `approval` event
-   (the fork's gate starts empty and has no hook to be told of it, so it could block an
-   authorised action). A missing `record.json`, `carriage.json`, `boundaries.json` or
+   prefix, below). A missing `record.json`, `carriage.json`, `boundaries.json` or
    `trace.jsonl` raises FileNotFoundError naming it.
 2. As run_one steps 2-11, except: `copy_checkpoints(source/checkpoints.sqlite,
    run_dir/checkpoints.sqlite)` (the fork writes into its own copy; the source folder is never
@@ -275,9 +273,10 @@ of its target boundary. It reads only that folder, so it works from a new proces
    classifier get the prefix (steps 0..n-1) followed by the fork's events with their steps
    shifted by n, so `violations.json` steps count `prefix.jsonl` first, then `trace.jsonl`
    (step s >= n is trace step s - n). `fs_diff` is from the source's `base_image` to the
-   fork's final image, the run's whole effect, as for a full run. The fork's gate starts
-   fresh (approvals before the fork point unknown to it; see the refusal above; a gate hook
-   that takes prior events would lift it). `carriage.json` is written as for any run and is
+   fork's final image, the run's whole effect, as for a full run. The fork's gate reads
+   `prefix.jsonl` (`gate.PRIOR_EVENTS`, written before the gate is built), so under
+   `block_only` and `gated` an approval given before the fork point still authorises an action
+   after it. `carriage.json` is written as for any run and is
    valid: the fork point lies before the first crossing of the target boundary, so the fork's
    events hold every delegation the classifier reads, and `compaction_evidence` reads the
    shared history. A
