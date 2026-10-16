@@ -2,13 +2,16 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from common.llm import get_model
-from gate import NothingToMutate
+from gate import EmptyMutation, MutationFailed, NothingToMutate
 from gate.operators import (
     COMPRESS_PROMPT,
     HEDGE_PROMPT,
     HEDGE_RETURN_PROMPT,
+    RETRY_EMPTY,
+    RETRY_EMPTY_SUMMARY,
     SELECT_PROMPT,
     SELECT_RETURN_PROMPT,
+    UnparsedReply,
     first_words,
     make_operator,
     numbered,
@@ -40,6 +43,7 @@ class Spy:
         return _Recorder()
 
 
+_SELECT_FOR = {"delegation": SELECT_PROMPT, "return": SELECT_RETURN_PROMPT}
 DELEGATION = "Build the export. Never touch vendor/. Add a test."
 REPLY = "Looks fine.\nRISK: old clients get 20 by default.\nThanks."
 
@@ -160,9 +164,16 @@ def test_a_mutation_that_changes_nothing_raises_nothing_to_mutate(reply):
 
 
 @pytest.mark.parametrize("op", [Operator.drop, Operator.hedge])
-def test_a_reply_that_does_not_parse_raises(op):
-    with pytest.raises(RuntimeError, match="did not parse"):
-        make_operator(op, "rule", Spy(["plain text, no tool call"]))(DELEGATION)
+def test_a_reply_that_does_not_parse_twice_raises(op):
+    spy = Spy(["plain text, no tool call"] * 2)
+    with pytest.raises(UnparsedReply, match="did not parse"):
+        make_operator(op, "rule", spy)(DELEGATION)
+    assert len(spy.prompts) == 2
+
+
+def test_a_reply_that_does_not_parse_is_asked_again_once():
+    drop = make_operator(Operator.drop, "rule", Spy(["plain text", picks(2)]))
+    assert drop(DELEGATION) == "Build the export. Add a test."
 
 
 @pytest.mark.parametrize(
@@ -173,17 +184,30 @@ def test_a_reply_that_does_not_parse_raises(op):
     ],
     ids=["drop", "hedge-all-empty"],
 )
-def test_a_mutation_that_would_erase_everything_raises(op, reply):
-    with pytest.raises(RuntimeError, match="empty") as caught:
-        make_operator(op, "rule", Spy([reply]))(DELEGATION)
+def test_a_mutation_that_would_erase_everything_twice_raises(op, reply):
+    spy = Spy([reply, reply])
+    with pytest.raises(EmptyMutation, match="empty") as caught:
+        make_operator(op, "rule", spy)(DELEGATION)
     assert not isinstance(caught.value, NothingToMutate)
+    assert spy.prompts[1].endswith(RETRY_EMPTY)  # the second ask says what went wrong
+
+
+@pytest.mark.parametrize("boundary", ["delegation", "return"])
+def test_a_helper_that_picks_every_sentence_is_asked_again_once(boundary):
+    # Live 2026-10-16: on a third delegation the helper picked every sentence, drop emptied the
+    # message and the run ended as run_error. Asked again, it can name just the rule's sentence.
+    spy = Spy([picks(1, 2, 3), picks(2)])
+    drop = make_operator(Operator.drop, "rule", spy, boundary=boundary)
+    assert drop(DELEGATION) == "Build the export. Add a test."
+    first = _SELECT_FOR[boundary].format(rule="rule", sentences=numbered(DELEGATION))
+    assert spy.prompts == [first, first + RETRY_EMPTY]
 
 
 @pytest.mark.parametrize("boundary", ["delegation", "return"])
 def test_drop_on_a_one_sentence_message_raises(boundary):
     # Nothing sensible is left once its only sentence goes, so the run cannot be a sample.
-    drop = make_operator(Operator.drop, "rule", Spy([picks(1)]), boundary=boundary)
-    with pytest.raises(RuntimeError, match="empty"):
+    drop = make_operator(Operator.drop, "rule", Spy([picks(1)] * 2), boundary=boundary)
+    with pytest.raises(EmptyMutation, match="empty"):
         drop("Never touch vendor/.")
 
 
@@ -244,8 +268,20 @@ def test_compress_ignores_the_rule_and_applies_to_both_boundaries(boundary):
 
 
 def test_compress_with_an_empty_summary_raises():
-    with pytest.raises(RuntimeError, match="empty"):
-        make_operator(Operator.compress_100, "rule", Spy([""]))("message")
+    with pytest.raises(EmptyMutation, match="empty"):
+        make_operator(Operator.compress_100, "rule", Spy(["", ""]))("message")
+
+
+def test_an_empty_summary_is_asked_again_once():
+    spy = Spy(["", "short"])
+    assert make_operator(Operator.compress_100, "rule", spy)("message") == "short"
+    assert spy.prompts[1].endswith(RETRY_EMPTY_SUMMARY)  # not the sentence-picking note
+
+
+def test_every_operator_failure_is_a_mutation_failed():
+    # The gate passes a later handoff on unchanged on exactly this type.
+    for cls in (NothingToMutate, EmptyMutation, UnparsedReply):
+        assert issubclass(cls, MutationFailed) and issubclass(cls, RuntimeError)
 
 
 @pytest.mark.parametrize(
@@ -280,3 +316,110 @@ def test_unknown_boundary_kind_is_refused():
 def test_return_corrupt_is_not_built():
     with pytest.raises(NotImplementedError):
         make_operator(Operator.return_corrupt, "rule", Spy([]))
+
+
+def _live_parse_error(content, finish="stop"):
+    """The exception the live structured call raises on a bad reply: the OpenAI SDK's own parse
+    of a completion, as `with_structured_output(method="json_schema")` runs it."""
+    from openai._types import NOT_GIVEN
+    from openai.lib._parsing._completions import parse_chat_completion
+    from openai.types.chat import ChatCompletion
+
+    from gate.operators import Picks
+
+    completion = ChatCompletion.model_validate(
+        {"id": "x", "object": "chat.completion", "created": 0, "model": "m",
+         "choices": [{"index": 0, "finish_reason": finish, "logprobs": None,
+                      "message": {"role": "assistant", "content": content}}]}
+    )  # fmt: skip
+    try:
+        parse_chat_completion(
+            response_format=Picks, input_tools=NOT_GIVEN, chat_completion=completion
+        )
+    except Exception as exc:  # noqa: BLE001 - the point is to capture whatever it raises
+        return exc
+    raise AssertionError("the SDK parsed a reply that should not parse")
+
+
+def _langchain_parse_error(content, refusal=None):
+    """What langchain_openai's json_schema parser raises on an empty reply or a refusal (A's
+    review of #55): its own parser, so a change in langchain fails here, loudly."""
+    from langchain_core.messages import AIMessage
+    from langchain_openai.chat_models.base import _oai_structured_outputs_parser
+
+    from gate.operators import Picks
+
+    extra = {"refusal": refusal} if refusal else {}
+    try:
+        _oai_structured_outputs_parser(
+            AIMessage(content=content or "", additional_kwargs=extra), Picks
+        )
+    except Exception as exc:  # noqa: BLE001 - the point is to capture whatever it raises
+        return exc
+    raise AssertionError("langchain parsed a reply that should not parse")
+
+
+def test_only_langchains_empty_reply_value_error_counts_as_unparsed():
+    # A ValueError from anywhere else (a config refusal in common/llm.py, a bug) must propagate.
+    for error in (
+        ValueError("with_structured_output(method='json_mode') conflicts"),
+        KeyError("x"),
+    ):
+        helper = Scripted(error)
+        with pytest.raises(type(error)):
+            make_operator(Operator.drop, "rule", helper)(DELEGATION)
+        assert helper.calls == 1
+
+
+class Scripted:
+    """A helper whose structured calls raise or answer in turn, as a live model can."""
+
+    def __init__(self, *outcomes):
+        self.outcomes, self.calls = list(outcomes), 0
+
+    def with_structured_output(self, schema):
+        def invoke(prompt):
+            self.calls += 1
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        return type("Bound", (), {"invoke": staticmethod(invoke)})()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _live_parse_error("not json"),  # pydantic ValidationError
+        _live_parse_error('{"numbers": [1', "length"),  # openai LengthFinishReasonError
+        _live_parse_error('{"nums": 3}'),  # valid JSON, wrong shape
+        _langchain_parse_error(""),  # empty reply: plain ValueError from langchain's parser
+        _langchain_parse_error(None, refusal="I can't help with that."),  # OpenAIRefusalError
+    ],
+    ids=["not-json", "cut-off", "wrong-shape", "empty", "refusal"],
+)
+def test_a_live_reply_that_does_not_parse_is_asked_again_then_raises_unparsed(error):
+    # Ritam's review of #55: live, a bad structured reply raises instead of returning None, so a
+    # retry keyed on None never fired and the error escaped as neither a retry nor a
+    # MutationFailed (so the gate could not pass a later handoff on).
+    from gate.operators import Picks
+
+    helper = Scripted(error, Picks(numbers=[2]))
+    assert (
+        make_operator(Operator.drop, "rule", helper)(DELEGATION) == "Build the export. Add a test."
+    )
+    helper = Scripted(error, error)
+    with pytest.raises(UnparsedReply) as caught:
+        make_operator(Operator.drop, "rule", helper)(DELEGATION)
+    assert caught.value.__cause__ is error and helper.calls == 2
+
+
+def test_a_spend_cap_or_transport_error_is_not_retried_or_swallowed():
+    from common.spend import SpendCapReached
+
+    for error in (SpendCapReached("cap"), ConnectionError("down")):
+        helper = Scripted(error)
+        with pytest.raises(type(error)):
+            make_operator(Operator.drop, "rule", helper)(DELEGATION)
+        assert helper.calls == 1

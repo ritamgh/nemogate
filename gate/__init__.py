@@ -13,7 +13,7 @@ from langchain.agents.middleware import AgentMiddleware
 from common.env import REPO_ROOT
 from common.llm import get_model, safe_config_hash
 from gate.middleware import GateMiddleware
-from gate.operators import NothingToMutate, make_operator
+from gate.operators import EmptyMutation, MutationFailed, NothingToMutate, make_operator
 from gate.trace import TraceWriter
 from ledger import load_ledger, scope_to
 from schemas.config import load_config
@@ -102,4 +102,11 @@ def make_middleware(run_config: RunConfig) -> list[AgentMiddleware]:
     return build_middleware(run_config)
 
 
-__all__ = ["PRIOR_EVENTS", "NothingToMutate", "build_middleware", "make_middleware"]
+__all__ = [
+    "PRIOR_EVENTS",
+    "EmptyMutation",
+    "MutationFailed",
+    "NothingToMutate",
+    "build_middleware",
+    "make_middleware",
+]
