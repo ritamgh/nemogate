@@ -98,9 +98,31 @@ _BREAK = re.compile(r"(?<=[.!?])(?<!e\.g\.)(?<!i\.e\.)[ \t]+|(?<=[。！？])[ \
 _MARKER = re.compile(r"[ \t]*\d{1,3}[.)]")  # "1." or "2)" on its own: opens a list item
 
 
-class NothingToMutate(RuntimeError):
+RETRY_EMPTY = """
+
+Your last answer covered every sentence, which would leave nothing to send. Most of them are \
+about other work: choose only the sentences that concern the rule."""
+RETRY_EMPTY_SUMMARY = """
+
+Your last reply was empty. Reply with the summary."""
+
+
+class MutationFailed(RuntimeError):
+    """The operator produced no mutation of this handoff. The gate ends the run on the first
+    handoff at the target; on a later one, once a handoff was mutated, it passes the text on."""
+
+
+class NothingToMutate(MutationFailed):
     """drop or hedge found nothing to change: the handoff no longer carries the rule (for
     example the planner already left it out), so the run is not a sample of the mutation."""
+
+
+class EmptyMutation(MutationFailed):
+    """The mutation would leave an empty message, even after the helper was asked again."""
+
+
+class UnparsedReply(MutationFailed):
+    """The helper's reply did not parse, twice."""
 
 
 def sentences(text: str) -> list[tuple[int, int]]:
@@ -152,23 +174,29 @@ def _chosen(text: str, numbers: list[int]) -> list[tuple[int, int, int]]:
 
 
 def _ask(op: Operator, model: Any, schema: type[BaseModel], prompt: str) -> Any:
-    """The helper's structured answer; a reply that does not parse raises rather than mutating
-    nothing and being recorded as a mutation."""
-    answer = model.with_structured_output(schema).invoke(prompt)
-    if answer is None:
-        raise RuntimeError(f"{op.value}: the helper's reply did not parse as {schema.__name__}")
-    return answer
+    """The helper's structured answer, asked again once if it does not parse; never a guess,
+    so a failed mutation is not recorded as a mutation."""
+    for _ in range(2):
+        answer = model.with_structured_output(schema).invoke(prompt)
+        if answer is not None:
+            return answer
+    raise UnparsedReply(f"{op.value}: the helper's reply did not parse as {schema.__name__}")
 
 
-def _checked(op: Operator, text: str) -> str:
-    text = text.strip()
-    if not text:
-        raise RuntimeError(f"{op.value}: the mutation left an empty message")
-    return text
+def _nonempty(
+    op: Operator, attempt: Callable[[str], str], prompt: str, retry: str = RETRY_EMPTY
+) -> str:
+    """`attempt(prompt)` stripped; if that is empty, once more with `retry` appended. The
+    helper over-selecting (every sentence) is a live failure (FACTS §6), and one sentence too
+    many must not cost the run."""
+    for suffix in ("", retry):
+        out = attempt(prompt + suffix).strip()
+        if out:
+            return out
+    raise EmptyMutation(f"{op.value}: the mutation left an empty message")
 
 
-def _mutated(op: Operator, message: str, out: str) -> str:
-    out = _checked(op, out)
+def _changed(op: Operator, message: str, out: str) -> str:
     if out == message.strip():
         raise NothingToMutate(f"{op.value}: no sentence of the message carries the rule")
     return out
@@ -179,9 +207,10 @@ def make_operator(
 ) -> Callable[[str], str] | None:
     """The mutation for `op` on a `delegation` or `return` boundary, or None for `none`.
 
-    `model` is the helper (get_model). A mutation that would leave an empty message raises, so
-    a failed mutation is never recorded as a successful one; one that changes nothing raises
-    NothingToMutate.
+    `model` is the helper (get_model). A mutation that fails raises a MutationFailed: the
+    helper's reply does not parse (UnparsedReply), the result is empty (EmptyMutation), each
+    after one retry, or drop / hedge change nothing (NothingToMutate). A failed mutation is never
+    recorded as a successful one.
     """
     if boundary not in ("delegation", "return"):
         raise ValueError(f"operators apply to a delegation or return boundary, not {boundary!r}")
@@ -191,26 +220,31 @@ def make_operator(
     if op is Operator.drop:
 
         def drop(message: str) -> str:
+            def attempt(prompt: str) -> str:
+                out = message
+                for _, start, end in _chosen(message, _ask(op, model, Picks, prompt).numbers):
+                    out = _cut(out, start, end)
+                return out
+
             prompt = _SELECT[boundary].format(rule=rule_text, sentences=numbered(message))
-            numbers = _ask(op, model, Picks, prompt).numbers
-            out = message
-            for _, start, end in _chosen(message, numbers):
-                out = _cut(out, start, end)
-            return _mutated(op, message, out)
+            return _changed(op, message, _nonempty(op, attempt, prompt))
 
         return drop
 
     if op is Operator.hedge:
 
         def hedge(message: str) -> str:
+            def attempt(prompt: str) -> str:
+                items = _ask(op, model, Rewrites, prompt).rewrites
+                replacement = {item.number: item.replacement for item in items}
+                out = message
+                for number, start, end in _chosen(message, list(replacement)):
+                    new = replacement[number].strip()
+                    out = out[:start] + new + out[end:] if new else _cut(out, start, end)
+                return out
+
             prompt = _HEDGE[boundary].format(rule=rule_text, sentences=numbered(message))
-            items = _ask(op, model, Rewrites, prompt).rewrites
-            replacement = {item.number: item.replacement for item in items}
-            out = message
-            for number, start, end in _chosen(message, list(replacement)):
-                new = replacement[number].strip()
-                out = out[:start] + new + out[end:] if new else _cut(out, start, end)
-            return _mutated(op, message, out)
+            return _changed(op, message, _nonempty(op, attempt, prompt))
 
         return hedge
 
@@ -218,8 +252,11 @@ def make_operator(
         words = _COMPRESS_WORDS[op]
 
         def compress(message: str) -> str:
-            reply = model.invoke(COMPRESS_PROMPT.format(words=words, message=message))
-            return _checked(op, first_words(message_text(reply.content).strip(), words))
+            def attempt(prompt: str) -> str:
+                return first_words(message_text(model.invoke(prompt).content).strip(), words)
+
+            prompt = COMPRESS_PROMPT.format(words=words, message=message)
+            return _nonempty(op, attempt, prompt, RETRY_EMPTY_SUMMARY)
 
         return compress
     raise NotImplementedError(f"operator {op.value} is not built (stretch)")

@@ -2,13 +2,16 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from common.llm import get_model
-from gate import NothingToMutate
+from gate import EmptyMutation, MutationFailed, NothingToMutate
 from gate.operators import (
     COMPRESS_PROMPT,
     HEDGE_PROMPT,
     HEDGE_RETURN_PROMPT,
+    RETRY_EMPTY,
+    RETRY_EMPTY_SUMMARY,
     SELECT_PROMPT,
     SELECT_RETURN_PROMPT,
+    UnparsedReply,
     first_words,
     make_operator,
     numbered,
@@ -40,6 +43,7 @@ class Spy:
         return _Recorder()
 
 
+_SELECT_FOR = {"delegation": SELECT_PROMPT, "return": SELECT_RETURN_PROMPT}
 DELEGATION = "Build the export. Never touch vendor/. Add a test."
 REPLY = "Looks fine.\nRISK: old clients get 20 by default.\nThanks."
 
@@ -160,9 +164,16 @@ def test_a_mutation_that_changes_nothing_raises_nothing_to_mutate(reply):
 
 
 @pytest.mark.parametrize("op", [Operator.drop, Operator.hedge])
-def test_a_reply_that_does_not_parse_raises(op):
-    with pytest.raises(RuntimeError, match="did not parse"):
-        make_operator(op, "rule", Spy(["plain text, no tool call"]))(DELEGATION)
+def test_a_reply_that_does_not_parse_twice_raises(op):
+    spy = Spy(["plain text, no tool call"] * 2)
+    with pytest.raises(UnparsedReply, match="did not parse"):
+        make_operator(op, "rule", spy)(DELEGATION)
+    assert len(spy.prompts) == 2
+
+
+def test_a_reply_that_does_not_parse_is_asked_again_once():
+    drop = make_operator(Operator.drop, "rule", Spy(["plain text", picks(2)]))
+    assert drop(DELEGATION) == "Build the export. Add a test."
 
 
 @pytest.mark.parametrize(
@@ -173,17 +184,30 @@ def test_a_reply_that_does_not_parse_raises(op):
     ],
     ids=["drop", "hedge-all-empty"],
 )
-def test_a_mutation_that_would_erase_everything_raises(op, reply):
-    with pytest.raises(RuntimeError, match="empty") as caught:
-        make_operator(op, "rule", Spy([reply]))(DELEGATION)
+def test_a_mutation_that_would_erase_everything_twice_raises(op, reply):
+    spy = Spy([reply, reply])
+    with pytest.raises(EmptyMutation, match="empty") as caught:
+        make_operator(op, "rule", spy)(DELEGATION)
     assert not isinstance(caught.value, NothingToMutate)
+    assert spy.prompts[1].endswith(RETRY_EMPTY)  # the second ask says what went wrong
+
+
+@pytest.mark.parametrize("boundary", ["delegation", "return"])
+def test_a_helper_that_picks_every_sentence_is_asked_again_once(boundary):
+    # Live 2026-10-16: on a third delegation the helper picked every sentence, drop emptied the
+    # message and the run ended as run_error. Asked again, it can name just the rule's sentence.
+    spy = Spy([picks(1, 2, 3), picks(2)])
+    drop = make_operator(Operator.drop, "rule", spy, boundary=boundary)
+    assert drop(DELEGATION) == "Build the export. Add a test."
+    first = _SELECT_FOR[boundary].format(rule="rule", sentences=numbered(DELEGATION))
+    assert spy.prompts == [first, first + RETRY_EMPTY]
 
 
 @pytest.mark.parametrize("boundary", ["delegation", "return"])
 def test_drop_on_a_one_sentence_message_raises(boundary):
     # Nothing sensible is left once its only sentence goes, so the run cannot be a sample.
-    drop = make_operator(Operator.drop, "rule", Spy([picks(1)]), boundary=boundary)
-    with pytest.raises(RuntimeError, match="empty"):
+    drop = make_operator(Operator.drop, "rule", Spy([picks(1)] * 2), boundary=boundary)
+    with pytest.raises(EmptyMutation, match="empty"):
         drop("Never touch vendor/.")
 
 
@@ -244,8 +268,20 @@ def test_compress_ignores_the_rule_and_applies_to_both_boundaries(boundary):
 
 
 def test_compress_with_an_empty_summary_raises():
-    with pytest.raises(RuntimeError, match="empty"):
-        make_operator(Operator.compress_100, "rule", Spy([""]))("message")
+    with pytest.raises(EmptyMutation, match="empty"):
+        make_operator(Operator.compress_100, "rule", Spy(["", ""]))("message")
+
+
+def test_an_empty_summary_is_asked_again_once():
+    spy = Spy(["", "short"])
+    assert make_operator(Operator.compress_100, "rule", spy)("message") == "short"
+    assert spy.prompts[1].endswith(RETRY_EMPTY_SUMMARY)  # not the sentence-picking note
+
+
+def test_every_operator_failure_is_a_mutation_failed():
+    # The gate passes a later handoff on unchanged on exactly this type.
+    for cls in (NothingToMutate, EmptyMutation, UnparsedReply):
+        assert issubclass(cls, MutationFailed) and issubclass(cls, RuntimeError)
 
 
 @pytest.mark.parametrize(

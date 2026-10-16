@@ -277,8 +277,9 @@ def test_failed_mutation_leaves_no_half_recorded_handoff(tmp_path, backend):
                 delegate("coder", "Add it. Keep out of migrations/."),
                 AIMessage(content="Done."),
             ],
-            # The helper quotes the whole message, so dropping it would leave nothing.
-            helper=[picks(1, 2)],
+            # The helper picks the whole message twice (asked again once), so dropping it would
+            # leave nothing.
+            helper=[picks(1, 2), picks(1, 2)],
         )
     trace = parse_trace_jsonl((tmp_path / "trace.jsonl").read_text())
     assert not any(isinstance(e, BoundaryOut | BoundaryIn) for e in trace)

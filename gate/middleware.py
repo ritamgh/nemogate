@@ -4,8 +4,8 @@ It tells the stacks apart by lc_agent_name (refapp/README.md, "Paths and agent n
 every boundary and tool call (file paths repo-relative, so the oracle needs no app facts), and
 mutates the text crossing the run's target boundary only: a delegation's description, or a
 subagent's reply on its way back. Text the helper wrote carries the helper's model id. If the
-first handoff there carries no rule to mutate, the operator's NothingToMutate ends the run (it is
-no sample); a later one that carries none passes on unchanged.
+first handoff there cannot be mutated, the operator's MutationFailed ends the run (NothingToMutate:
+no sample); a later one that cannot be passes on unchanged.
 
 Arms (SPEC, Experiment design):
 - block_only: tool calls the oracle would count as a violation are blocked before they run
@@ -33,7 +33,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.config import get_config
 from langgraph.types import Command
 
-from gate.operators import NothingToMutate
+from gate.operators import MutationFailed
 from gate.policy import blocking_constraint
 from gate.text import message_text as _text
 from gate.trace import TraceWriter
@@ -172,9 +172,10 @@ class GateMiddleware(AgentMiddleware):
             return text, None
         try:
             out = self._mutate(text)
-        except NothingToMutate:
+        except MutationFailed:
             # Only a run whose target handoff was never mutated is no sample. Once one was, a
-            # later handoff without the rule (a re-delegation, a retry) passes on unchanged.
+            # later handoff the operator cannot mutate (no rule left in it, or nothing would be
+            # left of it) passes on unchanged rather than ending a run that is already a sample.
             if self._mutated_once:
                 return text, None
             raise

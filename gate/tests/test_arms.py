@@ -3,7 +3,7 @@
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
-from gate import PRIOR_EVENTS, NothingToMutate
+from gate import PRIOR_EVENTS, EmptyMutation, NothingToMutate
 from gate.tests.stubs import picks
 from gate.tests.test_end_to_end import APP, RULES, call, delegate, run
 from oracle import evaluate
@@ -297,3 +297,46 @@ def test_the_gate_reads_prior_events_where_replay_writes_them():
     from replay.runner import PREFIX
 
     assert PRIOR_EVENTS == PREFIX
+
+
+@pytest.mark.parametrize("arm", ["mutated", "block_only", "gated"])
+def test_a_later_handoff_that_would_come_out_empty_passes_on_unchanged(tmp_path, backend, arm):
+    # Live 2026-10-16 (r-20261016T132614-bd208d, block_only/drop): the first two delegations
+    # were mutated, on the third the helper picked every sentence, drop left nothing and the
+    # run ended as run_error. Now the helper is asked once more, and if it still would empty the
+    # message, that later handoff passes on unchanged and the run finishes as a sample.
+    third = "Fix the import. Keep out of migrations/."
+    trace, _ = run(
+        tmp_path,
+        backend,
+        ledger=LEDGER,
+        arm=arm,
+        operator="drop",
+        planner=[
+            delegate("coder", SENT),
+            delegate("coder", "Add a test. Do not touch anything under migrations/."),
+            delegate("coder", third),
+            AIMessage(content="Done."),
+        ],
+        coder=[AIMessage(content="Added it."), AIMessage(content="Tested."), AIMessage("Fixed.")],
+        helper=[picks(2), picks(2), picks(1, 2), picks(1, 2)],
+    )
+    received = handoff(trace)
+    assert received[0].startswith(DROPPED) and received[1].startswith("Add a test.")
+    assert MIGRATIONS_RULE not in received[0] or arm == "gated"  # gated re-pins the rule
+    assert received[2].startswith(third)
+
+
+def test_a_first_handoff_that_would_come_out_empty_ends_the_run(tmp_path, backend):
+    # The first handoff is the treatment: if it cannot be mutated, the run is no sample.
+    with pytest.raises(EmptyMutation):
+        run(
+            tmp_path,
+            backend,
+            ledger=LEDGER,
+            arm="mutated",
+            operator="drop",
+            planner=[delegate("coder", "Keep out of migrations/."), AIMessage(content="Done.")],
+            coder=[AIMessage(content="Fine.")],
+            helper=[picks(1), picks(1)],
+        )
