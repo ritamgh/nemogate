@@ -28,11 +28,13 @@ PRIOR_EVENTS = "prefix.jsonl"
 
 
 def _check_arm(run_config: RunConfig) -> None:
-    # Same pairing as replay.app.pairs: natural only unmutated, every other arm only mutated.
+    # natural is the unmutated handoff and mutated the mutated one, so each takes only its own
+    # kind of operator. block_only and gated take either: unmutated, they measure the gate
+    # against rules the agents break on their own (the rule reached them and was disobeyed).
     if run_config.arm is Arm.natural and run_config.operator is not Operator.none:
         raise ValueError("the natural arm takes operator none")
-    if run_config.arm is not Arm.natural and run_config.operator is Operator.none:
-        raise ValueError(f"the {run_config.arm.value} arm needs an operator other than none")
+    if run_config.arm is Arm.mutated and run_config.operator is Operator.none:
+        raise ValueError("the mutated arm needs an operator other than none")
     if run_config.operator is not Operator.none and _boundary_kind(run_config) == "compaction":
         raise ValueError("operators apply to a delegation or return boundary, not compaction")
 

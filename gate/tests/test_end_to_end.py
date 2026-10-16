@@ -285,11 +285,10 @@ def test_failed_mutation_leaves_no_half_recorded_handoff(tmp_path, backend):
     assert not any(isinstance(e, BoundaryOut | BoundaryIn) for e in trace)
 
 
-@pytest.mark.parametrize("arm", ["block_only", "gated"])
-def test_blocking_arms_need_an_operator(tmp_path, arm):
-    # replay.app.pairs never runs these arms unmutated; a run that did would measure nothing.
-    with pytest.raises(ValueError, match=arm):
-        build_middleware(cfg(tmp_path, arm=arm, operator="none"))
+def test_the_mutated_arm_needs_an_operator(tmp_path):
+    # mutated with nothing mutated would be a natural run under another label.
+    with pytest.raises(ValueError, match="mutated"):
+        build_middleware(cfg(tmp_path, arm="mutated", operator="none"))
 
 
 def test_build_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
