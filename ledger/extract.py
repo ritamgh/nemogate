@@ -38,8 +38,8 @@ from schemas.ledger import (
 EXTRACT_PROMPT = """\
 Below is a text written to a team of AI agents named: {agents}. List every rule the agents \
 must follow that the text states: something they must or must not do, or must ask first. A \
-rule is often given with its reason ("Because the API is public, keep its responses \
-unchanged"): it is still a rule. Do not list \
+rule is often given with its reason ("Because the report goes to the board, keep its \
+totals unchanged"): it is still a rule. Do not list \
 the task itself (what to produce), and do not list preferences about length, tone, style or \
 format unless the text says they are required. For each rule give:
 - text: the whole sentence that states the rule, quoted from the text, including the files, \

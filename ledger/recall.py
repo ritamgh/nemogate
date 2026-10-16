@@ -100,18 +100,19 @@ def main(argv: Sequence[str] | None = None, *, model: Any = None) -> int:
             proposals = propose(model, case.text, agents, tools)
             checks = [p.check for p in proposals]
             hit = case.expect is not None and case.expect in checks
-            # Which extracted rule compiled to the hit, so a reader can see it was the right one
-            # (compile sees the whole text, so a stray rule could compile to the expected check).
-            by = next((p.rule.text for p in proposals if hit and p.check == case.expect), None)
+            # Every extracted rule that compiled to the hit, so a reader can see whether the rule
+            # that states it is among them (compile sees the whole text, so a stray rule can
+            # compile to the expected check too; the first match alone would mislead).
+            by = [p.rule.text for p in proposals if hit and p.check == case.expect]
             more = [c for c in checks if c is not None and c != case.expect]
             matched += hit
             extra += len(more)
             mark = "-" if case.expect is None else ("ok  " if hit else "MISS")
             print(f"{mark} {case.name}: {[_dump(c) for c in checks]}")
-            if by is not None:
-                print(f"     from rule: {by!r}")
+            for rule in by:
+                print(f"     from rule: {rule!r}")
             rows.append({"rep": rep, "name": case.name, "expect": _dump(case.expect), "hit": hit,
-                         "matched_rule": by, "rules": [p.rule.text for p in proposals],
+                         "matched_rules": by, "rules": [p.rule.text for p in proposals],
                          "checks": [_dump(c) for c in checks], "extra": len(more)})  # fmt: skip
     total = len(stated) * args.reps
     print(f"recall {matched}/{total}; extra checks {extra} over {len(cases) * args.reps} texts")

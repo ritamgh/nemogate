@@ -122,11 +122,33 @@ def test_recall_cli_counts_hits_and_extras(tmp_path, capsys):
     assert "recall 1/1; extra checks 1 over 2 texts" in capsys.readouterr().out
     result = json.loads(out.read_text())
     assert result["matched"] == 1
-    assert result["rows"][0]["matched_rule"] == "Never call fetch."
-    assert result["rows"][1]["matched_rule"] is None
+    assert result["rows"][0]["matched_rules"] == ["Never call fetch."]
+    assert result["rows"][1]["matched_rules"] == []
 
 
 def test_recall_cli_refuses_without_live(monkeypatch, capsys):
     monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
     assert main(["--cases", str(DEV)]) == 2
     assert "NEMOGATE_LIVE" in capsys.readouterr().err
+
+
+def test_every_rule_that_compiled_to_the_hit_is_recorded(tmp_path):
+    # A first-match record once made a hit look as if only a stray rule produced it, when the
+    # rule stating it had compiled to the same check (FACTS §6).
+    cases = tmp_path / "cases.yaml"
+    cases.write_text(
+        "agents: [lead, worker]\ntools: [fetch]\ncases:\n"
+        "  - {name: one, text: Use RFC 1. Never call fetch.,\n"
+        "     expect: {type: tool_forbidden, name: fetch}}\n"
+    )
+    stray = {"text": "Use RFC 1.", "kind": "constraint", "source": "user",
+             "authority": "binding", "scope": ["worker"]}  # fmt: skip
+    real = {**stray, "text": "Never call fetch."}
+    check = structured("CompiledCheck", {"type": "tool_forbidden", "name": "fetch"})
+    model = Spy([structured("Proposals", {"rules": [stray, real]}), check, check])
+    out = tmp_path / "out.json"
+    assert main(["--cases", str(cases), "--out", str(out)], model=model) == 0
+    assert json.loads(out.read_text())["rows"][0]["matched_rules"] == [
+        "Use RFC 1.",
+        "Never call fetch.",
+    ]

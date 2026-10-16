@@ -1,7 +1,9 @@
-# Development set for extraction recall: a different team and tools from the reference app, so
-# the extract and compile prompts are tuned here and the reference tasks stay held out
-# (AGENTS.md rule 5). Each case is a message to the team and the one check it states (null:
-# the message states no rule). Run: NEMOGATE_LIVE=1 uv run python -m ledger.recall --cases FILE
+# Development set for extraction recall: a different team and tools from the reference app. The
+# extract and compile prompts were tuned on this set only, but it was built from the categories
+# of the first reference measurement's misses and shares the reference rules' shapes, so the
+# reference tasks are not a clean held-out set (docs/FACTS.md §6). Each case is a message to the
+# team and the one check it states (null: the message states no rule).
+# Run: NEMOGATE_LIVE=1 uv run python -m ledger.recall --cases FILE
 agents: [researcher, writer, editor]
 tools: [search_web, read_file, write_file, edit_file, delete, send_email, publish, query_db, request_approval]
 cases:
