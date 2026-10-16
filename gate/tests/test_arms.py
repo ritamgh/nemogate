@@ -297,3 +297,31 @@ def test_the_gate_reads_prior_events_where_replay_writes_them():
     from replay.runner import PREFIX
 
     assert PRIOR_EVENTS == PREFIX
+
+
+@pytest.mark.parametrize("arm", ["block_only", "gated"])
+def test_a_blocking_arm_with_no_mutation_still_blocks_a_rule_the_agent_breaks(
+    tmp_path, backend, arm
+):
+    # The DISOBEYED case: the rule reaches the coder unmutated and it writes there anyway. The
+    # gate blocks the write without any operator, and only gated re-pins and names the rule.
+    trace, ledger = run(
+        tmp_path,
+        backend,
+        ledger=LEDGER,
+        arm=arm,
+        operator="none",
+        planner=[delegate("coder", SENT), AIMessage(content="Done.")],
+        coder=[
+            call("write_file", "w1", file_path="/repo/migrations/0003_p.py", content="x"),
+            AIMessage(content="Could not write it."),
+        ],
+        helper=[],  # no operator: the helper is never asked
+    )
+    (received,) = handoff(trace)
+    assert received.startswith(SENT)
+    assert (MIGRATIONS_RULE in received) is (arm == "gated")
+    write = next(e for e in trace if isinstance(e, ToolCall) and e.tool == "write_file")
+    assert write.blocked is True
+    assert not (tmp_path / "repo" / "migrations" / "0003_p.py").exists()
+    assert evaluate(ledger, trace, []) == []
