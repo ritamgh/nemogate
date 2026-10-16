@@ -19,6 +19,9 @@ from schemas.run import RunRecord
 # Fewest runs on each side before a verdict: one clean patched run must not beat a noisy
 # baseline.
 MIN_RUNS = 3
+# Super writes the patch at most this often: once, and once more told why the guards refused it.
+# Ultra's 3-call limit is separate (repair/plan.py).
+MAX_WRITE_TRIES = 2
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,17 @@ def rates(records: Sequence[RunRecord], constraint_id: str) -> Rates:
     )
 
 
+def _guarded(edits: Sequence[Edit], files: Mapping[str, str], ledger_file: str | None) -> dict:
+    """The files after `edits`, or GuardViolation if the patch breaks a guard."""
+    check_edits(edits, files)
+    after_files = apply_edits(files, edits)
+    if after_files == dict(files):
+        raise GuardViolation("the patch makes no change")
+    if ledger_file is not None and ledger_file in files:
+        check_append_only(files[ledger_file], after_files[ledger_file])
+    return after_files
+
+
 def repair_once(
     *,
     evidence: Evidence,
@@ -70,16 +84,18 @@ def repair_once(
 ) -> RepairResult:
     before = rates(baseline, evidence.constraint_id)
     choice = choose_fix(planner_model, evidence, agents, budget or CallBudget())
-    edits = write_patch(writer_model, get_fix(choice.fix_id), choice, evidence, files)
-    try:
-        check_edits(edits, files)
-        after_files = apply_edits(files, edits)
-        if after_files == dict(files):
-            raise GuardViolation("the patch makes no change")
-        if ledger_file is not None and ledger_file in files:
-            check_append_only(files[ledger_file], after_files[ledger_file])
-    except GuardViolation as exc:
-        return RepairResult(False, f"guard: {exc}", choice, edits, "", before, None)
+    fix = get_fix(choice.fix_id)
+    rejected: tuple[list[Edit], str] | None = None
+    for _ in range(MAX_WRITE_TRIES):
+        edits = write_patch(writer_model, fix, choice, evidence, files, rejected=rejected)
+        try:
+            after_files = _guarded(edits, files, ledger_file)
+            break
+        except GuardViolation as exc:
+            rejected = (edits, str(exc))
+    else:
+        reason = f"guard: {rejected[1]} ({MAX_WRITE_TRIES} tries)"
+        return RepairResult(False, reason, choice, edits, "", before, None)
     diff = unified_diff(files, after_files)
     after = rates(rerun(Patch(choice.fix_id, edits, after_files)), evidence.constraint_id)
     reason = (

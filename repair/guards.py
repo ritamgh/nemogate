@@ -73,8 +73,12 @@ def check_edits(edits: Sequence[Edit], files: Mapping[str, str]) -> None:
             raise GuardViolation(f"{edit.file} is not one of the editable files")
         check_editable([edit.file])
         text = current[edit.file]
-        if not edit.old_string or text.count(edit.old_string) != 1:
-            raise GuardViolation(f"old_string must occur exactly once in {edit.file}")
+        found = text.count(edit.old_string) if edit.old_string else 0
+        if found != 1:
+            raise GuardViolation(
+                f"old_string must occur exactly once in {edit.file} (it occurs {found} times: "
+                f"{edit.old_string[:80]!r})"
+            )
         if edit.old_string not in edit.new_string:
             raise GuardViolation(
                 f"edits must be insert-only: new_string must keep old_string verbatim ({edit.file})"
