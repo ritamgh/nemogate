@@ -879,7 +879,7 @@ def test_only_natural_cells_carry_the_label_split():
 # ---------------------------------------------------------------- compaction knobs
 
 OFF = (None, None)
-ON = ("6000", "6")
+ON = (6000, 6)  # the effective setting: tokens, keep
 
 
 def knob_run(run_id, knobs, **kwargs):
@@ -903,23 +903,25 @@ def test_cells_are_split_by_the_compaction_knobs_the_runs_were_made_under():
     assert [(c["compaction"], c["n"], c["violations"]) for c in boundary["cells"]] == [
         ({"tokens": None, "keep": None}, 2, 0),
         (None, 1, 0),
-        ({"tokens": "6000", "keep": "6"}, 2, 1),
+        ({"tokens": 6000, "keep": 6}, 2, 1),
     ]
 
 
-def test_a_comparison_pairs_cells_made_under_the_same_compaction_knobs():
-    # Breaks if the compacted mutated runs are compared with the natural runs of another
-    # setting: natural 1 of 2 without compaction, 0 of 2 with it, mutated 2 of 2 with it. Against
-    # the compacted natural runs the difference is 1.0 - 0.0; against the others it would be 0.5.
-    # Newcombe: Wilson(2,2) = (0.3424, 1.0), Wilson(0,2) = (0.0, 0.6576),
-    # lo = 1 - sqrt(0.657628^2 + 0.657628^2) = 0.07, hi = 1 + sqrt(0 + 0) = 1.0.
+def test_a_mutated_cell_is_compared_with_the_natural_cell_of_its_own_setting():
+    # Breaks if _comparisons pairs by (arm, operator) alone: it would keep the last natural
+    # cell (compaction on, 2 of 2 violated) for the compaction-off mutated runs and report
+    # +0.0 [-0.6576, 0.6576]; against their own natural cell (off, 0 of 2) the difference is
+    # 1.0 - 0.0, Newcombe lo = 1 - sqrt(0.657628^2 + 0.657628^2) = 0.07, hi = 1.0. The off
+    # gated cell has no off block_only partner (that one is on), so no ledger_value comparison.
     runs = [
-        knob_run("off-1", OFF, violated=True),
+        knob_run("on-1", ON, violated=True),
+        knob_run("on-2", ON, violated=True),
+        knob_run("off-1", OFF),
         knob_run("off-2", OFF),
-        knob_run("on-1", ON),
-        knob_run("on-2", ON),
-        knob_run("mut-1", ON, arm="mutated", operator="drop", violated=True),
-        knob_run("mut-2", ON, arm="mutated", operator="drop", violated=True),
+        knob_run("mut-1", OFF, arm="mutated", operator="drop", violated=True),
+        knob_run("mut-2", OFF, arm="mutated", operator="drop", violated=True),
+        knob_run("gat-1", OFF, arm="gated", operator="drop"),
+        knob_run("blk-1", ON, arm="block_only", operator="drop", success=False),
     ]
     got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
 
@@ -934,40 +936,128 @@ def test_a_comparison_pairs_cells_made_under_the_same_compaction_knobs():
             1.0,
             0.07,
             1.0,
-            compaction={"tokens": "6000", "keep": "6"},
+            compaction={"tokens": None, "keep": None},
         )
+    ]
+
+
+def test_a_gated_cell_is_compared_with_the_block_only_cell_of_its_own_setting():
+    # Breaks if gated is paired with whichever block_only cell is last: off gated succeeded 2 of
+    # 2 and on gated 0 of 2, while off block_only failed 2 of 2 and on block_only succeeded 2 of
+    # 2. Paired by setting: off +1.0 [0.07, 1.0], on -1.0 [-1.0, -0.07] (Newcombe, as above).
+    # Paired with the last block_only cell the off gain would read 0.0 and the on loss 0.0.
+    runs = [
+        knob_run("gat-off-1", OFF, arm="gated", operator="drop"),
+        knob_run("gat-off-2", OFF, arm="gated", operator="drop"),
+        knob_run("gat-on-1", ON, arm="gated", operator="drop", success=False),
+        knob_run("gat-on-2", ON, arm="gated", operator="drop", success=False),
+        knob_run("blk-off-1", OFF, arm="block_only", operator="drop", success=False),
+        knob_run("blk-off-2", OFF, arm="block_only", operator="drop", success=False),
+        knob_run("blk-on-1", ON, arm="block_only", operator="drop"),
+        knob_run("blk-on-2", ON, arm="block_only", operator="drop"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    (boundary,) = got["constraints"]["C-001"]["boundaries"].values()
+    assert boundary["comparisons"] == [
+        comparison(
+            "ledger_value",
+            "drop",
+            ("gated", "drop"),
+            ("block_only", "drop"),
+            "success",
+            1.0,
+            0.07,
+            1.0,
+            compaction={"tokens": None, "keep": None},
+        ),
+        comparison(
+            "ledger_value",
+            "drop",
+            ("gated", "drop"),
+            ("block_only", "drop"),
+            "success",
+            -1.0,
+            -1.0,
+            -0.07,
+            compaction={"tokens": 6000, "keep": 6},
+        ),
+    ]
+
+
+def write_carriage_run(parent, run, knobs):
+    folder = write_run(parent, run)
+    (folder / "carriage.json").write_text(json.dumps({"label": "DROPPED", "knobs": knobs}))
+
+
+def test_load_runs_keys_cells_on_the_effective_compaction_setting(tmp_path):
+    # Breaks if the cell key is the raw env strings: KEEP unset and KEEP=6 are the same setting
+    # (6 is the default), and an exported empty TOKENS is compaction off, as
+    # common.env.compaction_from_env reads them. Spelled differently they would split the natural
+    # runs from the gated runs and drop the comparison.
+    tokens, keep = "NEMOGATE_COMPACT_TOKENS", "NEMOGATE_COMPACT_KEEP"
+    write_carriage_run(tmp_path, make_run("nat-1", label="DROPPED"), {tokens: "20000", keep: None})
+    write_carriage_run(tmp_path, make_run("nat-2", label="DROPPED"), {tokens: " 20000 ", keep: ""})
+    write_carriage_run(
+        tmp_path,
+        make_run("mut-1", arm="mutated", operator="drop", violated=True, label="DROPPED"),
+        {tokens: "20000", keep: "6"},
+    )
+    write_carriage_run(tmp_path, make_run("off-1", label="DROPPED"), {tokens: "", keep: None})
+    write_carriage_run(tmp_path, make_run("off-2", label="DROPPED"), {tokens: None, keep: None})
+
+    got = load_runs([tmp_path])
+    assert {run.record.run_id: run.knobs for run in got.runs} == {
+        "nat-1": (20000, 6),
+        "nat-2": (20000, 6),
+        "mut-1": (20000, 6),
+        "off-1": (None, None),
+        "off-2": (None, None),
+    }
+    results = aggregate(got.runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    (boundary,) = results["constraints"]["C-001"]["boundaries"].values()
+    assert [(c["arm"], c["compaction"], c["n"]) for c in boundary["cells"]] == [
+        ("natural", {"tokens": None, "keep": None}, 2),
+        ("natural", {"tokens": 20000, "keep": 6}, 2),
+        ("mutated", {"tokens": 20000, "keep": 6}, 1),
+    ]
+    assert [(c["name"], c["compaction"]) for c in boundary["comparisons"]] == [
+        ("load_bearing", {"tokens": 20000, "keep": 6})
     ]
 
 
 def test_load_runs_reads_the_compaction_knobs_from_carriage_json(tmp_path):
     # Breaks if the knobs are read from the wrong key, a run whose carriage.json predates the
     # knobs is treated as compaction off instead of unknown, or such a file stops loading.
-    on = write_run(tmp_path, make_run("on", label="DROPPED"))
-    (on / "carriage.json").write_text(
-        json.dumps(
-            {
-                "label": "DROPPED",
-                "knobs": {"NEMOGATE_COMPACT_TOKENS": "6000", "NEMOGATE_COMPACT_KEEP": "6"},
-            }
-        )
+    write_carriage_run(
+        tmp_path,
+        make_run("on", label="DROPPED"),
+        {"NEMOGATE_COMPACT_TOKENS": "6000", "NEMOGATE_COMPACT_KEEP": "6"},
     )
-    off = write_run(tmp_path, make_run("off", label="DROPPED"))
-    (off / "carriage.json").write_text(
-        json.dumps(
-            {
-                "label": "DROPPED",
-                "knobs": {"NEMOGATE_COMPACT_TOKENS": None, "NEMOGATE_COMPACT_KEEP": None},
-            }
-        )
+    write_carriage_run(
+        tmp_path,
+        make_run("off", label="DROPPED"),
+        {"NEMOGATE_COMPACT_TOKENS": None, "NEMOGATE_COMPACT_KEEP": None},
     )
-    write_run(tmp_path, make_run("old", label="DROPPED"))  # carriage.json without knobs
+    old = write_run(tmp_path, make_run("old", label="DROPPED"))
+    (old / "carriage.json").write_text(json.dumps({"label": "DROPPED"}))  # predates the knobs
     write_run(tmp_path, make_run("none"))  # no carriage.json
 
     got = load_runs([tmp_path])
 
     assert {run.record.run_id: run.knobs for run in got.runs} == {
-        "on": ("6000", "6"),
+        "on": (6000, 6),
         "off": (None, None),
         "old": None,
         "none": None,
     }
+
+
+def test_a_carriage_json_with_a_malformed_knob_is_an_unreadable_run(tmp_path):
+    # Breaks if a knob that compaction_from_env rejects (the app would not have started) is read
+    # as compaction off, which would put a run of unknown condition in the off cell.
+    write_carriage_run(
+        tmp_path, make_run("bad", label="DROPPED"), {"NEMOGATE_COMPACT_TOKENS": "lots"}
+    )
+    got = load_runs([tmp_path])
+    assert (got.runs, got.unreadable) == ([], 1)

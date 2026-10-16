@@ -20,6 +20,7 @@ from typing import Any, NamedTuple
 
 import yaml
 
+from common.env import compaction_from_env
 from replay.carriage import Label
 from replay.noop import is_noop_error, text_noop
 from schemas.enums import Arm
@@ -74,9 +75,10 @@ class LoadedRun:
     record: RunRecord
     label: str | None = None  # carriage.json "label"; None if the folder has no carriage.json
     fork_source: str | None = None  # fork.json "source_run_id"; None if the run is not a fork
-    # carriage.json "knobs" (compaction tokens, keep), values as recorded, None = unset; the
-    # whole field is None when the run does not say (no carriage.json, or one without "knobs")
-    knobs: tuple[str | None, str | None] | None = None
+    # The compaction setting the run was made under, as `compaction_from_env` reads carriage.json
+    # "knobs": (tokens, keep), or (None, None) for off. The whole field is None when the run
+    # does not say (no carriage.json, or one without "knobs").
+    knobs: tuple[int | None, int | None] | None = None
 
     @property
     def source_id(self) -> str:
@@ -108,6 +110,14 @@ def _run_dirs(paths: Iterable[Path | str]) -> list[Path]:
     return [found[key] for key in sorted(found)]
 
 
+def _effective_knobs(recorded: Mapping[str, Any]) -> tuple[int | None, int | None]:
+    """The setting the recorded env strings mean, read the way the app reads them (an empty
+    value is unset, keep defaults to 6); ValueError for one the app would have refused."""
+    environ = {name: recorded[name] for name in KNOB_NAMES if recorded.get(name) is not None}
+    setting = compaction_from_env(environ)
+    return (None, None) if setting is None else setting
+
+
 def _read_run(folder: Path) -> LoadedRun | None:
     """The run in `folder`, or None if record.json, fork.json or carriage.json is unusable."""
     try:
@@ -121,7 +131,7 @@ def _read_run(folder: Path) -> LoadedRun | None:
             carriage = json.loads((folder / "carriage.json").read_bytes())
             label = Label(carriage["label"])
             if isinstance(carriage.get("knobs"), dict):
-                knobs = tuple(carriage["knobs"].get(name) for name in KNOB_NAMES)
+                knobs = _effective_knobs(carriage["knobs"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return LoadedRun(record, label=label, fork_source=fork_source, knobs=knobs)
@@ -213,23 +223,23 @@ def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
     return min(groups, key=rank, default=[])
 
 
-def _compaction(knobs: tuple[str | None, str | None] | None) -> dict[str, str | None] | None:
-    """A cell's compaction field: the knobs as recorded, None when the runs do not say."""
+def _compaction(knobs: tuple[int | None, int | None] | None) -> dict[str, int | None] | None:
+    """A cell's compaction field: the effective setting, None when the runs do not say."""
     return None if knobs is None else {"tokens": knobs[0], "keep": knobs[1]}
 
 
-def _knob_rank(knobs: tuple[str | None, str | None] | None) -> tuple[Any, ...]:
+def _knob_rank(knobs: tuple[int | None, int | None] | None) -> tuple[Any, ...]:
     """Cell order within an (arm, operator): compaction off, then unknown, then on."""
     if knobs is None:
-        return (1, "", "")
+        return (1, 0, 0)
     off = knobs == (None, None)
-    return (0 if off else 2, knobs[0] or "", knobs[1] or "")
+    return (0 if off else 2, knobs[0] or 0, knobs[1] or 0)
 
 
 def _cell(
     arm: str,
     operator: str,
-    knobs: tuple[str | None, str | None] | None,
+    knobs: tuple[int | None, int | None] | None,
     runs: Sequence[LoadedRun],
 ) -> dict[str, Any]:
     n = len(runs)
@@ -281,7 +291,7 @@ def _comparison(
     }
 
 
-def _knob_key(cell: Mapping[str, Any]) -> tuple[str | None, str | None] | None:
+def _knob_key(cell: Mapping[str, Any]) -> tuple[int | None, int | None] | None:
     knobs = cell["compaction"]
     return None if knobs is None else (knobs["tokens"], knobs["keep"])
 

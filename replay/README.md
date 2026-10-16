@@ -381,9 +381,11 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   `found == pooled + inconclusive_total`.
 - **Cells.** One per `(constraint, boundary, arm, operator, compaction)`, sorted by arm (natural,
   mutated, block_only, gated), then operator name, then compaction setting (off, not recorded,
-  on). `compaction` is the run's `knobs` from `carriage.json` as `{"tokens", "keep"}` (strings as
-  recorded, null = unset; both null = off), or null for a run that does not say (no
-  `carriage.json`, or one from before the knobs). Runs under different settings are never in one
+  on). `compaction` is the effective setting behind the run's `knobs` in `carriage.json`, read
+  the way the app reads them (`common.env.compaction_from_env`): `{"tokens", "keep"}` as integers,
+  `keep` 6 when it was unset, both null = off (an empty `NEMOGATE_COMPACT_TOKENS` is off too), or
+  null for a run that does not say (no `carriage.json`, or one from before the knobs). A
+  `carriage.json` whose knobs the app would have refused makes the run unreadable. Runs under different settings are never in one
   cell, and a comparison pairs only cells with the same `compaction`. `n` counts every run, forks included; `n_sources`
   counts distinct sources (a fork under `fork.json`'s `source_run_id`, any other run under its
   own id); `clustered` is `n_sources < n`. Nothing is deduplicated: a fork is not an
