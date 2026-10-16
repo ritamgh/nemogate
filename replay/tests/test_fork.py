@@ -26,6 +26,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
 from common.llm import get_model
 from gate import build_middleware
+from gate.tests.stubs import picks
 from oracle import evaluate
 from replay.boundaries import Recording
 from replay.runner import Runner
@@ -46,7 +47,7 @@ REPO = "/repo"
 TARGET = "delegation:planner->coder"
 RULE = "Never touch locked/."
 DESCRIPTION = f"Write /repo/locked/a.txt. {RULE}"
-DROPPED = "Write /repo/locked/a.txt."  # the stub helper's reply: the rule dropped
+DROPPED = "Write /repo/locked/a.txt."  # the delegation once drop removes the rule (sentence 2)
 
 
 def image(n: int) -> str:
@@ -230,7 +231,7 @@ class World:
             return self.clients[-1]
 
         def middleware(run_config):
-            helper = get_model("helper", stub_responses=[DROPPED])
+            helper = get_model("helper", stub_responses=[picks(2)])
             return build_middleware(run_config, helper=helper)
 
         return Runner(
