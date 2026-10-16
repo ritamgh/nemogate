@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "reproducibility": null,
+  "runs": {
+    "found": 16,
+    "pooled": 0,
+    "inconclusive": {
+      "unreadable_record": 0,
+      "not_comparable": 9,
+      "not_exercised": 7
+    }
+  },
+  "honesty": {
+    "constraints_total": 5,
+    "constraints_with_check": 4,
+    "check_share": 0.8,
+    "extraction_recall": null,
+    "inconclusive_total": 16
+  },
+  "constraints": {}
+}
