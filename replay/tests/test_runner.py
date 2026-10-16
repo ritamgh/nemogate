@@ -135,9 +135,17 @@ class FakeGraph:
             ],
         )
         yield SimpleNamespace(
-            metadata={"step": 3}, values={"_summarization_event": event, "messages": [delegation]}
+            config={"configurable": {"checkpoint_id": "ckpt-7"}},
+            parent_config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            metadata={"step": 3},
+            values={"_summarization_event": event, "messages": [delegation]},
         )
-        yield SimpleNamespace(metadata={"step": 0}, values={"messages": []})
+        yield SimpleNamespace(
+            config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            parent_config=None,
+            metadata={"step": 0},
+            values={"messages": []},
+        )
 
 
 def trace_events(rc: RunConfig, *, ledger_hash: str | None = None, bad=None, handoff=None) -> list:

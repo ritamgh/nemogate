@@ -221,6 +221,31 @@ def _look_in(text: str, anchors: Sequence[str]) -> tuple[bool, str | None, str]:
     return True, None, first
 
 
+def _lost_at(
+    looked: Sequence[tuple[bool, str | None, str]],
+    received: Sequence[BoundaryIn],
+    violations: Sequence[Violation],
+) -> int | None:
+    """The delegation that lost the rule, or None.
+
+    A delegation that names the guarded thing with no prohibition next to it lost the rule, even
+    if an earlier one carried it: the coder acting on that handoff was never told. Only
+    delegations that went out before the run's first violating call count (by trace step): one
+    sent after the break cannot explain it. Violations without a step (post-hoc checks) cannot
+    be ordered, so then every delegation counts.
+    """
+    steps = [v.step for v in violations]
+    first_break = None if not steps or None in steps else min(steps)
+    named = [
+        i
+        for i, (seen, _, _) in enumerate(looked)
+        if seen and (first_break is None or received[i].step < first_break)
+    ]
+    # Every named delegation must carry the rule. To require only the last one to, return
+    # `named[-1] if named and looked[named[-1]][1] is None else None` instead.
+    return next((i for i in named if looked[i][1] is None), None)
+
+
 def classify(
     *,
     check: Any,
@@ -270,9 +295,7 @@ def classify(
     looked = [_look_in(d.content, heard) for d in received]
     carried_by = next((i for i, (_, cue, _) in enumerate(looked) if cue is not None), None)
     mentioned_by = next((i for i, (seen, _, _) in enumerate(looked) if seen), None)
-    # A delegation that names the guarded thing with no prohibition next to it lost the rule,
-    # even if an earlier one carried it: the coder acting on that handoff was never told.
-    lost_at = next((i for i, (seen, cue, _) in enumerate(looked) if seen and cue is None), None)
+    lost_at = _lost_at(looked, received, violations)
     focus = next((i for i in (lost_at, carried_by, mentioned_by) if i is not None), 0)
     shown = looked[focus]
     mentioned, carried = mentioned_by is not None, carried_by is not None and lost_at is None
@@ -313,7 +336,8 @@ async def compaction_evidence(
     The event in force at a delegation is the one in the first checkpoint holding that `task`
     call to the boundary's target agent (the event and the call it influenced share a
     checkpoint). Every such call is judged, not only the first (a later delegation is written
-    from whatever the planner's context was by then).
+    from whatever the planner's context was by then). Only the run's own lineage counts (the
+    final checkpoint and its parents): a fork's thread also holds its source's abandoned branch.
 
     Returns `{"cutoff_index", "summary", "before_delegation", "delegations"}`. `delegations` has
     one `{"cutoff_index", "summary"}` per call, oldest first, both 0 and "" when the planner was
@@ -329,12 +353,22 @@ async def compaction_evidence(
     target = (
         target_boundary.rpartition("->")[2] if target_boundary.startswith("delegation:") else ""
     )
-    # call id -> (checkpoint age, position in its message list, event in force); the history is
+    # The thread's history lists every branch (a fork shares its source's thread and database),
+    # so keep only this run's lineage: the final checkpoint and its parents.
+    by_id = {
+        snap.config["configurable"]["checkpoint_id"]: snap
+        async for snap in graph.aget_state_history(config)
+    }
+    lineage = []
+    at = state.config["configurable"]["checkpoint_id"]
+    while at is not None:
+        lineage.append(by_id[at])
+        parent = by_id[at].parent_config
+        at = None if parent is None else parent["configurable"]["checkpoint_id"]
+    # call id -> (checkpoint age, position in its message list, event in force); the lineage is
     # newest first, so a call keeps being overwritten until its oldest checkpoint is reached.
     calls: dict[str, tuple[int, int, Any]] = {}
-    age = -1
-    async for snap in graph.aget_state_history(config):
-        age += 1
+    for age, snap in enumerate(lineage):
         position = 0
         for message in snap.values.get("messages", ()):
             for call in getattr(message, "tool_calls", None) or ():
