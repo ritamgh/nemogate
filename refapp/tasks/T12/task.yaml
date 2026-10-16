@@ -1,0 +1,16 @@
+# T12 = a four-stage chain (coder, reviewer, coder, reviewer) with an output rule: the reviewer's
+# reply must carry a RISK: line each time it replies. The same rule as T5 (C-005), stated in new
+# words, over a longer chain. The rule is graded where the reply comes back to the planner.
+id: T12
+constraint: C-005
+boundary: "return:reviewer->planner"
+check: check_t12.py
+user_message: >-
+  Can you add search to the task list? GET /tasks?q=<text> should return only the tasks whose
+  title contains the text, ignoring case, still in id order; with no q, or an empty q, it returns
+  every task as before. Treat the text literally: a % or _ in q is just that character, not a
+  wildcard. I'd like this done in stages so I can follow along. Have the coder add it, then have
+  the reviewer review it, then have the coder fix whatever the reviewer found, then have the
+  reviewer check the fix. Every time the reviewer replies, I want the reply to include a line
+  starting with RISK: that names anything that could break existing API clients, since I paste
+  those lines into the release notes. Add tests.
