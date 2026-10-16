@@ -2,6 +2,7 @@
 
 The contract is in replay/README.md, section "runner.py". Live use is
 `NEMOGATE_LIVE=1 uv run python -m replay.runner ...`, after `python -m replay.budget`.
+`--top-up` runs only what a runs directory still lacks; `python -m replay.sweep_status` counts it.
 """
 
 import argparse
@@ -12,16 +13,16 @@ import os
 import subprocess
 import sys
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from common import env
+from common import ConfigError, MissingEnvError, SpendCapReached, env
 from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
-from replay import record
+from replay import record, sweep_status
 from replay.app import App, AppTask, pairs
 from replay.boundaries import (
     BoundaryRecorder,
@@ -47,6 +48,10 @@ RUNS_DIR = ROOT / "runs"
 CHECKPOINTS = "checkpoints.sqlite"  # file names in a run folder
 BOUNDARIES = "boundaries.json"
 PREFIX = "prefix.jsonl"  # a fork: the source's trace events before the fork point
+ERROR = "error.json"  # a run that raised: what `arun` writes before it carries on
+TRACEBACK_LINES = 20  # how much of the traceback error.json keeps
+# A failure that no later run can avoid, or that a human must hear about: it stops the sweep.
+STOPS_THE_SWEEP = (SpendCapReached, ConfigError, MissingEnvError)
 
 
 def _default_client() -> Any:
@@ -57,6 +62,38 @@ def _default_client() -> Any:
     env.load_dotenv()
     env.require_env("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID")
     return Contree()
+
+
+@dataclass(frozen=True)
+class RunError:
+    """A run that raised and was written to `<run_dir>/error.json`; `arun` carried on."""
+
+    run_id: str
+    task_id: str
+    arm: str
+    operator: str
+    error_type: str  # fully qualified class name
+
+
+class _Phase:
+    """Where a run is: in setup (run config, ledger, gate, sandbox, graph build), where a failure
+    says the sweep itself is wrong and measures nothing, or executing, where it is an outcome."""
+
+    executing = False
+
+
+def _stops_the_sweep(exc: BaseException) -> bool:
+    """True if `exc`, or anything it was raised from or while handling, is in STOPS_THE_SWEEP."""
+    pending, seen = [exc], set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, STOPS_THE_SWEEP):
+            return True
+        pending += [current.__cause__, current.__context__, *getattr(current, "exceptions", ())]
+    return False
 
 
 class Runner:
@@ -88,6 +125,8 @@ class Runner:
         self.recursion_limit = recursion_limit
         self.allow_dirty = allow_dirty
         self.repo_dir = repo_dir
+        self.records: list[RunRecord] = []  # what the latest `arun` finished
+        self.errors: list[RunError] = []  # and the runs it caught raising
 
     def _default_backend(self, session: Any) -> Any:
         # Imported here so tests never need the SDK.
@@ -104,6 +143,12 @@ class Runner:
             "repo_sha": repo_sha,
             "lockfile_hash": record.lockfile_hash(self.repo_dir / "uv.lock"),
         }
+
+    def reproducibility(self, repo_ref: str = "main") -> dict[str, Any]:
+        """The five fields a run started now would carry; ValueError unless the checkout is
+        `repo_ref` and clean (as `run_one`). Offline."""
+        sha = record.require_checkout_at(repo_ref, self.repo_dir, allow_dirty=self.allow_dirty)
+        return self._reproducibility(sha)
 
     async def run_one(
         self, task: AppTask, arm: Arm, operator: Operator, *, seed: int, repo_ref: str = "main"
@@ -197,9 +242,49 @@ class Runner:
         repro: dict[str, Any],
         fork: "_Fork | None" = None,
     ) -> RunRecord:
+        """One run. If it raises, the traceback goes to `error.txt`. A failure once the agents have
+        started also gets an `error.json`, unless it is one that stops the sweep; a failure in
+        setup never does. The exception is re-raised either way."""
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
+        phase = _Phase()
+        try:
+            return await self._execute(
+                run_id,
+                run_dir,
+                task,
+                arm,
+                operator,
+                seed=seed,
+                repo_ref=repo_ref,
+                repro=repro,
+                fork=fork,
+                phase=phase,
+            )
+        except Exception as exc:
+            text = traceback.format_exc()
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "error.txt").write_text(text, encoding="utf-8")
+            if phase.executing and not _stops_the_sweep(exc):
+                exc.nemogate_run_error = _write_error(  # type: ignore[attr-defined]
+                    run_dir, task, arm, operator, repro, exc, text
+                )
+            raise
 
+    async def _execute(
+        self,
+        run_id: str,
+        run_dir: Path,
+        task: AppTask,
+        arm: Arm,
+        operator: Operator,
+        *,
+        seed: int,
+        repo_ref: str,
+        repro: dict[str, Any],
+        fork: "_Fork | None",
+        phase: _Phase,
+    ) -> RunRecord:
         # The gate loads the FULL ledger from this file (and pins run_config.target_constraint
         # itself), so the hash of the file is the hash the record carries. The oracle checks only
         # the target constraint, so it gets the scoped ledger.
@@ -218,28 +303,25 @@ class Runner:
         )
         record.write_json(run_dir / "run_config.json", run_config)
         if fork is not None:
+            # fork.json first: whatever fails next, the folder is known to be a fork.
+            record.write_json(run_dir / "fork.json", fork.origin)
             # The fork resumes in its own copy, so the recorded run is never written to.
             copy_checkpoints(fork.source_dir / CHECKPOINTS, run_dir / CHECKPOINTS)
-            record.write_json(run_dir / "fork.json", fork.origin)
             (run_dir / PREFIX).write_text(
                 "".join(dump_event_jsonl(e) + "\n" for e in fork.prefix), encoding="utf-8"
             )
 
         client = self.client_factory()
-        try:
-            if fork is None:
-                base = await self.app.base_image(client)
-                start, thread_id = base, run_id
-            else:
-                base, thread_id = fork.recording.base_image, fork.recording.thread_id
-                start = fork.origin.crossing.pre_image
-            session = (await client.images.use(UUID(start))).session()
-            checkpoint_id, crossings, compaction = await self._invoke(
-                session, task, run_config, run_dir, thread_id, fork
-            )
-        except Exception:
-            (run_dir / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-            raise
+        if fork is None:
+            base = await self.app.base_image(client)
+            start, thread_id = base, run_id
+        else:
+            base, thread_id = fork.recording.base_image, fork.recording.thread_id
+            start = fork.origin.crossing.pre_image
+        session = (await client.images.use(UUID(start))).session()
+        checkpoint_id, crossings, compaction = await self._invoke(
+            session, task, run_config, run_dir, thread_id, fork, phase
+        )
         record.write_json(
             run_dir / BOUNDARIES,
             Recording(base_image=base, thread_id=thread_id, crossings=crossings),
@@ -336,6 +418,7 @@ class Runner:
         run_dir: Path,
         thread_id: str,
         fork: "_Fork | None",
+        phase: _Phase,
     ) -> tuple[str, tuple[Crossing, ...], dict[str, Any] | None]:
         """Build the graph on `session` and run the task, from the start or (a fork) from the
         fork point; return the final checkpoint id, the boundary crossings and the planner's
@@ -369,6 +452,7 @@ class Runner:
                 )
                 if fork is None:
                     message = {"role": "user", "content": task.user_message}
+                    phase.executing = True
                     await graph.ainvoke({"messages": [message]}, config=config)
                 else:
                     crossing = fork.origin.crossing
@@ -380,6 +464,7 @@ class Runner:
                         },
                     }
                     await _check_fork_point(graph, start, crossing.tool_call_id)
+                    phase.executing = True
                     await graph.ainvoke(None, config=start)
                 state = await graph.aget_state(config)
                 children = await _children(graph, config) if recorder.crossings({}) else {}
@@ -396,18 +481,35 @@ class Runner:
         operators: Sequence[Operator],
         n: int,
         repo_ref: str = "main",
+        *,
+        seeds: Mapping[sweep_status.Cell, Iterable[int]] | None = None,
     ) -> list[RunRecord]:
         """Every run, one after another: tasks in order, then (arm, operator) pairs, then `n`
-        repetitions with seed = repetition index. Stops at the first exception."""
+        repetitions with seed = repetition index. `seeds` (per (task id, arm, operator) values)
+        replaces `range(n)` for the cells it names: a top-up's seeds, which skip the used ones.
+
+        A run that raises inside its own execution leaves `error.json` in its folder, is added to
+        `self.errors` and the sweep goes on; `self.records` holds the finished ones as they come.
+        Anything else stops the sweep with the exception: an error before a run began (dirty
+        checkout, bad config) and the failures in STOPS_THE_SWEEP, a spend cap above all.
+        """
         by_id = {t.id: t for t in self.app.tasks()}
         tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
-        records = []
+        records: list[RunRecord] = []
+        self.records, self.errors = records, []
         for task in tasks:
             for arm, operator in pairs(arms, operators):
-                for seed in range(n):
-                    records.append(
-                        await self.run_one(task, arm, operator, seed=seed, repo_ref=repo_ref)
-                    )
+                cell_seeds = (seeds or {}).get((task.id, arm.value, operator.value), range(n))
+                for seed in cell_seeds:
+                    try:
+                        records.append(
+                            await self.run_one(task, arm, operator, seed=seed, repo_ref=repo_ref)
+                        )
+                    except Exception as exc:
+                        failure = getattr(exc, "nemogate_run_error", None)
+                        if failure is None:
+                            raise
+                        self.errors.append(failure)
         return records
 
     def run(
@@ -417,8 +519,10 @@ class Runner:
         operators: Sequence[Operator],
         n: int,
         repo_ref: str = "main",
+        *,
+        seeds: Mapping[sweep_status.Cell, Iterable[int]] | None = None,
     ) -> list[RunRecord]:
-        return asyncio.run(self.arun(task_ids, arms, operators, n, repo_ref))
+        return asyncio.run(self.arun(task_ids, arms, operators, n, repo_ref, seeds=seeds))
 
     async def afork(
         self,
@@ -447,6 +551,36 @@ class Runner:
         repo_ref: str = "main",
     ) -> list[RunRecord]:
         return asyncio.run(self.afork(source_run_id, arms, operators, n, repo_ref))
+
+
+def _write_error(
+    run_dir: Path,
+    task: AppTask,
+    arm: Arm,
+    operator: Operator,
+    repro: dict[str, Any],
+    exc: Exception,
+    text: str,
+) -> RunError:
+    """Write `error.json` in `run_dir`: which run it was, under which conditions, and why it
+    raised. The conditions are the reproducibility fields, so a top-up can tell whose attempt it
+    was; the traceback is cut to its last TRACEBACK_LINES lines."""
+    error_type = f"{type(exc).__module__}.{type(exc).__qualname__}"
+    data = {
+        "run_id": run_dir.name,
+        "task_id": task.id,
+        "arm": arm.value,
+        "operator": operator.value,
+        "constraint_id": task.constraint,
+        "boundary": task.boundary,
+        **{k: v for k, v in repro.items() if k != "model_ids"},
+        "model_ids": {str(role): name for role, name in repro["model_ids"].items()},
+        "error_type": error_type,
+        "message": str(exc),
+        "traceback_tail": "\n".join(text.splitlines()[-TRACEBACK_LINES:]),
+    }
+    (run_dir / ERROR).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return RunError(run_dir.name, task.id, arm.value, operator.value, error_type)
 
 
 def _knobs() -> dict[str, str | None]:
@@ -594,6 +728,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="write run folders here instead of runs/ (keep compaction runs apart)",
     )
+    parser.add_argument(
+        "--top-up",
+        action="store_true",
+        help="count the runs --runs-dir already holds for each task, arm and operator under "
+        "today's reproducibility fields (a record or an error counts as one), and run only the "
+        "shortfall to --n",
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the run count and go")
     args = parser.parse_args(argv)
 
@@ -608,7 +749,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             "refusing to run: set NEMOGATE_LIVE=1 (real model calls spend credit)", file=sys.stderr
         )
         return 2
-    planned = len(args.tasks) * len(pairs(args.arms, args.operators)) * args.n
+    sweep: Runner | None = None
+    seeds: dict[sweep_status.Cell, range] | None = None
+    if args.top_up:
+        sweep = default_runner(args.runs_dir)
+        try:
+            repro = sweep.reproducibility(args.repo_ref)
+        except ValueError as exc:
+            print(f"refusing to run: {exc}", file=sys.stderr)
+            return 2
+        cells = sweep_status.top_up_plan(
+            sweep_status.scan(sweep.runs_dir), repro, args.tasks, args.arms, args.operators, args.n
+        )
+        for cell in cells:
+            print(
+                f"{cell.task_id} {cell.arm} {cell.operator}: "
+                f"existing {cell.existing}, planned {cell.planned}"
+            )
+        seeds = {(c.task_id, c.arm, c.operator): c.seeds for c in cells}
+        planned = sum(c.planned for c in cells)
+    else:
+        planned = len(args.tasks) * len(pairs(args.arms, args.operators)) * args.n
     print(f"planned runs: {planned}")
     if not args.yes:
         print(
@@ -617,19 +778,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    if args.runs_dir is None:
-        records = run(args.tasks, args.arms, args.operators, args.n, args.repo_ref)
-    else:
-        records = default_runner(args.runs_dir).run(
-            args.tasks, args.arms, args.operators, args.n, args.repo_ref
-        )
+    sweep = sweep or default_runner(args.runs_dir)
+    extra = {} if seeds is None else {"seeds": seeds}
+    try:
+        records = sweep.run(args.tasks, args.arms, args.operators, args.n, args.repo_ref, **extra)
+    except SpendCapReached as exc:
+        print(f"stopped: {exc}", file=sys.stderr)
+        _print_summary(sweep.records, sweep.errors, "before the stop")
+        return 3
     for r in records:
         print(
             f"{r.run_id} task={r.task_id} arm={r.arm.value} operator={r.operator.value} "
             f"violations={','.join(r.violations) or '-'} task_success={r.task_success} "
             f"cost_usd={r.cost_usd:.4f}"
         )
-    return 0
+    _print_summary(records, sweep.errors)
+    return 1 if sweep.errors else 0
+
+
+def _print_summary(
+    records: Sequence[RunRecord], errors: Sequence[RunError], when: str = ""
+) -> None:
+    print(f"runs: {len(records)} ok, {len(errors)} errored" + (f" {when}" if when else ""))
+    for e in errors:
+        print(
+            f"errored {e.run_id} task={e.task_id} arm={e.arm} operator={e.operator} "
+            f"error_type={e.error_type}"
+        )
 
 
 if __name__ == "__main__":
