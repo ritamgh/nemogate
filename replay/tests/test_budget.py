@@ -140,13 +140,15 @@ def _blocking_plan(**kw) -> Plan:
 def test_plan_of_a_paired_sweep_pays_for_the_natural_source_of_every_fork():
     # 6.0 / (0.05 * (2 forks + 1 natural source) * 1 task) = 40. Breaks if the sources are left
     # out of the divisor (that gives 60 and spends a third more than the check printed).
-    p = _blocking_plan()
+    p = _blocking_plan(paired=True)
     assert (p.pairs, p.source_runs, p.n) == (2, 1, 40)
     assert p.planned_usd == pytest.approx(6.0)
 
 
 def test_plan_of_independent_runs_has_no_source_runs():
-    p = _blocking_plan(independent=True)
+    # Breaks if the plan assumes paired forks unless told otherwise: the runner and the repair
+    # loop make independent runs by default, so that would price them 50% too high.
+    p = _blocking_plan()
     assert (p.pairs, p.source_runs, p.n) == (2, 0, 60)
 
 
@@ -245,13 +247,39 @@ def test_cli_requires_exactly_one_cost_source(spend_log, tmp_path):
         main([*KILL_GATE, "--tasks", "A", "--cost-per-run", "0.05", "--from-runs", str(tmp_path)])
 
 
-def test_cli_counts_the_natural_sources_of_a_paired_sweep_unless_told_independent(
-    spend_log, capsys
-):
+def test_cli_counts_the_natural_sources_only_of_a_paired_sweep(spend_log, capsys):
     blocking = ["--bucket", "kill_gate", "--arms", "block_only", "gated", "--operators", "drop"]
-    assert main([*blocking, "--tasks", "T", "--cost-per-run", "0.05"]) == 0
+    assert main([*blocking, "--tasks", "T", "--cost-per-run", "0.05", "--paired"]) == 0
     paired = capsys.readouterr().out.splitlines()
     assert "extra natural source runs per repetition: 1" in paired
     assert paired[-1] == "N per arm per task: 40"
-    assert main([*blocking, "--tasks", "T", "--cost-per-run", "0.05", "--independent"]) == 0
+    assert main([*blocking, "--tasks", "T", "--cost-per-run", "0.05"]) == 0
     assert capsys.readouterr().out.splitlines()[-1] == "N per arm per task: 60"
+
+
+def test_cli_from_runs_averages_full_runs_and_leaves_fork_records_out(spend_log, tmp_path, capsys):
+    # A fork's cost_usd covers only the part after the boundary. Breaks if the mean includes
+    # it: (0.20 + 0.05) / 2 = 0.125 gives N 24 where the full runs' 0.20 gives N 15.
+    runs = tmp_path / "runs"
+    for name, cost, is_fork in (("r-full", 0.20, False), ("r-fork", 0.05, True)):
+        (runs / name).mkdir(parents=True)
+        (runs / name / "record.json").write_text(
+            json.dumps(_record(name, cost).model_dump(mode="json"))
+        )
+        if is_fork:
+            (runs / name / "fork.json").write_text("{}")
+    assert main([*KILL_GATE, "--tasks", "A", "--from-runs", str(runs)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "cost per run usd: 0.2000" in lines
+    assert lines[-1] == "N per arm per task: 15"
+
+
+def test_cli_from_runs_with_only_fork_records_has_nothing_to_average(spend_log, tmp_path):
+    runs = tmp_path / "runs"
+    (runs / "r-fork").mkdir(parents=True)
+    (runs / "r-fork" / "record.json").write_text(
+        json.dumps(_record("r-fork", 0.05).model_dump(mode="json"))
+    )
+    (runs / "r-fork" / "fork.json").write_text("{}")
+    with pytest.raises(SystemExit):
+        main([*KILL_GATE, "--tasks", "A", "--from-runs", str(runs)])

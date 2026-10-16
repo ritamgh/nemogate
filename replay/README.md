@@ -289,7 +289,7 @@ then `n` repetitions with `seed = <repetition index>`, sequential, stops at the 
 defaults (live, after `python -m replay.budget`).
 
 `apaired(task_ids, arms, operators, n, repo_ref)` is the arm comparison on shared handoffs, and
-what `python -m replay.runner` runs by default when `arms` holds anything but `natural`. For each
+what `python -m replay.runner --paired` runs (without the flag every arm is its own full run). For each
 task and each seed in `range(n)` it runs ONE natural, unmutated run (the source; it is the
 natural arm when that is among `arms`) and then `fork_one`s it once per other (arm, operator)
 pair with the same seed. Each source thus has one fork per compared arm, all with the same
@@ -298,7 +298,18 @@ the boundary (on Oct 16 separate recordings gave the arms different planner dele
 cell's `n_sources` equals its `n`. The sources are returned and cost like any run. Errors as in
 `arun`; a source that errored gets no forks; a source that never crossed its boundary
 (`NoForkPoint`, a `ValueError` from `fork_one`) goes to `Runner.unforkable` and gets no forks.
-`paired` is its `asyncio.run` wrapper.
+Either way every compared arm loses that seed: `Runner.not_forked` counts the forks never made
+per `(arm, operator)`, and the CLI prints `forks not made: <arm> <operator> <k>, ...`. A fork
+that errored in its own run is in `Runner.errors` as usual. `paired` is its `asyncio.run` wrapper.
+
+**A fork record is partial.** A fork has its own run id and replays only the part after the
+boundary, so its `cost_usd` and `tokens` cover that part alone; the prefix was paid for by its
+source. In a paired sweep the natural cell's cost is therefore the full cost of the sources while
+the other cells' costs are post-boundary only, and a cell that mixes forks with independent runs
+(for instance `--top-up` after a paired pilot, which counts non-fork runs only) pools two
+different measurements without a flag. Do not compare `cost_usd` or `tokens` across cells of a
+paired sweep, and keep paired pilots in their own `--runs-dir`. `python -m replay.budget
+--from-runs` leaves fork records out of its mean for this reason.
 
 ## sweep_status.py
 
@@ -323,13 +334,13 @@ SHARES = {"dev": 0.20, "kill_gate": 0.10, "main_sweep": 0.40, "repair": 0.15, "f
 def runs_per_cell(bucket_usd: float, cost_per_run: float, n_pairs: int, n_tasks: int) -> int
     # floor(bucket / (cost_per_run * n_pairs * n_tasks)); ValueError unless all inputs > 0
 def plan(*, bucket: str, cost_per_run: float, arms, operators, n_tasks: int, config: AppConfig,
-         spent_usd: float, independent: bool = False) -> Plan
+         spent_usd: float, paired: bool = False) -> Plan
     # Plan(bucket, bucket_usd, cost_per_run, pairs, source_runs, n_tasks, n, planned_usd,
     #      spent_usd, stop_usd, capped): n from runs_per_cell with
     # n_pairs = len(app.pairs(...)) + source_runs; source_runs is 1 when the plan has a
-    # non-natural pair, `independent` is False and (natural, none) is not itself a pair (the
-    # natural source runs `apaired` makes only to fork from), else 0. Every run is priced as a
-    # full run.
+    # non-natural pair, `paired` is True and (natural, none) is not itself a pair (the
+    # natural source runs `apaired` makes only to fork from), else 0. Every run is priced at
+    # cost_per_run, which must be a full run's cost.
     # stop_usd = stop_at_fraction * total_usd; if spent + planned would pass stop_usd, n is
     # lowered to the largest value that fits and capped=True.
 def mean_cost(records: Iterable[RunRecord]) -> float     # ValueError on none
@@ -524,13 +535,16 @@ delegations to the same agent are not told apart; planner delegations here are s
   `errored <run_id> task=.. arm=.. operator=.. error_type=..`. Exit code 1 if any run errored,
   0 if none did, 3 if the spend cap stopped the sweep (it prints `stopped: <message>` on stderr
   and `runs: X ok, Y errored before the stop`).
-- `--independent`: run every arm as its own full run (`arun`), as before. Without it, a sweep
-  whose pairs include a non-natural arm is paired (`apaired`): it prints `planned runs: N`
-  (natural sources plus forks) and `paired: S natural sources, F forks`, and exits 1 if a source
-  could not be forked (`no fork point, not forked: <run_id>` per source). `--top-up` counts
-  independent runs only (forks are left out), so it refuses a paired sweep with exit 2.
-  `python -m replay.budget` takes the same `--independent` and prices the natural sources
-  (`extra natural source runs per repetition`).
+- `--paired`: fork every arm other than natural from one natural source per seed (`apaired`)
+  instead of running each arm as its own full run (`arun`, the default; the repair loop's
+  re-runs and `docs/SPEC.md`'s main sweep rely on that). A paired sweep prints
+  `planned runs: N` (natural sources plus forks) and `paired: S natural sources, F forks`, and
+  exits 1 if a source errored or could not be forked (`no fork point, not forked: <run_id>` per
+  source, and `forks not made: <arm> <operator> <k>, ...`). Fork records are partial (see
+  `apaired`). `--top-up` counts independent runs only (forks are left out), so it refuses
+  `--paired` with exit 2. `python -m replay.budget` takes the same `--paired` and prices the
+  natural sources (`extra natural source runs per repetition`); its `--from-runs` mean leaves
+  fork records out.
 - `--top-up` (with `--runs-dir`, default `runs/`): for each (task, arm, operator) it counts the
   attempts already in the runs dir under THIS invocation's five reproducibility fields (a folder
   with `record.json` or `error.json`; orphans and forks do not count; an error counts, since

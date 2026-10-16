@@ -745,6 +745,8 @@ def test_apaired_skips_the_forks_of_an_errored_source_and_goes_on(tmp_path):
     ]
     assert [e.run_id for e in h.runner.errors] == ["r-err-0"]
     assert len(out) == 2
+    # Catches the lost sample being invisible: the gated cell ends one short of the other seeds.
+    assert dict(h.runner.not_forked) == {(Arm.gated, Operator.drop): 1}
 
 
 def test_apaired_reports_a_source_that_never_crossed_the_boundary_and_goes_on(tmp_path):
@@ -763,6 +765,11 @@ def test_apaired_reports_a_source_that_never_crossed_the_boundary_and_goes_on(tm
         ("fork", "r-src-X1-1", Arm.gated, Operator.drop, 1),
     ]
     assert h.runner.unforkable == ["r-src-X1-0"]
+    # Both arms lose seed 0, including the one never tried after the refusal.
+    assert dict(h.runner.not_forked) == {
+        (Arm.block_only, Operator.drop): 1,
+        (Arm.gated, Operator.drop): 1,
+    }
 
 
 def test_apaired_keeps_the_other_arm_when_one_fork_errors(tmp_path):
@@ -846,7 +853,6 @@ CLI_ARGS = [
     "--arms", "natural", "gated",
     "--operators", "none", "drop",
     "--n", "3",
-    "--independent",
 ]  # fmt: skip
 
 
@@ -950,12 +956,12 @@ PAIRED_ARGS = [
 ]  # fmt: skip
 
 
-def test_cli_pairs_the_arms_by_default_and_counts_the_natural_sources(monkeypatch, capsys):
-    """Catches a default sweep that runs each arm from its own recording, or a run count that
+def test_cli_with_paired_forks_the_arms_and_counts_the_natural_sources(monkeypatch, capsys):
+    """Catches a --paired sweep that runs each arm from its own recording, or a run count that
     leaves out the natural source runs the forks need (they cost like any other run)."""
     monkeypatch.setattr(runner, "is_live", lambda: True)
     monkeypatch.setattr(runner, "run", _no_run)
-    assert runner.main(PAIRED_ARGS) == 1
+    assert runner.main([*PAIRED_ARGS, "--paired"]) == 1
     out = capsys.readouterr()
     # 2 tasks x 3 seeds = 6 natural sources, each forked into 2 arms = 12 forks
     assert "planned runs: 18" in out.out
@@ -963,12 +969,61 @@ def test_cli_pairs_the_arms_by_default_and_counts_the_natural_sources(monkeypatc
     assert "python -m replay.budget" in out.err + out.out
 
 
-def test_cli_independent_runs_each_arm_from_its_own_recording(monkeypatch, capsys):
+def test_cli_runs_each_arm_from_its_own_recording_unless_asked_to_pair(monkeypatch, capsys):
+    """Catches paired forks becoming the default: they put fork records (partial cost, shared
+    prefix) in every sweep's stats and double the runs of any caller that does not know."""
     monkeypatch.setattr(runner, "is_live", lambda: True)
-    assert runner.main([*PAIRED_ARGS, "--independent"]) == 1
+    assert runner.main(PAIRED_ARGS) == 1
     out = capsys.readouterr().out
     assert "planned runs: 12" in out
     assert "paired" not in out
+
+
+def test_the_repair_loops_command_line_still_runs_independent_arms(tmp_path, monkeypatch, capsys):
+    """Catches the runner's default changing under repair.worktree, which pools every
+    record.json of its re-run: natural sources in there would dilute the arm being repaired and
+    double the spend the repair CLI priced."""
+    from repair.patch import Patch
+    from repair.worktree import WorktreeRerun
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.txt").write_text("x\n", encoding="utf-8")
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    for args in (["init", "-q", "-b", "main"], ["add", "."], [*ident, "commit", "-q", "-m", "s"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    cmds: list[list[str]] = []
+    rerun = WorktreeRerun(
+        repo_dir=repo,
+        worktrees_dir=tmp_path / "trees",
+        tasks=["X1"],
+        arms=["mutated"],
+        operators=["drop"],
+        n=4,
+        run_cmd=lambda cmd, cwd, env: cmds.append(cmd),
+    )
+    rerun(Patch(fix_id="f", edits=[], files_after={"a.txt": "y\n"}))
+    argv = cmds[0][cmds[0].index("replay.runner") + 1 :]
+
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    got = []
+
+    class FakeDefaultRunner:
+        errors: list = []
+        unforkable: list = []
+        not_forked: dict = {}
+
+        def paired(self, *args):
+            raise AssertionError("the repair loop's re-run must not be paired")
+
+        def run(self, task_ids, arms, operators, n, repo_ref, **kwargs):
+            got.append((task_ids, arms, operators, n))
+            return []
+
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: FakeDefaultRunner())
+    assert runner.main(argv) == 0
+    assert got == [(["X1"], [Arm.mutated], [Operator.drop], 4)]
+    assert "planned runs: 4\n" in capsys.readouterr().out
 
 
 def test_cli_with_yes_runs_the_paired_sweep_and_lists_unforkable_sources(monkeypatch, capsys):
@@ -978,6 +1033,7 @@ def test_cli_with_yes_runs_the_paired_sweep_and_lists_unforkable_sources(monkeyp
     class FakeDefaultRunner:
         errors: list = []
         unforkable = ["r-no-delegation"]
+        not_forked = {(Arm.block_only, Operator.drop): 2, (Arm.gated, Operator.drop): 3}
 
         def paired(self, task_ids, arms, operators, n, repo_ref):
             got.append((task_ids, arms, operators, n, repo_ref))
@@ -987,9 +1043,13 @@ def test_cli_with_yes_runs_the_paired_sweep_and_lists_unforkable_sources(monkeyp
             raise AssertionError("a paired sweep must not run independent arms")
 
     monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: FakeDefaultRunner())
-    assert runner.main([*PAIRED_ARGS, "--yes"]) == 1  # a source without a fork point is a shortfall
+    assert runner.main([*PAIRED_ARGS, "--paired", "--yes"]) == 1  # no fork point is a shortfall
     assert got == [(["X1", "X2"], [Arm.block_only, Arm.gated], [Operator.drop], 3, "main")]
-    assert "no fork point, not forked: r-no-delegation" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "no fork point, not forked: r-no-delegation" in out
+    # Catches forks lost to an errored or unforkable source going unreported: each cell's n ends
+    # short and nothing but this line says by how many.
+    assert "forks not made: block_only drop 2, gated drop 3" in out
 
 
 def test_cli_top_up_refuses_a_paired_sweep(monkeypatch, capsys):
@@ -997,8 +1057,8 @@ def test_cli_top_up_refuses_a_paired_sweep(monkeypatch, capsys):
     sources it already has."""
     monkeypatch.setattr(runner, "is_live", lambda: True)
     monkeypatch.setattr(runner, "default_runner", _no_run)
-    assert runner.main([*PAIRED_ARGS, "--top-up", "--yes"]) == 2
-    assert "--independent" in capsys.readouterr().err
+    assert runner.main([*PAIRED_ARGS, "--paired", "--top-up", "--yes"]) == 2
+    assert "--paired" in capsys.readouterr().err
 
 
 def git_repo_ignoring_runs(tmp_path: Path) -> Path:

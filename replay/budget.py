@@ -59,7 +59,7 @@ def plan(
     n_tasks: int,
     config: AppConfig,
     spent_usd: float,
-    independent: bool = False,
+    paired: bool = False,
 ) -> Plan:
     if bucket not in SHARES:
         raise ValueError(f"unknown bucket {bucket!r}; choose from {', '.join(SHARES)}")
@@ -67,15 +67,16 @@ def plan(
     n_pairs = len(run_pairs)
     if n_pairs == 0:
         raise ValueError("no (arm, operator) pair to run: natural pairs only with none")
-    # `python -m replay.runner` forks every non-natural pair from a natural source run unless
-    # --independent. A natural pair in the plan is already that source; otherwise it is extra.
+    # `python -m replay.runner --paired` forks every non-natural pair from a natural source run.
+    # A natural pair in the plan is already that source; otherwise it is extra.
     forks = any(a is not Arm.natural for a, _ in run_pairs)
-    source_runs = int(forks and not independent and (Arm.natural, Operator.none) not in run_pairs)
+    source_runs = int(forks and paired and (Arm.natural, Operator.none) not in run_pairs)
     bucket_usd = SHARES[bucket] * config.budget.total_usd
     n = runs_per_cell(bucket_usd, cost_per_run, n_pairs + source_runs, n_tasks)
     stop_usd = config.budget.stop_at_fraction * config.budget.total_usd
-    # Every run is priced as a full run; a fork replays only the part after the boundary, so
-    # this over-counts a paired sweep a little, never under-counts it.
+    # Every run is priced at `cost_per_run`, which must be the cost of a full run (--from-runs
+    # leaves fork records out for that reason): a fork replays only the part after the boundary,
+    # so a paired sweep is over-counted a little, never under-counted.
     unit = cost_per_run * (n_pairs + source_runs) * n_tasks
     n_fit = _floor((stop_usd - spent_usd) / unit)
     capped = n_fit < n
@@ -118,14 +119,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--tasks", required=True, nargs="+", help="task ids; only counted")
     parser.add_argument(
-        "--independent",
+        "--paired",
         action="store_true",
-        help="count runs as `python -m replay.runner --independent` makes them. Without it the "
-        "arms other than natural are forks of a natural source run, and that run is paid for",
+        help="count runs as `python -m replay.runner --paired` makes them: the arms other than "
+        "natural are forks of a natural source run, and that run is paid for",
     )
     cost = parser.add_mutually_exclusive_group(required=True)
     cost.add_argument("--cost-per-run", type=_positive, help="USD per run")
-    cost.add_argument("--from-runs", type=Path, help="dir whose */record.json give the mean cost")
+    cost.add_argument(
+        "--from-runs",
+        type=Path,
+        help="dir whose */record.json give the mean cost; fork records (a fork.json beside them) "
+        "are left out, as they cost only the part after the boundary",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -133,6 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             records = [
                 RunRecord.model_validate_json(p.read_text(encoding="utf-8"))
                 for p in sorted(args.from_runs.glob("*/record.json"))
+                if not (p.parent / "fork.json").exists()
             ]
             cost_per_run = mean_cost(records)
         else:
@@ -147,7 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             n_tasks=len(args.tasks),
             config=load_config(_CONFIG_PATH),
             spent_usd=total_spent(),
-            independent=args.independent,
+            paired=args.paired,
         )
     except ValueError as exc:
         parser.error(str(exc))
