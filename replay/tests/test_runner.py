@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import types
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -963,6 +964,44 @@ def test_carriage_json_is_unknown_when_nothing_was_delegated(tmp_path, monkeypat
     assert carriage["knobs"] == {"NEMOGATE_COMPACT_TOKENS": None, "NEMOGATE_COMPACT_KEEP": None}
 
 
+# ---- timing.json ------------------------------------------------------------------------------
+
+
+def fake_clock(monkeypatch, *stamps):
+    """_utcnow returns these datetimes in order: the start of the run, then its end."""
+    times = iter(stamps)
+    monkeypatch.setattr(runner, "_utcnow", lambda: next(times))
+
+
+def test_a_finished_run_writes_timing_json_with_start_end_and_seconds(tmp_path, monkeypatch):
+    # Breaks if wall time is not recorded per run, or is recorded as the wrong span.
+    fake_clock(
+        monkeypatch,
+        datetime(2026, 10, 16, 13, 0, 0, tzinfo=UTC),
+        datetime(2026, 10, 16, 13, 2, 17, 500000, tzinfo=UTC),
+    )
+    h = Harness(tmp_path)
+    asyncio.run(h.run_one("X1", Arm.gated, Operator.drop, seed=3))
+    assert json.loads((h.run_dir() / "timing.json").read_text()) == {
+        "start": "2026-10-16T13:00:00+00:00",
+        "end": "2026-10-16T13:02:17.500000+00:00",
+        "seconds": 137.5,
+    }
+
+
+def test_a_crashed_run_also_gets_timing_json(tmp_path, monkeypatch):
+    # Breaks if an errored run's time is lost: it was spent like any other.
+    fake_clock(
+        monkeypatch,
+        datetime(2026, 10, 16, 13, 0, 0, tzinfo=UTC),
+        datetime(2026, 10, 16, 13, 0, 42, tzinfo=UTC),
+    )
+    h = Harness(tmp_path, {"raises": "boom"})
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(h.run_one("X1", Arm.gated, Operator.drop, seed=3))
+    assert json.loads((h.run_dir() / "timing.json").read_text())["seconds"] == 42.0
+
+
 # ---- a sweep carries on past a crashed run ----------------------------------------------------
 
 
@@ -1002,6 +1041,7 @@ def test_arun_carries_on_past_a_run_that_raises_and_writes_error_json(tmp_path):
         "ledger_hash": LEDGER_HASH,
         "repo_sha": head_sha(),
         "lockfile_hash": hashlib.sha256((ROOT / "uv.lock").read_bytes()).hexdigest()[:12],
+        "cost_usd": 0.0,
         "error_type": "builtins.ValueError",
         "message": "boom in run 2",
         "traceback_tail": data["traceback_tail"],
@@ -1027,6 +1067,15 @@ def test_error_json_keeps_only_the_last_twenty_traceback_lines(tmp_path):
     runner._write_error(run_dir, task, Arm.natural, Operator.none, repro, error, text)
     tail = json.loads((run_dir / "error.json").read_text())["traceback_tail"].splitlines()
     assert tail == [*(f"frame {i}" for i in range(81, 100)), "ValueError: deep"]
+
+
+def test_error_json_records_what_the_crashed_run_spent(tmp_path):
+    # Breaks if a run that raised after spending leaves no trace of the money: error.json must
+    # carry the run's spend-log total (0.04 helper spend made while the gate was built).
+    h = Harness(tmp_path, {"raises": "boom", "spend_in_middleware": True})
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(h.run_one("X1", Arm.gated, Operator.drop, seed=3))
+    assert json.loads((h.run_dir() / "error.json").read_text())["cost_usd"] == pytest.approx(0.04)
 
 
 def test_a_failure_before_the_run_folder_exists_stops_the_sweep_and_keeps_the_traceback(

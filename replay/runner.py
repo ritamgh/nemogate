@@ -15,6 +15,7 @@ import sys
 import traceback
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -48,6 +49,7 @@ RUNS_DIR = ROOT / "runs"
 CHECKPOINTS = "checkpoints.sqlite"  # file names in a run folder
 BOUNDARIES = "boundaries.json"
 PREFIX = "prefix.jsonl"  # a fork: the source's trace events before the fork point
+TIMING = "timing.json"  # a run's wall time; stats reads it (older run folders have none)
 ERROR = "error.json"  # a run that raised: what `arun` writes before it carries on
 TRACEBACK_LINES = 20  # how much of the traceback error.json keeps
 # A failure that no later run can avoid, or that a human must hear about: it stops the sweep.
@@ -244,8 +246,9 @@ class Runner:
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
         phase = _Phase()
+        started = _utcnow()
         try:
-            return await self._execute(
+            run_record = await self._execute(
                 run_id,
                 run_dir,
                 task,
@@ -265,7 +268,10 @@ class Runner:
                 exc.nemogate_run_error = _write_error(  # type: ignore[attr-defined]
                     run_dir, task, arm, operator, repro, exc, text
                 )
+                _write_timing(run_dir, started)
             raise
+        _write_timing(run_dir, started)
+        return run_record
 
     async def _execute(
         self,
@@ -571,12 +577,29 @@ def _write_error(
         "boundary": task.boundary,
         **{k: v for k, v in repro.items() if k != "model_ids"},
         "model_ids": {str(role): name for role, name in repro["model_ids"].items()},
+        "cost_usd": run_totals(run_dir.name)[1],  # spent even though the run was not graded
         "error_type": error_type,
         "message": str(exc),
         "traceback_tail": "\n".join(text.splitlines()[-TRACEBACK_LINES:]),
     }
     (run_dir / ERROR).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return RunError(run_dir.name, task.id, arm.value, operator.value, error_type)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _write_timing(run_dir: Path, started: datetime) -> None:
+    """Write `timing.json`: when the run began and ended and how many seconds that was. It
+    covers sandbox setup and the checks after the agents, not only the agents."""
+    ended = _utcnow()
+    data = {
+        "start": started.isoformat(),
+        "end": ended.isoformat(),
+        "seconds": round((ended - started).total_seconds(), 3),
+    }
+    (run_dir / TIMING).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _knobs() -> dict[str, str | None]:

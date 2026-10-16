@@ -124,6 +124,16 @@ def dataset() -> list[tuple[LoadedRun, bool]]:
     return [(run, run.fork_source is not None) for run in runs]
 
 
+def plain_metrics(n, mean):
+    """arm_metrics of runs with no trace and no timing.json: cost only, the time is unknown."""
+    cost = {"n": n, "mean": mean, "lo": mean if n > 1 else None, "hi": mean if n > 1 else None}
+    wall = {"n": 0, "mean": None, "lo": None, "hi": None, "unknown": n}
+    return {"cost": cost, "wall_seconds": wall, "attempt_rate": None, "blocks": None}
+
+
+NO_ERRORED = {"count": 0, "cost_usd": 0.0, "cost_unknown": 0, "by_arm": {}}
+
+
 def cell(
     arm,
     operator,
@@ -134,6 +144,7 @@ def cell(
     successes,
     success,
     cost,
+    mean,
     by_label=None,
     not_exercised=0,
     compaction=None,
@@ -150,6 +161,7 @@ def cell(
         "successes": successes,
         "success": dict(zip(("rate", "lo", "hi"), success, strict=True)),
         "cost_usd": cost,
+        "arm_metrics": plain_metrics(n, mean),
     }
     if by_label is not None:  # natural cells only
         out["violations_by_label"] = by_label
@@ -191,7 +203,7 @@ def comparison(name, operator, a, b, metric, diff, lo, hi, compaction=None):
 #     lo = 0.5 - sqrt(0.657628^2 + 0.405478^2) = 0.5 - 0.772586 = -0.272586 -> -0.2726
 #     hi = 0.5 + sqrt(0^2 + 0.405478^2) = 0.905478 -> 0.9055
 EXPECTED = {
-    "format_version": 1,
+    "format_version": 2,
     "reproducibility": GROUP,
     "runs": {
         "found": 16,
@@ -202,6 +214,7 @@ EXPECTED = {
             "mutation_noop": 0,
             "not_comparable": 1,
         },
+        "errored_cost": NO_ERRORED,
     },
     "honesty": {
         "constraints_total": 2,
@@ -229,6 +242,7 @@ EXPECTED = {
                             2,
                             (0.5, 0.15, 0.85),
                             0.4,
+                            0.1,
                             by_label={"unlabelled": 2},  # nat-1 and fork-1 have no carriage.json
                         ),
                         cell(
@@ -241,6 +255,7 @@ EXPECTED = {
                             0,
                             (0.0, 0.0, 0.4899),
                             1.0,
+                            0.25,
                         ),
                         cell(
                             "mutated",
@@ -251,6 +266,7 @@ EXPECTED = {
                             (1.0, 0.2065, 1.0),
                             1,
                             (1.0, 0.2065, 1.0),
+                            0.0625,
                             0.0625,
                         ),
                         cell(
@@ -263,6 +279,7 @@ EXPECTED = {
                             1,
                             (0.5, 0.0945, 0.9055),
                             0.0625,
+                            0.0312,
                         ),
                         cell(
                             "gated",
@@ -274,6 +291,7 @@ EXPECTED = {
                             2,
                             (1.0, 0.3424, 1.0),
                             0.25,
+                            0.125,
                         ),
                     ],
                     "comparisons": [
@@ -328,6 +346,7 @@ EXPECTED = {
                             (1.0, 0.2065, 1.0),
                             0,
                             (0.0, 0.0, 0.7935),
+                            0.5,
                             0.5,
                         ),
                     ],
@@ -500,6 +519,7 @@ def test_aggregate_counts_not_exercised_only_inside_the_pooled_group():
             "mutation_noop": 0,
             "not_comparable": 1,
         },
+        "errored_cost": NO_ERRORED,
     }
 
 
@@ -507,7 +527,7 @@ def test_aggregate_empty_input_is_a_valid_result_of_zeros():
     # Breaks if no runs and no constraints crash, or check_share is 0 or NaN instead of null.
     got = aggregate([], unreadable=0, ledger=EMPTY_LEDGER, extraction_recall=None)
     assert got == {
-        "format_version": 1,
+        "format_version": 2,
         "reproducibility": None,
         "runs": {
             "found": 0,
@@ -518,6 +538,7 @@ def test_aggregate_empty_input_is_a_valid_result_of_zeros():
                 "mutation_noop": 0,
                 "not_comparable": 0,
             },
+            "errored_cost": NO_ERRORED,
         },
         "honesty": {
             "constraints_total": 0,
@@ -814,6 +835,7 @@ def test_aggregate_counts_errored_runs_as_inconclusive_run_error():
             "mutation_noop": 0,
             "not_comparable": 0,
         },
+        "errored_cost": NO_ERRORED,
     }
     assert got["honesty"]["inconclusive_total"] == 3
 

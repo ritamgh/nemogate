@@ -4,7 +4,9 @@
 reads run folders (record.json, and fork.json / carriage.json when present; a folder with
 error.json and no record.json is an errored run) and writes the
 results file the report page reads. The format is in replay/README.md, section "stats.py".
-No model call, no sandbox, no network. Loading (`load_runs`) is separate from the arithmetic
+Each run folder may also have `trace.jsonl` and `timing.json`; they feed the per-arm numbers
+(cost, wall time, attempts, blocks) of `replay.arm_metrics`. No model call, no sandbox, no
+network. Loading (`load_runs`) is separate from the arithmetic
 (`aggregate`), which takes plain objects and touches no file.
 """
 
@@ -21,31 +23,21 @@ from typing import Any, NamedTuple
 import yaml
 
 from common.env import compaction_from_env
+from common.spend import run_totals
+from replay.arm_metrics import RunFacts, cell_metrics, errored_cost
+from replay.blocks import run_blocks
 from replay.carriage import Label
+from replay.intervals import Z, rate_stat, round4, wilson
 from replay.noop import is_noop_error, text_noop
 from schemas.enums import Arm
 from schemas.ledger import Ledger, load_ledger_yaml
 from schemas.run import RunRecord, is_comparable
+from schemas.trace import Event, parse_trace_jsonl
 
-FORMAT_VERSION = 1
-Z = 1.96  # 95% two-sided
-DECIMALS = 4
+FORMAT_VERSION = 2  # 2: cells gain arm_metrics, runs gains errored_cost
 UNLABELLED = "unlabelled"  # key for a violating natural run with no carriage.json
 KNOB_NAMES = ("NEMOGATE_COMPACT_TOKENS", "NEMOGATE_COMPACT_KEEP")  # as replay.runner records them
 ARM_ORDER = {arm.value: i for i, arm in enumerate(Arm)}  # natural, mutated, block_only, gated
-
-
-def wilson(k: int, n: int, z: float = Z) -> tuple[float, float]:
-    """Wilson score interval (lo, hi) for k successes in n trials, clamped to [0, 1]."""
-    if n < 1:
-        raise ValueError(f"n must be at least 1, got {n}")
-    if not 0 <= k <= n:
-        raise ValueError(f"k must be between 0 and n={n}, got {k}")
-    p = k / n
-    denom = 1 + z * z / n
-    centre = (p + z * z / (2 * n)) / denom
-    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
-    return max(0.0, centre - half), min(1.0, centre + half)
 
 
 def newcombe_diff(k1: int, n1: int, k2: int, n2: int, z: float = Z) -> tuple[float, float, float]:
@@ -59,13 +51,8 @@ def newcombe_diff(k1: int, n1: int, k2: int, n2: int, z: float = Z) -> tuple[flo
     return diff, lo, hi
 
 
-def _round(value: float) -> float:
-    return round(value, DECIMALS) + 0.0  # + 0.0 turns -0.0 into 0.0
-
-
-def _rate(k: int, n: int) -> dict[str, float]:
-    lo, hi = wilson(k, n)
-    return {"rate": _round(k / n), "lo": _round(lo), "hi": _round(hi)}
+_round = round4  # the helpers moved to replay/intervals.py, where arm_metrics uses them too
+_rate = rate_stat
 
 
 @dataclass(frozen=True)
@@ -79,6 +66,8 @@ class LoadedRun:
     # "knobs": (tokens, keep), or (None, None) for off. The whole field is None when the run
     # does not say (no carriage.json, or one without "knobs").
     knobs: tuple[int | None, int | None] | None = None
+    trace: tuple[Event, ...] | None = None  # trace.jsonl (a fork's own events); None if unreadable
+    wall_seconds: float | None = None  # timing.json "seconds"; None for a run made before it
 
     @property
     def source_id(self) -> str:
@@ -134,7 +123,32 @@ def _read_run(folder: Path) -> LoadedRun | None:
                 knobs = _effective_knobs(carriage["knobs"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return LoadedRun(record, label=label, fork_source=fork_source, knobs=knobs)
+    return LoadedRun(
+        record,
+        label=label,
+        fork_source=fork_source,
+        knobs=knobs,
+        trace=_read_trace(folder),
+        wall_seconds=_read_wall_seconds(folder),
+    )
+
+
+def _read_trace(folder: Path) -> tuple[Event, ...] | None:
+    try:
+        return tuple(parse_trace_jsonl((folder / "trace.jsonl").read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+
+
+def _read_wall_seconds(folder: Path) -> float | None:
+    """The run's wall time from timing.json; None if it is missing or not a sane duration."""
+    try:
+        seconds = json.loads((folder / "timing.json").read_bytes())["seconds"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+        return None
+    return float(seconds) if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def _is_noop_error(folder: Path) -> bool:
@@ -145,6 +159,26 @@ def _is_noop_error(folder: Path) -> bool:
         return False
 
 
+class ErroredRun(NamedTuple):
+    """A run that raised: its arm, and what it cost (None = not recorded and not in the log)."""
+
+    arm: str
+    cost_usd: float | None
+
+
+def _read_errored(folder: Path, spend_log: Path | str | None) -> ErroredRun:
+    """The arm and cost in `folder/error.json`; an old file with no cost is looked up in the
+    spend log if one is given, else its cost is unknown."""
+    try:
+        data = json.loads((folder / "error.json").read_bytes())
+        arm, cost = data.get("arm"), data.get("cost_usd")
+    except (OSError, ValueError, AttributeError):
+        arm = cost = None
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        cost = run_totals(folder.name, spend_log)[1] if spend_log is not None else None
+    return ErroredRun(arm if isinstance(arm, str) else "unknown", cost)
+
+
 class LoadedRuns(NamedTuple):
     """What `load_runs` found. Read the fields by name: a new one must not break callers."""
 
@@ -152,18 +186,21 @@ class LoadedRuns(NamedTuple):
     unreadable: int  # run folders whose files are missing or invalid
     errored: int  # run folders with error.json and no record.json, not a no-op
     noop: int  # mutation no-ops
+    errored_runs: tuple[ErroredRun, ...] = ()  # the errored ones, with their cost
 
 
-def load_runs(paths: Iterable[Path | str]) -> LoadedRuns:
+def load_runs(paths: Iterable[Path | str], spend_log: Path | str | None = None) -> LoadedRuns:
     """The readable runs and the counts of the folders that are not (`LoadedRuns`).
 
     A folder with error.json and no record.json is an errored run (the runner caught the
     exception and carried on); it is not "unreadable". If that error is the gate's
     NothingToMutate it is a no-op instead, and so is a finished run whose operator left its
     target handoff as it was (`replay.noop.text_noop`); neither is in the runs returned.
+    `spend_log` (a spend.jsonl) is only read for an errored run whose error.json has no cost.
     FileNotFoundError if a path is not a directory.
     """
     runs: list[LoadedRun] = []
+    errored_runs: list[ErroredRun] = []
     unreadable = errored = noop = 0
     for folder in _run_dirs(paths):
         if not (folder / "record.json").exists() and (folder / "error.json").is_file():
@@ -171,6 +208,7 @@ def load_runs(paths: Iterable[Path | str]) -> LoadedRuns:
                 noop += 1
             else:
                 errored += 1
+                errored_runs.append(_read_errored(folder, spend_log))
             continue
         run = _read_run(folder)
         if run is None:
@@ -179,7 +217,7 @@ def load_runs(paths: Iterable[Path | str]) -> LoadedRuns:
             noop += 1
         else:
             runs.append(run)
-    return LoadedRuns(runs, unreadable, errored, noop)
+    return LoadedRuns(runs, unreadable, errored, noop, tuple(errored_runs))
 
 
 # ---------------------------------------------------------------- aggregation
@@ -317,6 +355,11 @@ def _comparisons(cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _facts(run: LoadedRun, check: Any, repo_root: str | None) -> RunFacts:
+    blocks = None if run.trace is None else run_blocks(run.trace, check, repo_root)
+    return RunFacts(run.record.task_success, run.record.cost_usd, run.wall_seconds, blocks)
+
+
 def aggregate(
     runs: Sequence[LoadedRun],
     *,
@@ -325,9 +368,10 @@ def aggregate(
     noop: int = 0,
     ledger: Ledger,
     extraction_recall: float | None,
+    errored_runs: Sequence[ErroredRun] = (),
 ) -> dict[str, Any]:
-    """The results dict (format_version 1) for `runs` and the `unreadable`, `errored` and `noop`
-    (mutation no-op) folders."""
+    """The results dict (format_version 2) for `runs` and the `unreadable`, `errored` and `noop`
+    (mutation no-op) folders; `errored_runs` says what the errored ones cost, by arm."""
     group = _pooled_group(runs)
     # NOT_EXERCISED runs stay: the label is given only to runs that did not break the rule, so
     # dropping them would inflate the violation rate (see the natural cell's `not_exercised`).
@@ -361,6 +405,10 @@ def aggregate(
                 cell_runs, key=lambda key: (ARM_ORDER[key[0]], key[1], _knob_rank(key[2]))
             )
             cells = [_cell(*key, cell_runs[key]) for key in order]
+            for cell, key in zip(cells, order, strict=True):
+                cell["arm_metrics"] = cell_metrics(
+                    [_facts(run, constraint.check, ledger.app.repo_root) for run in cell_runs[key]]
+                )
             boundary_out[boundary] = {"cells": cells, "comparisons": _comparisons(cells)}
         constraints[constraint_id] = {
             "text": constraint.text,
@@ -390,6 +438,7 @@ def aggregate(
             "found": len(runs) + unreadable + errored + noop,
             "pooled": len(pooled),
             "inconclusive": inconclusive,
+            "errored_cost": errored_cost([(r.arm, r.cost_usd) for r in errored_runs]),
         },
         "honesty": {
             "constraints_total": total,
@@ -427,12 +476,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--extraction-recall", type=Path, help='JSON file {"recall": 0.83}; absent = not measured'
     )
+    parser.add_argument(
+        "--spend-log",
+        type=Path,
+        help="spend.jsonl: prices errored runs whose error.json has no cost (default: unknown)",
+    )
     parser.add_argument("--out", type=Path, required=True, help="results.json to write")
     args = parser.parse_args(argv)
     try:
         recall = None if args.extraction_recall is None else _read_recall(args.extraction_recall)
         ledger = load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
-        loaded = load_runs(args.paths)
+        loaded = load_runs(args.paths, spend_log=args.spend_log)
         results = aggregate(
             loaded.runs,
             unreadable=loaded.unreadable,
@@ -440,6 +494,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             noop=loaded.noop,
             ledger=ledger,
             extraction_recall=recall,
+            errored_runs=loaded.errored_runs,
         )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         # FileNotFoundError, bad recall, bad ledger (YAML or schema), unknown constraint id
