@@ -29,6 +29,8 @@ replay/
   budget.py     N per arm from a bucket and a cost per run; `python -m replay.budget`
   carriage.py   did the target rule survive the planner's handoff; compaction evidence
   stats.py      Wilson and Newcombe intervals, pooling of finished runs, results.json; `python -m replay.stats`
+  sweep_status.py  what a runs dir holds per (task, arm, operator, group), the top-up shortfall;
+                `python -m replay.sweep_status`
 refapp/app.py   the reference app's App (owned by refapp, listed here because the runner uses it)
 ```
 
@@ -134,8 +136,13 @@ class Runner:
                       repo_ref: str = "main") -> RunRecord
     async def fork_one(self, source_run_id: str, arm: Arm, operator: Operator, *, seed: int,
                        repo_ref: str = "main") -> RunRecord
-    async def arun(self, task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]
-    def run(self, task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]  # asyncio.run
+    async def arun(self, task_ids, arms, operators, n, repo_ref="main", *,
+                   seeds=None) -> list[RunRecord]
+    def run(self, task_ids, arms, operators, n, repo_ref="main", *,
+            seeds=None) -> list[RunRecord]  # asyncio.run
+    # seeds: {(task id, arm, operator): iterable of int} replaces range(n) for those cells
+    def reproducibility(self, repo_ref="main") -> dict   # the five fields a run now would carry
+    records: list[RunRecord]; errors: list[RunError]     # what the latest arun finished / caught
     async def afork(self, source_run_id, arms, operators, n, repo_ref="main") -> list[RunRecord]
     def fork(self, source_run_id, arms, operators, n, repo_ref="main") -> list[RunRecord]
 
@@ -190,10 +197,41 @@ def run(task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]
 11. `RunRecord(... contree_image=final, checkpoint_id=..., <the five fields from step 1>)` ->
     `run_dir/record.json`; return it.
 
-If steps 3-5 raise (base image, session, build or invoke), write the traceback to `run_dir/error.txt` and re-raise: a
-crashed run has no record (and no `boundaries.json`). `arun` runs sequentially (no concurrency
-in week 1), tasks in the order of `task_ids` (KeyError on an unknown id), then pairs, then `n`
-repetitions with `seed = <repetition index>`; it stops at the first exception.
+If any step after the run folder is named raises, write the traceback to `run_dir/error.txt` and
+re-raise: a crashed run has no record (and maybe no `boundaries.json`). `arun` runs sequentially
+(no concurrency in week 1), tasks in the order of `task_ids` (KeyError on an unknown id), then
+pairs, then `n` repetitions with `seed = <repetition index>`.
+
+**A crashed run does not stop the sweep, a broken setup does.** A run has two phases. *Setup* is
+everything before the agents start: the ledger and run config, `make_middleware` (the real gate
+refuses a stale safe-config hash, a bad arm/operator pair or a ledger it cannot use here, all
+with `ValueError`), the sandbox client, base image and session, the graph build and, for a fork,
+the checkout of the fork point. A failure in setup measures nothing and would repeat in every run,
+so it stops the sweep whatever its type, writes `error.txt` only and is never an attempt.
+*Execution* starts at `graph.ainvoke`. An exception from there on (the agents, the diff, the task
+check, the trace check, the oracle) leaves `error.json`; `arun` appends a
+`RunError(run_id, task_id, arm, operator, error_type)` to `self.errors` and carries on with the
+next run. Finished runs are in `self.records` as they come. Even from execution, `arun` stops
+by raising for:
+
+- the spend cap (`common.SpendCapReached`, AGENTS.md rule 3: stop and tell a human),
+  `common.ConfigError`, `common.MissingEnvError`, or any exception raised from or while handling
+  one of these. These write `error.txt` but no `error.json`, so they never count as an attempt;
+- an error before a run began: an unknown task id, a checkout that is dirty or not `repo_ref`
+  (checked again before every run), a missing lockfile or config;
+- `KeyboardInterrupt` and `asyncio.CancelledError` (not `Exception`s).
+
+`error.json` (`fork_one` crashes get one too, next to their `fork.json`, which is written before anything in a fork run can fail):
+
+```
+{"run_id", "task_id", "arm", "operator", "constraint_id", "boundary",
+ "model_ids": {role: id}, "safe_config_hash", "ledger_hash", "repo_sha", "lockfile_hash",
+ "error_type": "<module>.<qualname>", "message": str(exc), "traceback_tail": last 20 lines}
+```
+
+The five reproducibility fields are the run's own, so `--top-up` and `sweep_status` attribute the
+attempt to the right conditions. `stats.py` counts a folder with `error.json` and no
+`record.json` under the inconclusive reason `run_error`.
 
 `fork_one(source_run_id, arm, operator, *, seed, repo_ref)`: a new run (new run id and folder)
 that continues the recorded run `runs_dir/<source_run_id>/` from just before its first crossing
@@ -250,6 +288,18 @@ then `n` repetitions with `seed = <repetition index>`, sequential, stops at the 
 `fork` is its `asyncio.run` wrapper. Use `default_runner().fork(...)` for forks with the
 defaults (live, after `python -m replay.budget`).
 
+## sweep_status.py
+
+`uv run python -m replay.sweep_status --runs-dir DIR [--tasks ID...]` prints one row per
+`(task, arm, operator, group)`: `records` (finished runs), `errored` (`error.json`, no
+`record.json`), and among the records `violations` (the run's target constraint is in its
+`violations`) and `successes` (`task_success`). `group` is the first 8 hex of the sha256 of the
+five reproducibility fields, so runs from different commits, ledgers or configs never share a
+row; a legend below the table spells each group out. Then the orphans (run folders with neither
+file, or with an unusable one) by name, and the number of fork folders, which no row counts.
+Offline, files only; exit 2 if DIR is not a directory. `scan(runs_dir)` and
+`top_up_plan(...)` in the same module are what `--top-up` uses.
+
 ## budget.py
 
 ```python
@@ -285,12 +335,15 @@ reads finished runs and writes the results file the report page shows. No model 
 sandbox, no network. Exit 2 and nothing written if a path is not a directory, the ledger or the
 recall file is invalid, or a pooled run is for a constraint the ledger does not declare.
 
-- **Input.** A run folder has `run_config.json` or `record.json`; a parent's subfolders that do
+- **Input.** A run folder has `run_config.json`, `record.json` or `error.json`; a parent's subfolders that do
   are read too, and a folder reached twice is read once. `record.json` is validated as
   `RunRecord`. `fork.json` (`source_run_id`) marks a fork; `carriage.json` (`label`) gives the
-  carriage label. A folder whose `record.json` is missing or invalid, or whose `fork.json` /
+  carriage label. A folder whose `record.json` is missing (and has no `error.json`) or invalid, or whose `fork.json` /
   `carriage.json` exists but is unusable (a `label` that is not one of `replay.carriage.Label`), counts as `unreadable_record` (a run whose source or
   label is unknown is not guessed at).
+- **Errored runs.** A folder with `error.json` and no `record.json` (the runner caught the
+  run's exception, see "runner.py") counts as `run_error`, not `unreadable_record`; with both
+  files the record wins.
 - **Pooling.** Runs are grouped with `schemas.run.is_comparable` (the five reproducibility
   fields). The group with the most runs that are not `NOT_EXERCISED` is pooled; ties go to the
   group with more runs in all, then the smaller `repo_sha` (and, if still tied, the smaller model ids and hashes in
@@ -311,7 +364,7 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
 - **Honesty block.** `check_share` is constraints with a check over constraints declared in the
   ledger (`null` for an empty ledger); `extraction_recall` is the `recall` in the
   `--extraction-recall` JSON file (`{"recall": 0.83}`, in [0, 1]), `null` when not measured;
-  `inconclusive_total` sums the three reasons. With no pooled run (also when every run in the group is `NOT_EXERCISED`) `reproducibility` is `null`.
+  `inconclusive_total` sums the four reasons. With no pooled run (also when every run in the group is `NOT_EXERCISED`) `reproducibility` is `null`.
 - **Output.** Sorted keys, two-space indent, floats rounded to 4 decimals, trailing newline; no
   paths or timestamps, so the same runs give a byte-identical file in any argument order.
 
@@ -320,7 +373,7 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
 ```
 {"format_version": 1,
  "reproducibility": {"model_ids": {role: id}, "safe_config_hash", "ledger_hash", "repo_sha", "lockfile_hash"} | null,
- "runs": {"found", "pooled", "inconclusive": {"unreadable_record", "not_comparable", "not_exercised"}},
+ "runs": {"found", "pooled", "inconclusive": {"unreadable_record", "run_error", "not_comparable", "not_exercised"}},
  "honesty": {"constraints_total", "constraints_with_check", "check_share", "extraction_recall", "inconclusive_total"},
  "constraints": {<constraint id>: {"text", "kind", "has_check", "task_ids": [sorted],
    "boundaries": {<boundary id>: {
@@ -407,14 +460,26 @@ delegations to the same agent are not told apart; planner delegations here are s
   source).
 - `LEDGER_PATH`, `CONFIG_PATH` and `RUNS_DIR` are module constants in `runner.py` (tests
   monkeypatch `LEDGER_PATH`).
-- `error.txt` covers steps 3-5 (base image, session, build, invoke), not only the invoke.
+- `error.txt` covers the whole run after its folder is named (ledger, config, base image,
+  session, build, invoke, diff, task check, trace check, oracle), not only the invoke.
 - `arun` resolves every task id before the first run, so an unknown id raises `KeyError`
   without wasting a run.
-- `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--yes]`
+- `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--top-up] [--yes]`
   refuses with exit code 2 unless `NEMOGATE_LIVE=1`; it prints `planned runs: N` and, without
   `--yes`, exits 1 pointing at `python -m replay.budget`. With `--yes` it runs and prints one
   line per record (`<run_id> task=.. arm=.. operator=.. violations=C-1,C-2|- task_success=..
-  cost_usd=0.0000`).
+  cost_usd=0.0000`), then `runs: X ok, Y errored` and, for each errored run,
+  `errored <run_id> task=.. arm=.. operator=.. error_type=..`. Exit code 1 if any run errored,
+  0 if none did, 3 if the spend cap stopped the sweep (it prints `stopped: <message>` on stderr
+  and `runs: X ok, Y errored before the stop`).
+- `--top-up` (with `--runs-dir`, default `runs/`): for each (task, arm, operator) it counts the
+  attempts already in the runs dir under THIS invocation's five reproducibility fields (a folder
+  with `record.json` or `error.json`; orphans and forks do not count; an error counts, since
+  retrying it would bias the sample) and plans only the shortfall to `--n`. It prints
+  `<task> <arm> <operator>: existing E, planned P` per cell, then `planned runs: N`, and still
+  needs `--yes`. New runs get seeds above the largest one those attempts used (read from each
+  `run_config.json`; at least E), so no seed is used twice even when the earlier seeds are not 0..E-1. It needs a
+  clean checkout at `--repo-ref` (exit 2 otherwise), because the fields include `repo_sha`.
 - `python -m replay.runner` also takes `--runs-dir DIR` (default `runs/`), built on
   `default_runner(runs_dir=None)`, which `run()` now calls. `run()` itself is unchanged.
 - The default client loads `.env` (`common.env.load_dotenv`) and checks `NEBIUS_API_KEY` and

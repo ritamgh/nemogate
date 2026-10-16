@@ -179,7 +179,12 @@ EXPECTED = {
     "runs": {
         "found": 17,
         "pooled": 14,
-        "inconclusive": {"unreadable_record": 1, "not_comparable": 1, "not_exercised": 1},
+        "inconclusive": {
+            "unreadable_record": 1,
+            "run_error": 0,
+            "not_comparable": 1,
+            "not_exercised": 1,
+        },
     },
     "honesty": {
         "constraints_total": 2,
@@ -464,7 +469,12 @@ def test_aggregate_counts_not_exercised_only_inside_the_pooled_group():
     assert got["runs"] == {
         "found": 2,
         "pooled": 1,
-        "inconclusive": {"unreadable_record": 0, "not_comparable": 1, "not_exercised": 0},
+        "inconclusive": {
+            "unreadable_record": 0,
+            "run_error": 0,
+            "not_comparable": 1,
+            "not_exercised": 0,
+        },
     }
 
 
@@ -477,7 +487,12 @@ def test_aggregate_empty_input_is_a_valid_result_of_zeros():
         "runs": {
             "found": 0,
             "pooled": 0,
-            "inconclusive": {"unreadable_record": 0, "not_comparable": 0, "not_exercised": 0},
+            "inconclusive": {
+                "unreadable_record": 0,
+                "run_error": 0,
+                "not_comparable": 0,
+                "not_exercised": 0,
+            },
         },
         "honesty": {
             "constraints_total": 0,
@@ -610,7 +625,7 @@ def test_load_runs_counts_missing_and_damaged_files_as_unreadable(tmp_path):
     (bad_fork / "fork.json").write_text("[]")
     bad_carriage = write_run(tmp_path, make_run("bad-carriage"))
     (bad_carriage / "carriage.json").write_text('{"label": 7}')
-    loaded, unreadable = load_runs([tmp_path])
+    loaded, unreadable, _ = load_runs([tmp_path])
     assert [run.record.run_id for run in loaded] == ["good"]
     assert unreadable == 4
 
@@ -618,7 +633,7 @@ def test_load_runs_counts_missing_and_damaged_files_as_unreadable(tmp_path):
 def test_load_runs_reads_the_fork_source_and_carriage_label(tmp_path):
     # Breaks if fork.json's source_run_id or carriage.json's label are read from the wrong key.
     write_run(tmp_path, make_run("f", fork_source="src", label="DROPPED"), is_fork=True)
-    loaded, _ = load_runs([tmp_path])
+    loaded, _, _ = load_runs([tmp_path])
     (run,) = loaded
     assert (run.fork_source, run.label) == ("src", "DROPPED")
 
@@ -628,7 +643,7 @@ def test_load_runs_ignores_folders_that_are_not_runs(tmp_path):
     write_run(tmp_path, make_run("r-1"))
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "a.txt").write_text("x")
-    loaded, unreadable = load_runs([tmp_path])
+    loaded, unreadable, _ = load_runs([tmp_path])
     assert (len(loaded), unreadable) == (1, 0)
 
 
@@ -653,7 +668,7 @@ def test_load_runs_counts_an_unknown_carriage_label_as_unreadable(tmp_path, labe
     # Breaks if the label is only checked to be a string.
     folder = write_run(tmp_path, make_run("typo"))
     (folder / "carriage.json").write_text(json.dumps({"label": label}))
-    loaded, unreadable = load_runs([tmp_path])
+    loaded, unreadable, _ = load_runs([tmp_path])
     assert (loaded, unreadable) == ([], 1)
 
 
@@ -670,7 +685,7 @@ def test_load_runs_accepts_every_label_the_classifier_can_write(tmp_path):
     ]
     for i, name in enumerate(names):
         write_run(tmp_path, make_run(f"r{i}", label=name))
-    loaded, unreadable = load_runs([tmp_path])
+    loaded, unreadable, _ = load_runs([tmp_path])
     assert (len(loaded), unreadable) == (7, 0)
 
 
@@ -696,6 +711,71 @@ def test_aggregate_reproducibility_is_null_when_every_group_run_is_not_exercised
     assert got["runs"] == {
         "found": 2,
         "pooled": 0,
-        "inconclusive": {"unreadable_record": 0, "not_comparable": 0, "not_exercised": 2},
+        "inconclusive": {
+            "unreadable_record": 0,
+            "run_error": 0,
+            "not_comparable": 0,
+            "not_exercised": 2,
+        },
     }
     assert got["constraints"] == {}
+
+
+# ---------------------------------------------------------------- errored runs
+
+
+def write_errored(parent: Path, run_id: str) -> Path:
+    """A run folder the runner left after catching an exception: error.json, no record.json."""
+    folder = parent / run_id
+    folder.mkdir(parents=True)
+    (folder / "run_config.json").write_text("{}")
+    (folder / "error.json").write_text(json.dumps({"run_id": run_id, "error_type": "builtins.X"}))
+    return folder
+
+
+def test_load_runs_counts_an_error_json_folder_as_errored_not_unreadable(tmp_path):
+    # Breaks if a caught crash is filed under unreadable_record (which means a damaged file),
+    # or is read as a record, or is dropped.
+    write_run(tmp_path, make_run("good"))
+    write_errored(tmp_path, "r-errored")
+    only_error = tmp_path / "r-no-config"
+    only_error.mkdir()
+    (only_error / "error.json").write_text("{}")
+    loaded, unreadable, errored = load_runs([tmp_path])
+    assert [run.record.run_id for run in loaded] == ["good"]
+    assert (unreadable, errored) == (0, 2)
+
+
+def test_load_runs_prefers_the_record_when_a_folder_has_both_files(tmp_path):
+    # Breaks if a finished run that also holds an error.json is thrown out as errored.
+    folder = write_run(tmp_path, make_run("both"))
+    (folder / "error.json").write_text("{}")
+    loaded, unreadable, errored = load_runs([tmp_path])
+    assert (len(loaded), unreadable, errored) == (1, 0, 0)
+
+
+def test_aggregate_counts_errored_runs_as_inconclusive_run_error():
+    # Breaks if errored runs are left out of `found`, out of the honesty total, or reported
+    # under another reason. Hand count: 1 pooled + 1 unreadable + 2 errored = 4 found.
+    got = aggregate([make_run("a")], unreadable=1, errored=2, ledger=LEDGER, extraction_recall=None)
+    assert got["runs"] == {
+        "found": 4,
+        "pooled": 1,
+        "inconclusive": {
+            "unreadable_record": 1,
+            "run_error": 2,
+            "not_comparable": 0,
+            "not_exercised": 0,
+        },
+    }
+    assert got["honesty"]["inconclusive_total"] == 3
+
+
+def test_cli_reports_errored_run_folders_in_the_results_file(tmp_path):
+    # Breaks if main() drops the errored count between load_runs and aggregate.
+    write_run(tmp_path, make_run("good"))
+    write_errored(tmp_path, "r-errored")
+    out = tmp_path / "results.json"
+    assert run_cli(tmp_path, [str(tmp_path)], "--out", str(out)) == 0
+    runs = json.loads(out.read_text())["runs"]
+    assert (runs["found"], runs["pooled"], runs["inconclusive"]["run_error"]) == (2, 1, 1)
