@@ -9,6 +9,7 @@ they imply, and an offline cost summary. A owns this folder.
 uv run python -m preflight --out proposal.json                 # prints the call count, stops
 NEMOGATE_LIVE=1 uv run python -m preflight --out proposal.json --yes [--tries N]
 uv run python -m preflight.cost RUN_DIR...                     # offline, no model call
+uv run python -m preflight.textcalls RUN_DIR_OR_PARENT... [--json OUT]   # offline, no model call
 ```
 
 Without `NEMOGATE_LIVE=1` it only prints the plan. With it, it also needs `--yes`. **It spends
@@ -48,3 +49,19 @@ The hash is `common.llm.safe_config_hash` over the proposed settings and the con
 Reads `record.json` from each RUN_DIR (a run folder, or a folder of run folders) and prints n, mean,
 median, max and total USD per arm and over all runs. The "all" mean is what
 `python -m replay.budget --from-runs` plans with.
+
+## Text tool calls (`textcalls.py`)
+
+Offline scan of finished runs for a tool call a model wrote as text instead of a native `tool_calls`
+entry (the NAT #2274 class, so the framework never runs it). `trace.jsonl` does not hold ordinary AI
+messages; `checkpoints.sqlite` does, for the planner (namespace `''`) and the subagents (`tools:<id>`)
+alike (docs/FACTS.md section 5). For each AI message with no native tool call it runs
+`looks_like_tool_call_text` and prints the run, agent, namespace, step, message number, the tool it
+looks like and a 200-character excerpt. It also checks `final_output` and `boundary_in` texts in
+`trace.jsonl`. The last lines count runs, AI messages and candidates.
+
+PATHs may be run folders or parents of them (searched recursively; anything with `heldout` in its
+path is skipped). A run folder is never written: the checkpoint file is copied to a temp folder first.
+A fork's copied history is left out when its source folder is found. A hit is a candidate to read:
+prose or quoted JSON that happens to look like a call is flagged too. `--json OUT` also saves every
+result; OUT must be a new file outside every scanned folder and run folder.
