@@ -23,7 +23,8 @@ from typing import Any, NamedTuple
 import yaml
 
 from common.env import compaction_from_env
-from common.spend import run_totals
+from common.spend import run_cost
+from gate.policy import checkable_before_the_call
 from replay.arm_metrics import RunFacts, cell_metrics, errored_cost
 from replay.blocks import run_blocks
 from replay.carriage import Label
@@ -168,14 +169,14 @@ class ErroredRun(NamedTuple):
 
 def _read_errored(folder: Path, spend_log: Path | str | None) -> ErroredRun:
     """The arm and cost in `folder/error.json`; an old file with no cost is looked up in the
-    spend log if one is given, else its cost is unknown."""
+    spend log if one is given. No log, or no line in it for this run: the cost is unknown."""
     try:
         data = json.loads((folder / "error.json").read_bytes())
         arm, cost = data.get("arm"), data.get("cost_usd")
     except (OSError, ValueError, AttributeError):
         arm = cost = None
     if isinstance(cost, bool) or not isinstance(cost, int | float):
-        cost = run_totals(folder.name, spend_log)[1] if spend_log is not None else None
+        cost = run_cost(folder.name, spend_log) if spend_log is not None else None
     return ErroredRun(arm if isinstance(arm, str) else "unknown", cost)
 
 
@@ -355,8 +356,12 @@ def _comparisons(cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _facts(run: LoadedRun, check: Any, repo_root: str | None) -> RunFacts:
-    blocks = None if run.trace is None else run_blocks(run.trace, check, repo_root)
+def _facts(run: LoadedRun, constraint: Any, repo_root: str | None) -> RunFacts:
+    blocks = (
+        None
+        if run.trace is None
+        else run_blocks(run.trace, constraint.check, repo_root, constraint.text)
+    )
     return RunFacts(run.record.task_success, run.record.cost_usd, run.wall_seconds, blocks)
 
 
@@ -407,13 +412,15 @@ def aggregate(
             cells = [_cell(*key, cell_runs[key]) for key in order]
             for cell, key in zip(cells, order, strict=True):
                 cell["arm_metrics"] = cell_metrics(
-                    [_facts(run, constraint.check, ledger.app.repo_root) for run in cell_runs[key]]
+                    [_facts(run, constraint, ledger.app.repo_root) for run in cell_runs[key]]
                 )
             boundary_out[boundary] = {"cells": cells, "comparisons": _comparisons(cells)}
         constraints[constraint_id] = {
             "text": constraint.text,
             "kind": constraint.kind.value,
             "has_check": constraint.check is not None,
+            # the gate refuses a breaking call to this rule before it runs (block_only, gated)
+            "blocked_before_call": checkable_before_the_call(constraint),
             "task_ids": sorted(
                 {r.record.task_id for cs in boundaries.values() for rs in cs.values() for r in rs}
             ),

@@ -1,6 +1,7 @@
 {
   "constraints": {
     "C-001": {
+      "blocked_before_call": true,
       "boundaries": {
         "delegation:planner->coder": {
           "cells": [
@@ -16,20 +17,24 @@
                 },
                 "blocks": {
                   "blocked": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
                     "n": 2
                   },
                   "carry_over": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
                     "n": 2
                   },
+                  "n_ambiguous": 0,
                   "n_traced": 2,
                   "recovery": null,
                   "repeats": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
@@ -40,12 +45,14 @@
                   "stuck": null
                 },
                 "cost": {
+                  "basis": "range",
                   "hi": 0.01,
                   "lo": 0.01,
                   "mean": 0.01,
                   "n": 2
                 },
                 "wall_seconds": {
+                  "basis": null,
                   "hi": null,
                   "lo": null,
                   "mean": null,
@@ -86,20 +93,24 @@
                 },
                 "blocks": {
                   "blocked": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
                     "n": 2
                   },
                   "carry_over": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
                     "n": 2
                   },
+                  "n_ambiguous": 0,
                   "n_traced": 2,
                   "recovery": null,
                   "repeats": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
@@ -110,12 +121,14 @@
                   "stuck": null
                 },
                 "cost": {
+                  "basis": "range",
                   "hi": 0.01,
                   "lo": 0.01,
                   "mean": 0.01,
                   "n": 2
                 },
                 "wall_seconds": {
+                  "basis": null,
                   "hi": null,
                   "lo": null,
                   "mean": null,
@@ -154,20 +167,24 @@
                 },
                 "blocks": {
                   "blocked": {
+                    "basis": null,
                     "hi": null,
                     "lo": null,
                     "mean": 1.0,
                     "n": 1
                   },
                   "carry_over": {
+                    "basis": null,
                     "hi": null,
                     "lo": null,
                     "mean": 0.0,
                     "n": 1
                   },
+                  "n_ambiguous": 0,
                   "n_traced": 1,
                   "recovery": {
                     "cost_usd_est": {
+                      "basis": null,
                       "hi": null,
                       "lo": null,
                       "mean": 0.005,
@@ -175,12 +192,14 @@
                     },
                     "n": 1,
                     "seconds_est": {
+                      "basis": null,
                       "hi": null,
                       "lo": null,
                       "mean": null,
                       "n": 0
                     },
                     "steps": {
+                      "basis": null,
                       "hi": null,
                       "lo": null,
                       "mean": 4.0,
@@ -188,6 +207,7 @@
                     }
                   },
                   "repeats": {
+                    "basis": null,
                     "hi": null,
                     "lo": null,
                     "mean": 0.0,
@@ -204,12 +224,14 @@
                   }
                 },
                 "cost": {
+                  "basis": null,
                   "hi": null,
                   "lo": null,
                   "mean": 0.01,
                   "n": 1
                 },
                 "wall_seconds": {
+                  "basis": null,
                   "hi": null,
                   "lo": null,
                   "mean": null,
@@ -248,20 +270,24 @@
                 },
                 "blocks": {
                   "blocked": {
+                    "basis": "range",
                     "hi": 1.0,
                     "lo": 0.0,
                     "mean": 0.5,
                     "n": 2
                   },
                   "carry_over": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
                     "n": 2
                   },
+                  "n_ambiguous": 0,
                   "n_traced": 2,
                   "recovery": {
                     "cost_usd_est": {
+                      "basis": null,
                       "hi": null,
                       "lo": null,
                       "mean": 0.0067,
@@ -269,12 +295,14 @@
                     },
                     "n": 1,
                     "seconds_est": {
+                      "basis": null,
                       "hi": null,
                       "lo": null,
                       "mean": null,
                       "n": 0
                     },
                     "steps": {
+                      "basis": null,
                       "hi": null,
                       "lo": null,
                       "mean": 4.0,
@@ -282,6 +310,7 @@
                     }
                   },
                   "repeats": {
+                    "basis": "range",
                     "hi": 0.0,
                     "lo": 0.0,
                     "mean": 0.0,
@@ -298,12 +327,14 @@
                   }
                 },
                 "cost": {
+                  "basis": "range",
                   "hi": 0.01,
                   "lo": 0.01,
                   "mean": 0.01,
                   "n": 2
                 },
                 "wall_seconds": {
+                  "basis": null,
                   "hi": null,
                   "lo": null,
                   "mean": null,

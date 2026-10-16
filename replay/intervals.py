@@ -11,6 +11,7 @@ Z = 1.96  # 95% two-sided
 DECIMALS = 4
 RESAMPLES = 2000
 SEED = 20261016  # fixed, so the same runs give the same interval in any order
+MIN_FOR_BOOTSTRAP = 5  # below this the resample means pile up on the lowest and highest value
 
 
 def wilson(k: int, n: int, z: float = Z) -> tuple[float, float]:

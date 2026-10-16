@@ -24,6 +24,13 @@ def blocks(blocked, *, repeats=0, attempts=1, carry=0, replans=0, chances=0, aft
     )
 
 
+def ambiguous_blocks(blocked, attempts=1, after=10, total=40):
+    """A run where two delegations were open at once: carry-over and re-plans are None."""
+    return RunBlocks(
+        blocked, 0, attempts, None, None, None, total - after, after, total, ambiguous=True
+    )
+
+
 # ---- intervals ------------------------------------------------------------------------------
 
 
@@ -55,7 +62,13 @@ def test_bootstrap_of_nothing_is_refused():
 def test_cost_per_run_has_a_mean_and_an_interval():
     # Breaks if cost stays a per-cell sum (no per-run mean) or has no interval.
     facts = [RunFacts(True, 0.0, None, None), RunFacts(True, 0.5, None, None)]
-    assert cell_metrics(facts)["cost"] == {"n": 2, "mean": 0.25, "lo": 0.0, "hi": 0.5}
+    assert cell_metrics(facts)["cost"] == {
+        "n": 2,
+        "mean": 0.25,
+        "lo": 0.0,
+        "hi": 0.5,
+        "basis": "range",
+    }
 
 
 def test_wall_time_counts_runs_without_a_timing_file_as_unknown_not_zero():
@@ -70,13 +83,36 @@ def test_wall_time_counts_runs_without_a_timing_file_as_unknown_not_zero():
         "mean": 20.0,
         "lo": 10.0,
         "hi": 30.0,
+        "basis": "range",
         "unknown": 1,
     }
 
 
 def test_wall_time_with_no_timing_at_all_has_no_mean():
     wall = cell_metrics([RunFacts(True, 0.1, None, None)])["wall_seconds"]
-    assert wall == {"n": 0, "mean": None, "lo": None, "hi": None, "unknown": 1}
+    assert wall == {"n": 0, "mean": None, "lo": None, "hi": None, "basis": None, "unknown": 1}
+
+
+def test_a_mean_of_fewer_than_five_values_shows_their_range_not_a_bootstrap_interval():
+    # Breaks if 2 to 4 values get a "95%" bootstrap interval: with so few, the resample means pile
+    # up on the lowest and highest value, so it is only the range and covers far less than 95%.
+    # [1, 2, 3, 10] bootstraps to 1.5 to 8.0; the range, which is what is shown, is 1 to 10.
+    cost = cell_metrics([RunFacts(True, c, None, None) for c in (1.0, 2.0, 3.0, 10.0)])["cost"]
+    assert cost == {"n": 4, "mean": 4.0, "lo": 1.0, "hi": 10.0, "basis": "range"}
+
+
+def test_a_mean_of_five_values_gets_the_bootstrap_interval():
+    # bootstrap_mean([10, 12, 14, 16, 18]) is (14, 11.6, 16.4), inside the range 10 to 18
+    cost = cell_metrics([RunFacts(True, c, None, None) for c in (10.0, 12.0, 14.0, 16.0, 18.0)])[
+        "cost"
+    ]
+    assert cost["basis"] == "bootstrap"
+    assert (cost["mean"], cost["lo"], cost["hi"]) == (14.0, 11.6, 16.4)
+
+
+def test_a_single_value_has_no_interval_and_no_basis():
+    cost = cell_metrics([RunFacts(True, 0.25, None, None)])["cost"]
+    assert cost == {"n": 1, "mean": 0.25, "lo": None, "hi": None, "basis": None}
 
 
 # ---- attempts and blocks --------------------------------------------------------------------
@@ -194,3 +230,31 @@ def test_errored_cost_is_summed_per_arm_and_unknown_costs_are_counted_not_zeroed
 
 def test_no_errored_runs_is_an_explicit_zero():
     assert errored_cost([]) == {"count": 0, "cost_usd": 0.0, "cost_unknown": 0, "by_arm": {}}
+
+
+# ---- runs whose block numbers cannot be placed ------------------------------------------------
+
+
+def test_ambiguous_runs_are_left_out_of_carry_over_and_replans_and_counted():
+    # A: placed, carry 2, re-planned 1 of 2. B: ambiguous (two task calls in one turn), its
+    # blocks still count towards blocked/stuck. Breaks if B's None is read as a 0 (carry-over mean
+    # would be 1.0, re-plan 1 of 2 either way but n_ambiguous missing) or crashes the sum.
+    cell = [
+        RunFacts(False, 0.1, 10.0, blocks(2, attempts=2, carry=2, replans=1, chances=2, after=10)),
+        RunFacts(True, 0.1, 10.0, ambiguous_blocks(1)),
+    ]
+    b = cell_metrics(cell)["blocks"]
+    assert (b["n_traced"], b["n_ambiguous"], b["runs_with_block"]) == (2, 1, 2)
+    assert b["carry_over"]["n"] == 1
+    assert b["carry_over"]["mean"] == 2.0
+    assert (b["replan"]["k"], b["replan"]["n"]) == (1, 2)
+    assert b["blocked"]["mean"] == 1.5  # (2 + 1) / 2: blocked does not depend on placing
+    assert b["stuck"]["n"] == 2
+
+
+def test_a_cell_where_every_run_is_ambiguous_has_no_carry_over_or_replan_figure():
+    b = cell_metrics([RunFacts(True, 0.1, None, ambiguous_blocks(1))])["blocks"]
+    assert b["n_ambiguous"] == 1
+    assert b["carry_over"]["n"] == 0
+    assert b["carry_over"]["mean"] is None
+    assert b["replan"] is None

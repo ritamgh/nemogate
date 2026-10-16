@@ -13,6 +13,7 @@ from common.spend import (
     append_spend,
     check_cap,
     cost_usd,
+    run_cost,
     run_scope,
     run_totals,
     spend_log_path,
@@ -370,3 +371,12 @@ def test_check_cap_blocks_at_the_cap_and_allows_just_below(spend_log, config_pat
     assert "8.0" in text
     assert "stop and tell a human (AGENTS.md rule 3)" in text
     assert isinstance(exc.value, RuntimeError)
+
+
+def test_run_cost_is_none_when_the_log_has_no_line_for_the_run(spend_log):
+    # Breaks if a run the log never heard of (or a missing log) reads as a free one.
+    assert run_cost("r-1") is None  # no log file yet
+    with run_scope("r-2"):
+        append_spend("planner", "m", 7, 7, 0.25)
+    assert run_cost("r-1") is None
+    assert run_cost("r-2") == pytest.approx(0.25)

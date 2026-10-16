@@ -126,8 +126,14 @@ def dataset() -> list[tuple[LoadedRun, bool]]:
 
 def plain_metrics(n, mean):
     """arm_metrics of runs with no trace and no timing.json: cost only, the time is unknown."""
-    cost = {"n": n, "mean": mean, "lo": mean if n > 1 else None, "hi": mean if n > 1 else None}
-    wall = {"n": 0, "mean": None, "lo": None, "hi": None, "unknown": n}
+    cost = {
+        "n": n,
+        "mean": mean,
+        "lo": mean if n > 1 else None,
+        "hi": mean if n > 1 else None,
+        "basis": "range" if n > 1 else None,  # fewer than 5 runs: lowest to highest, all equal
+    }
+    wall = {"n": 0, "mean": None, "lo": None, "hi": None, "basis": None, "unknown": n}
     return {"cost": cost, "wall_seconds": wall, "attempt_rate": None, "blocks": None}
 
 
@@ -228,6 +234,7 @@ EXPECTED = {
             "text": "Do not touch the frozen folder",
             "kind": "constraint",
             "has_check": True,
+            "blocked_before_call": True,
             "task_ids": ["T1", "T2"],
             "boundaries": {
                 B1: {
@@ -333,6 +340,7 @@ EXPECTED = {
             "text": "Prefer small diffs",
             "kind": "scope",
             "has_check": False,
+            "blocked_before_call": False,
             "task_ids": ["T3"],
             "boundaries": {
                 B2: {

@@ -2,8 +2,10 @@
 
 `cell_metrics(facts)` takes one `RunFacts` per run in a cell (an arm and an operator) and
 returns the `arm_metrics` dict of the results file (replay/README.md, "stats.py"). Means carry a
-95% percentile-bootstrap interval (`replay.intervals.bootstrap_mean`, seeded); proportions carry
-a 95% Wilson interval. No file, no clock, no model.
+95% percentile-bootstrap interval (`replay.intervals.bootstrap_mean`, seeded) once there are
+`MIN_FOR_BOOTSTRAP` values; fewer than that, the bootstrap only returns the lowest and highest
+value, so `lo` and `hi` are the observed minimum and maximum and `basis` says "range".
+Proportions carry a 95% Wilson interval. No file, no clock, no model.
 
 Wall time is the `timing.json` the runner writes; a run without one counts under `unknown`
 (trace events carry no timestamps, so there is nothing to derive it from). The recovery cost
@@ -18,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from replay.blocks import RunBlocks
-from replay.intervals import bootstrap_mean, rate_stat, round4
+from replay.intervals import MIN_FOR_BOOTSTRAP, bootstrap_mean, rate_stat, round4
 
 
 @dataclass(frozen=True)
@@ -30,15 +32,21 @@ class RunFacts:
 
 
 def mean_stat(values: Sequence[float]) -> dict[str, Any]:
-    """{"n", "mean", "lo", "hi"}; mean and interval are None for no values, the interval for one."""
+    """{"n", "mean", "lo", "hi", "basis"}: mean and interval are None for no values, the interval
+    for one. `basis` is "bootstrap" (95%) from `MIN_FOR_BOOTSTRAP` values, "range" (lowest to
+    highest value, not an interval estimate) for 2 to that many less one, None otherwise."""
     if not values:
-        return {"n": 0, "mean": None, "lo": None, "hi": None}
+        return {"n": 0, "mean": None, "lo": None, "hi": None, "basis": None}
     mean, lo, hi = bootstrap_mean(values)
+    basis = None if lo is None else "bootstrap"
+    if lo is not None and len(values) < MIN_FOR_BOOTSTRAP:
+        lo, hi, basis = min(values), max(values), "range"
     return {
         "n": len(values),
         "mean": round4(mean),
         "lo": None if lo is None else round4(lo),
         "hi": None if hi is None else round4(hi),
+        "basis": basis,
     }
 
 
@@ -67,16 +75,20 @@ def cell_metrics(facts: Sequence[RunFacts]) -> dict[str, Any]:
 def _blocks(facts: Sequence[RunFacts], traced: Sequence[RunBlocks]) -> dict[str, Any]:
     with_block = [f for f in facts if f.blocks is not None and f.blocks.blocked > 0]
     has_attempts = traced[0].attempts is not None
+    # carry-over and re-plans need each call tied to its delegation; a run where that was
+    # ambiguous (several task calls in one turn) has None there and is left out, and counted
+    placed = [b for b in traced if b.carry_over is not None and b.replan_chances is not None]
     recovery = [(f, f.blocks.steps_after_first_block / f.blocks.total_steps) for f in with_block]
     return {
         "n_traced": len(traced),
         "runs_with_block": len(with_block),
         "blocked": mean_stat([b.blocked for b in traced]),
         "repeats": mean_stat([b.repeats for b in traced]),
-        "carry_over": mean_stat([b.carry_over for b in traced]) if has_attempts else None,
+        "n_ambiguous": sum(b.ambiguous for b in traced),
+        "carry_over": mean_stat([b.carry_over for b in placed]) if has_attempts else None,
         "replan": count_stat(
-            sum(b.replans for b in traced) if has_attempts else 0,
-            sum(b.replan_chances for b in traced) if has_attempts else 0,
+            sum(b.replans for b in placed) if has_attempts else 0,
+            sum(b.replan_chances for b in placed) if has_attempts else 0,
         ),
         "stuck": count_stat(sum(not f.task_success for f in with_block), len(with_block)),
         "recovery": None
