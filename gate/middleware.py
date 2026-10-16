@@ -5,7 +5,8 @@ every boundary and tool call (file paths repo-relative, so the oracle needs no a
 mutates the text crossing the run's target boundary only: a delegation's description, or a
 subagent's reply on its way back. Text the helper wrote carries the helper's model id. If the
 first handoff there cannot be mutated, the operator's MutationFailed ends the run (NothingToMutate:
-no sample); a later one that cannot be passes on unchanged.
+no sample); a later one that cannot be passes on unchanged, and its boundary_in then carries
+the system under test's model id instead of the helper's, which is how the trace marks it.
 
 Arms (SPEC, Experiment design):
 - block_only: tool calls the oracle would count as a violation are blocked before they run

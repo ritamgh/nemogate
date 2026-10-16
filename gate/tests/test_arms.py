@@ -299,13 +299,10 @@ def test_the_gate_reads_prior_events_where_replay_writes_them():
     assert PRIOR_EVENTS == PREFIX
 
 
-@pytest.mark.parametrize("arm", ["mutated", "block_only", "gated"])
-def test_a_later_handoff_that_would_come_out_empty_passes_on_unchanged(tmp_path, backend, arm):
-    # Live 2026-10-16 (r-20261016T132614-bd208d, block_only/drop): the first two delegations
-    # were mutated, on the third the helper picked every sentence, drop left nothing and the
-    # run ended as run_error. Now the helper is asked once more, and if it still would empty the
-    # message, that later handoff passes on unchanged and the run finishes as a sample.
-    third = "Fix the import. Keep out of migrations/."
+THIRD = "Fix the import. Keep out of migrations/."
+
+
+def three_delegations(tmp_path, backend, arm, helper):
     trace, _ = run(
         tmp_path,
         backend,
@@ -315,16 +312,42 @@ def test_a_later_handoff_that_would_come_out_empty_passes_on_unchanged(tmp_path,
         planner=[
             delegate("coder", SENT),
             delegate("coder", "Add a test. Do not touch anything under migrations/."),
-            delegate("coder", third),
+            delegate("coder", THIRD),
             AIMessage(content="Done."),
         ],
         coder=[AIMessage(content="Added it."), AIMessage(content="Tested."), AIMessage("Fixed.")],
-        helper=[picks(2), picks(2), picks(1, 2), picks(1, 2)],
+        helper=helper,
     )
-    received = handoff(trace)
-    assert received[0].startswith(DROPPED) and received[1].startswith("Add a test.")
-    assert MIGRATIONS_RULE not in received[0] or arm == "gated"  # gated re-pins the rule
-    assert received[2].startswith(third)
+    received = [
+        e for e in trace if isinstance(e, BoundaryIn) and e.boundary == "delegation:planner->coder"
+    ]
+    return [e.content for e in received], [e.model_id for e in received]
+
+
+@pytest.mark.parametrize("arm", ["mutated", "block_only", "gated"])
+def test_a_later_handoff_the_helper_over_selects_is_mutated_on_the_retry(tmp_path, backend, arm):
+    # Live 2026-10-16 (r-20261016T132614-bd208d): on the third delegation the helper picked every
+    # sentence. Asked again it names only the rule's sentence, and the handoff is mutated.
+    texts, writers = three_delegations(
+        tmp_path, backend, arm, [picks(2), picks(2), picks(1, 2), picks(2)]
+    )
+    assert [t.split("\n")[0] for t in texts] == [DROPPED, "Add a test.", "Fix the import."]
+    assert len(set(writers)) == 1  # all three written by the helper
+
+
+@pytest.mark.parametrize("arm", ["mutated", "block_only", "gated"])
+def test_a_later_handoff_that_still_comes_out_empty_passes_on_unchanged(tmp_path, backend, arm):
+    # If the retry also picks every sentence, that later handoff passes on as sent instead of
+    # ending a run whose earlier handoffs were mutated. The trace marks it: its boundary_in is
+    # stamped with the system under test's model id, not the helper's (mutated text always
+    # differs from what was sent, NothingToMutate guarantees it), so stats can count such runs.
+    texts, writers = three_delegations(
+        tmp_path, backend, arm, [picks(2), picks(2), picks(1, 2), picks(1, 2)]
+    )
+    assert texts[0] != SENT and texts[0].startswith(DROPPED)
+    assert texts[1].startswith("Add a test.") and "migrations" not in texts[1].split("\n")[0]
+    assert texts[2].startswith(THIRD)
+    assert writers[0] == writers[1] != writers[2]
 
 
 def test_a_first_handoff_that_would_come_out_empty_ends_the_run(tmp_path, backend):

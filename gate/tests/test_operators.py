@@ -316,3 +316,78 @@ def test_unknown_boundary_kind_is_refused():
 def test_return_corrupt_is_not_built():
     with pytest.raises(NotImplementedError):
         make_operator(Operator.return_corrupt, "rule", Spy([]))
+
+
+def _live_parse_error(content, finish="stop"):
+    """The exception the live structured call raises on a bad reply: the OpenAI SDK's own parse
+    of a completion, as `with_structured_output(method="json_schema")` runs it."""
+    from openai._types import NOT_GIVEN
+    from openai.lib._parsing._completions import parse_chat_completion
+    from openai.types.chat import ChatCompletion
+
+    from gate.operators import Picks
+
+    completion = ChatCompletion.model_validate(
+        {"id": "x", "object": "chat.completion", "created": 0, "model": "m",
+         "choices": [{"index": 0, "finish_reason": finish, "logprobs": None,
+                      "message": {"role": "assistant", "content": content}}]}
+    )  # fmt: skip
+    try:
+        parse_chat_completion(
+            response_format=Picks, input_tools=NOT_GIVEN, chat_completion=completion
+        )
+    except Exception as exc:  # noqa: BLE001 - the point is to capture whatever it raises
+        return exc
+    raise AssertionError("the SDK parsed a reply that should not parse")
+
+
+class Scripted:
+    """A helper whose structured calls raise or answer in turn, as a live model can."""
+
+    def __init__(self, *outcomes):
+        self.outcomes, self.calls = list(outcomes), 0
+
+    def with_structured_output(self, schema):
+        def invoke(prompt):
+            self.calls += 1
+            outcome = self.outcomes.pop(0)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        return type("Bound", (), {"invoke": staticmethod(invoke)})()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _live_parse_error("not json"),  # pydantic ValidationError
+        _live_parse_error('{"numbers": [1', "length"),  # openai LengthFinishReasonError
+        _live_parse_error('{"nums": 3}'),  # valid JSON, wrong shape
+    ],
+    ids=["not-json", "cut-off", "wrong-shape"],
+)
+def test_a_live_reply_that_does_not_parse_is_asked_again_then_raises_unparsed(error):
+    # Ritam's review of #55: live, a bad structured reply raises instead of returning None, so a
+    # retry keyed on None never fired and the error escaped as neither a retry nor a
+    # MutationFailed (so the gate could not pass a later handoff on).
+    from gate.operators import Picks
+
+    helper = Scripted(error, Picks(numbers=[2]))
+    assert (
+        make_operator(Operator.drop, "rule", helper)(DELEGATION) == "Build the export. Add a test."
+    )
+    helper = Scripted(error, error)
+    with pytest.raises(UnparsedReply) as caught:
+        make_operator(Operator.drop, "rule", helper)(DELEGATION)
+    assert caught.value.__cause__ is error and helper.calls == 2
+
+
+def test_a_spend_cap_or_transport_error_is_not_retried_or_swallowed():
+    from common.spend import SpendCapReached
+
+    for error in (SpendCapReached("cap"), ConnectionError("down")):
+        helper = Scripted(error)
+        with pytest.raises(type(error)):
+            make_operator(Operator.drop, "rule", helper)(DELEGATION)
+        assert helper.calls == 1

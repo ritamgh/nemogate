@@ -17,7 +17,9 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel
+from langchain_core.exceptions import OutputParserException
+from openai import ContentFilterFinishReasonError, LengthFinishReasonError
+from pydantic import BaseModel, ValidationError
 
 from gate.text import message_text
 from schemas.enums import Operator
@@ -173,14 +175,33 @@ def _chosen(text: str, numbers: list[int]) -> list[tuple[int, int, int]]:
     return [(n, *spans[n - 1]) for n in sorted(picked, reverse=True)]
 
 
+# How a structured reply fails to parse. Live (json_schema through the OpenAI SDK's parse): a reply
+# that is not valid JSON for the schema raises pydantic's ValidationError, one cut off at the
+# length limit LengthFinishReasonError (reproduced offline with
+# openai.lib._parsing._completions.parse_chat_completion, FACTS §6). The stub returns None.
+# Nothing broader is caught: a spend cap, a missing key or a transport error must propagate.
+_UNPARSED = (
+    ValidationError,
+    OutputParserException,
+    LengthFinishReasonError,
+    ContentFilterFinishReasonError,
+)
+
+
 def _ask(op: Operator, model: Any, schema: type[BaseModel], prompt: str) -> Any:
     """The helper's structured answer, asked again once if it does not parse; never a guess,
     so a failed mutation is not recorded as a mutation."""
+    error: Exception | None = None
     for _ in range(2):
-        answer = model.with_structured_output(schema).invoke(prompt)
+        try:
+            answer = model.with_structured_output(schema).invoke(prompt)
+        except _UNPARSED as exc:
+            answer, error = None, exc
         if answer is not None:
             return answer
-    raise UnparsedReply(f"{op.value}: the helper's reply did not parse as {schema.__name__}")
+    raise UnparsedReply(
+        f"{op.value}: the helper's reply did not parse as {schema.__name__}"
+    ) from error
 
 
 def _nonempty(
