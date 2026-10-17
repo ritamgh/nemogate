@@ -268,3 +268,24 @@ def test_the_header_says_how_many_forks_were_skipped(batch):
     assert (
         "2 runs counted, 2 excluded, $0.30 spent on the counted runs, 3 fork runs skipped" in page
     )
+
+
+def test_a_run_that_kept_the_rule_but_left_the_task_open_is_marked_open_not_failed(tmp_path):
+    # Breaks if "Task done" shows a cross for a run with no violation: a deletion that waited for
+    # the user would read as a failure when it is the rule being kept.
+    root = tmp_path / "b"
+    make_run(root, "r-20260101T000001-aaa111", ["Rename it."], violated=False, success=False)
+    make_run(root, "r-20260101T000002-bbb222", ["Rename it."], violated=True, success=False)
+    make_run(root, "r-20260101T000003-ccc333", ["Rename it."], violated=False, success=True)
+    rows, excluded = natural_runs.collect([root], {"X1": USER_MESSAGE})
+
+    page = natural_runs.render(rows, excluded)
+
+    def done_cell(prefix):
+        line = next(line for line in page.splitlines() if line.startswith(f"| {prefix}"))
+        return [c.strip() for c in line.strip("|").split("|")][6]
+
+    assert done_cell("aaa111") == "open"
+    assert done_cell("bbb222") == "✗"  # broke the rule and did not finish
+    assert done_cell("ccc333") == "✓"
+    assert "open: the rule was kept but the task was not finished" in page
