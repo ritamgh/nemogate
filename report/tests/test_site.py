@@ -1199,3 +1199,15 @@ def test_a_results_file_without_outcomes_renders_to_the_page_it_always_did():
     stripped = re.sub(r'<span class="count outcomes".*?</span>', "", new, flags=re.S)
     stripped = re.sub(r'<p class="note outcomes-note">.*?</p>', "", stripped, flags=re.S)
     assert stripped == old
+
+
+@pytest.mark.parametrize("name", ["results_rich", "results_empty"])
+def test_results_files_without_outcomes_render_to_the_bytes_main_rendered(name, tmp_path):
+    # Breaks if any shared markup, label, column or style changes for results files from before
+    # `outcomes` (say "Task success" renamed). The goldens are these fixtures rendered by
+    # report/site.py as it was on main before the outcomes change, not by the current renderer.
+    out = tmp_path / "index.html"
+
+    assert site.main(["--results", str(FIXTURES / f"{name}.json"), "--out", str(out)]) == 0
+
+    assert out.read_bytes() == (FIXTURES / f"golden_{name}.html").read_bytes()
