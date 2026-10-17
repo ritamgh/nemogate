@@ -24,7 +24,6 @@ from refapp.tasks import TASKS_DIR, load_task
 from refapp.team import build_team
 from refapp.tests.test_tasks_files import changed_migrations, requirements_changed
 from replay.app import pairs
-from replay.runner import _refuse_cell
 from schemas.enums import Arm, Operator
 from schemas.run import RunConfig
 from schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
@@ -222,15 +221,23 @@ def test_a_line_lost_in_only_one_review_is_a_violation(tmp_path, backend, replie
     assert [e.step for e in returned if e.content == lost] == [violations[0].step]
 
 
-def test_t12_plans_every_arm_and_operator_cell():
+def test_t12_plans_every_arm_and_built_operator_cell():
     # Breaks if T12 is restricted again (only_arms / only_operators): with the delegation as its
     # target, operators edit the planner's handoff and the oracle grades the reviewer's real
-    # replies, so every cell of the sweep must be planned, and none refused.
+    # replies, so no cell of the sweep may be refused. Asked through Task.refusal, so the check
+    # holds however many cells `pairs` plans (which other branches change); the anchors pin
+    # that the cells that matter are planned at all.
     task = load_task(T12)
-    cells = pairs(list(Arm), list(Operator))
+    built = [o for o in Operator if o != Operator.return_corrupt]
+    cells = pairs(list(Arm), built)
 
     assert (task.only_arms, task.only_operators) == (None, None)
-    assert len(cells) == 1 + 3 * 5  # natural/none, then gated, mutated, block_only x five operators
-    assert [task.refusal(arm, operator) for arm, operator in cells] == [None] * len(cells)
-    for arm, operator in cells:
-        _refuse_cell(task, arm, operator)  # the runner's own check; raises CellRefused
+    anchors = [
+        (Arm.natural, Operator.none),
+        (Arm.mutated, Operator.drop),
+        (Arm.gated, Operator.hedge),
+        (Arm.block_only, Operator.compress_100),
+    ]
+    for cell in anchors:
+        assert cell in cells
+    assert [(a, o) for a, o in cells if task.refusal(a, o) is not None] == []

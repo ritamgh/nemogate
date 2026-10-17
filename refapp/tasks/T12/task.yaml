@@ -3,7 +3,7 @@
 # its own ledger entry: C-007 is C-005 stated as "every time the reviewer replies" and graded with
 # `each: true`, so each reply the reviewer sends back must match.
 #
-# Every arm and operator runs (no only_arms / only_operators), for two reasons:
+# Every arm and every built operator runs (no only_arms / only_operators), for two reasons:
 #  1. `each: true` grades every reviewer reply, so a line lost in either review is a violation.
 #     With C-005 the oracle passed when ANY reply had the line and a loss in one review went unseen.
 #  2. The target is the delegation planner->reviewer, not the return. Operators edit the planner's

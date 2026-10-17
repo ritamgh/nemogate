@@ -142,7 +142,7 @@ is `delegation:planner->reviewer`, the handoff that carries the rule to the revi
 overlay: the violation is an omission in the trace. `replay.carriage` has no anchor for an output
 rule (as for T5), so natural runs of T12 are `UNCLASSIFIABLE`.
 
-T12 runs every arm and operator. Operators edit the planner's handoff to the reviewer, never the
+T12 runs every arm with every built operator. Operators edit the planner's handoff to the reviewer, never the
 reply the oracle reads, so a mutated, block-only or gated run is graded on the reviewer's real
 replies; the gate also refuses an operator on the reviewer's own return, which is why the target
 is the delegation and not the return. `only_arms` / `only_operators` stay in the loader and the
