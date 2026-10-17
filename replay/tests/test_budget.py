@@ -404,13 +404,32 @@ def test_cli_names_an_unknown_task_id(spend_log, monkeypatch, capsys):
     assert "NOPE" in capsys.readouterr().err
 
 
+def natural_only(task_id, real):
+    """`default_refusals` as if `task_id` ran natural x none only (`only_arms`/`only_operators`).
+    No reference task sets them since T12 got its own rule (#66), so the tests that need a task
+    whose forks are all refused simulate one here, at the same hook the runner and budget read."""
+
+    def refusals(task_ids, arms, operators, *, paired=False):
+        out = list(real(task_ids, arms, operators, paired=paired))
+        if task_id in task_ids:
+            out += [
+                (task_id, arm, operator, f"task {task_id} only runs natural with none")
+                for arm, operator in pairs(arms, operators)
+                if (arm, operator) != (Arm.natural, Operator.none)
+            ]
+        return out
+
+    return refusals
+
+
 def test_cli_of_a_paired_sweep_prices_no_orphan_source(spend_log, monkeypatch, capsys):
-    # T12 runs natural x none only, so its gated fork is refused and its natural source has
-    # nothing to fork into. Breaks if that source is still paid for: 3 runs a repetition and
+    # T12 runs natural x none only (simulated, natural_only), so its gated fork is refused and
+    # its natural source has nothing to fork into. Breaks if that source is still paid for: 3 runs
+    # a repetition and
     # N 40 instead of T1's source and fork, 2 runs and N 60 = 6.0 / (0.05 * 2). With natural x
     # none among the cells T12's natural run is a cell of its own: T1 natural + 2 gated forks,
     # T12 natural, 4 runs and N 30. The runner's "planned runs" agrees (test_runner).
-    monkeypatch.setattr(budget, "default_refusals", runner.default_refusals)
+    monkeypatch.setattr(budget, "default_refusals", natural_only("T12", runner.default_refusals))
     argv = ["--bucket", "kill_gate", "--tasks", "T1", "T12", "--cost-per-run", "0.05", "--paired"]
     assert main([*argv, "--arms", "gated", "--operators", "drop"]) == 0
     lines = capsys.readouterr().out.splitlines()

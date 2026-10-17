@@ -311,6 +311,7 @@ constraints:
 | `tool_forbidden(name)` | Tool calls | Yes |
 | `approval_before(tool)` | Event order | Yes |
 | `output_must_include / must_not_include(regex, agent)` | The named agent's final message (for C-005, the reviewer's return to the planner) | No: there is nothing to block |
+| `output_must_include(regex, agent, each=true)` | Every reply from the named agent, not any one (for C-007, both reviews of the T12 chain); one violation per reply that does not match. Optional field, default `false` (PR #64) | No: there is nothing to block |
 | `tool_arg_bound(tool, arg, op, value)` (stretch, unused by the reference app) | Tool-call args | Yes |
 
 **Event trace (JSONL, written by B's middleware, read by A's replay engine and report).** One line per event. Types: `boundary_out`, `boundary_in`, `tool_call`, `tool_result`, `approval`, `gate_block`, `final_output`.
@@ -489,7 +490,7 @@ Both, Oct 19: first full sweep, within the budget-check number.
 Person A
 
 - [x] C6: trace diff, patch view, coverage panel (PR #42)
-- [ ] C6: publish on GitHub Pages (`report/README.md`, "Publishing on GitHub Pages"); Serverless Endpoints optional
+- [x] C6: publish on GitHub Pages (`report/README.md`, "Publishing on GitHub Pages"); Serverless Endpoints optional
 - [ ] Final sweep for the headline numbers, plus one run of the held-out tasks, reported separately
 - [ ] Stretch: compaction boundary, or a second small Deep Agents app run with no pipeline changes
 

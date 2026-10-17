@@ -19,6 +19,7 @@ from langchain_core.messages import AIMessage
 from common import ConfigError, MissingEnvError, SpendCapReached, env
 from common.spend import append_spend
 from replay import record, runner
+from replay.app import pairs
 from replay.runner import Runner
 from schemas.config import load_config
 from schemas.enums import Arm, FsOp, Operator, Role
@@ -1242,14 +1243,33 @@ def test_cli_with_paired_counts_only_the_runs_left_after_refusals(monkeypatch, c
     assert sum(line.startswith("refused: ") for line in lines) == 2
 
 
+def natural_only(task_id, real):
+    """`default_refusals` as if `task_id` ran natural x none only (`only_arms`/`only_operators`).
+    No reference task sets them since T12 got its own rule (#66), so the tests that need a task
+    whose forks are all refused simulate one here, at the same hook the runner and budget read."""
+
+    def refusals(task_ids, arms, operators, *, paired=False):
+        out = list(real(task_ids, arms, operators, paired=paired))
+        if task_id in task_ids:
+            out += [
+                (task_id, arm, operator, f"task {task_id} only runs natural with none")
+                for arm, operator in pairs(arms, operators)
+                if (arm, operator) != (Arm.natural, Operator.none)
+            ]
+        return out
+
+    return refusals
+
+
 def test_cli_with_paired_drops_the_source_of_a_task_whose_forks_are_all_refused(
     monkeypatch, capsys
 ):
-    # T12 runs natural x none only, so its gated x drop fork is refused and its natural source
-    # would be forked into nothing. Breaks if that orphan source is still counted: 9 runs
-    # (6 sources, 3 forks) instead of T1's 3 sources and 3 forks, which budget.plan prices too.
+    # T12 runs natural x none only (simulated, natural_only), so its gated x drop fork is refused
+    # and its natural source would be forked into nothing. Breaks if that orphan source is still
+    # counted: 9 runs (6 sources, 3 forks) instead of T1's 3 sources and 3 forks, which
+    # budget.plan prices too.
     monkeypatch.setattr(runner, "is_live", lambda: True)
-    monkeypatch.setattr(runner, "default_refusals", REAL_DEFAULT_REFUSALS)
+    monkeypatch.setattr(runner, "default_refusals", natural_only("T12", REAL_DEFAULT_REFUSALS))
     argv = ["--tasks", "T1", "T12", "--n", "3", "--paired"]
     assert runner.main([*argv, "--arms", "gated", "--operators", "drop"]) == 2
     lines = capsys.readouterr().out.splitlines()
