@@ -1102,6 +1102,30 @@ def test_the_blocking_arms_name_the_broke_column_for_blocked_attempts_too():
         )
 
 
+def test_a_gated_run_whose_pinned_rule_has_no_anchor_lands_under_in_the_handoff():
+    # Breaks if the classifier finds the gate's re-pin by the check's anchor (#67) and so reads a
+    # pinned rule whose ledger text lacks the anchor as lost: the card would then put it under
+    # "Rule lost in the handoff", directly above "in the handoff includes the gate's re-pin".
+    # The labels come from the real classifier, through aggregate, into the page.
+    from replay.stats import aggregate
+    from replay.tests.test_carriage import ANCHORLESS, PLAIN_TEXT, pinned_run
+    from replay.tests.test_stats import B1, LEDGER, make_run
+
+    check, user_message, rule_text = ANCHORLESS[0]
+    labels = [
+        pinned_run(check, user_message, rule_text, PLAIN_TEXT, broke=broke).label.value
+        for broke in ("blocked", "violated")
+    ]
+    runs = [make_run(f"g-{i}", arm="gated", label=label) for i, label in enumerate(labels)]
+    cell = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)["constraints"][
+        "C-001"
+    ]["boundaries"][B1]["cells"][0]
+    assert cell["labels"] == {"DISOBEYED": 2}
+
+    text = text_of(article(site.render(one_constraint({B1: {"cells": [cell]}})), "C-900"))
+    assert "Rule in the handoff 0 2 Rule lost in the handoff 0 0" in text
+
+
 def test_a_natural_grid_keeps_the_plain_broke_column_and_no_blocked_attempts_line():
     # Breaks if the blocking arms' wording leaks into the natural arm, where nothing is blocked
     # and "broke it" is exactly the violation count.
