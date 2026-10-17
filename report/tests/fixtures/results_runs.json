@@ -145,6 +145,7 @@
                 "rate": 1.0
               },
               "n": 2,
+              "n_forks": 1,
               "n_sources": 2,
               "operator": "drop",
               "success": {
@@ -351,6 +352,7 @@
                 "rate": 0.5
               },
               "n": 2,
+              "n_forks": 1,
               "n_sources": 2,
               "operator": "drop",
               "success": {

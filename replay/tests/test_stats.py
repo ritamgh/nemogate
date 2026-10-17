@@ -154,6 +154,7 @@ def cell(
     by_label=None,
     not_exercised=0,
     compaction=None,
+    n_forks=0,
 ):
     out = {
         "arm": arm,
@@ -169,6 +170,8 @@ def cell(
         "cost_usd": cost,
         "arm_metrics": plain_metrics(n, mean),
     }
+    if n_forks:  # left out of a cell with no fork
+        out["n_forks"] = n_forks
     if by_label is not None:  # natural cells only
         out["violations_by_label"] = by_label
         out["not_exercised"] = not_exercised
@@ -251,6 +254,7 @@ EXPECTED = {
                             0.4,
                             0.1,
                             by_label={"unlabelled": 2},  # nat-1 and fork-1 have no carriage.json
+                            n_forks=2,  # fork-1 and fork-2
                         ),
                         cell(
                             "mutated",
@@ -1091,3 +1095,20 @@ def test_a_carriage_json_with_a_malformed_knob_is_an_unreadable_run(tmp_path):
     )
     got = load_runs([tmp_path])
     assert (got.runs, got.unreadable) == ([], 1)
+
+
+def test_aggregate_counts_the_forks_of_a_cell_and_leaves_the_key_out_when_there_are_none():
+    # Breaks if the report cannot tell which cells hold fork records (cost and tokens after the
+    # fork point only), or if every cell of a sweep without forks gains a key.
+    runs = [
+        make_run("src"),
+        make_run("f-1", fork_source="src"),
+        make_run("f-2", fork_source="src"),
+        make_run("solo", violated=True, arm="mutated", operator="drop"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    cells = got["constraints"]["C-001"]["boundaries"][B1]["cells"]
+    by_arm = {c["arm"]: c for c in cells}
+
+    assert by_arm["natural"]["n"] == 3 and by_arm["natural"]["n_forks"] == 2
+    assert "n_forks" not in by_arm["mutated"]

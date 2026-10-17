@@ -430,7 +430,10 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   `keep` 6 when it was unset, both null = off (an empty `NEMOGATE_COMPACT_TOKENS` is off too), or
   null for a run that does not say (no `carriage.json`, or one from before the knobs). A
   `carriage.json` whose knobs the app would have refused makes the run unreadable. Runs under different settings are never in one
-  cell, and a comparison pairs only cells with the same `compaction`. `n` counts every run, forks included; `n_sources`
+  cell, and a comparison pairs only cells with the same `compaction`. `n` counts every run, forks included; `n_forks`
+  counts the forks (runs with a `fork.json`) and is left out of a cell with none, because a fork's
+  `cost_usd`, tokens and wall time cover only the part after the fork point (the report labels them);
+  `n_sources`
   counts distinct sources (a fork under `fork.json`'s `source_run_id`, any other run under its
   own id); `clustered` is `n_sources < n`. Nothing is deduplicated: a fork is not an
   independent sample, so the report flags the cell and the intervals are not corrected.
@@ -514,7 +517,9 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
  "honesty": {"constraints_total", "constraints_with_check", "check_share", "extraction_recall", "inconclusive_total"},
  "constraints": {<constraint id>: {"text", "kind", "has_check", "blocked_before_call", "task_ids": [sorted],
    "boundaries": {<boundary id>: {
-     "cells": [{"arm", "operator", "compaction": {"tokens", "keep"} | null, "n", "n_sources", "clustered", "violations",
+     "cells": [{"arm", "operator", "compaction": {"tokens", "keep"} | null, "n", "n_sources", "clustered",
+                "n_forks": count,  # only when the cell holds forks
+                "violations",
                 "cvr": {"rate", "lo", "hi"}, "successes", "success": {"rate", "lo", "hi"}, "cost_usd",
                 "violations_by_label": {<carriage label | "unlabelled">: count},  # natural cells only
                 "not_exercised": count,  # natural cells only

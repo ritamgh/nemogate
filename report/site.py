@@ -1090,19 +1090,33 @@ def line(text: str) -> str:
     return f'<span class="count">{text}</span>'
 
 
-def cost_td(m: dict[str, Any]) -> str:
-    cost = m["cost"]
-    return mean_text(cost, money) + line(runs_note(cost["n"]))
+def fork_note(cell: dict[str, Any], what: str) -> str:
+    """A fork's cost and time cover only what came after the fork point (replay/README.md, "A
+    fork record is partial"): say so under any mean that includes one. `n_forks` is left out of
+    a cell without forks and of a results file from before it, which get no note."""
+    forks = cell.get("n_forks") or 0
+    if not forks:
+        return ""
+    if forks >= cell["n"]:
+        return line("all forks: after the fork point only")
+    return line(
+        f"{e(forks)} of {e(cell['n'])} runs are forks: their {what} is after the fork point only"
+    )
 
 
-def wall_td(m: dict[str, Any]) -> str:
-    wall = m["wall_seconds"]
+def cost_td(cell: dict[str, Any]) -> str:
+    cost = cell["arm_metrics"]["cost"]
+    return mean_text(cost, money) + line(runs_note(cost["n"])) + fork_note(cell, "cost")
+
+
+def wall_td(cell: dict[str, Any]) -> str:
+    wall = cell["arm_metrics"]["wall_seconds"]
     if not wall["n"]:
         return '<span class="notrun">unknown</span>' + line("no timing recorded")
     note = runs_note(wall["n"])
     if wall.get("unknown"):
         note += f"; {e(wall['unknown'])} not timed"
-    return mean_text(wall, whole, " s") + line(note)
+    return mean_text(wall, whole, " s") + line(note) + fork_note(cell, "time")
 
 
 def attempt_td(m: dict[str, Any]) -> str:
@@ -1118,7 +1132,8 @@ def attempt_td(m: dict[str, Any]) -> str:
     )
 
 
-def after_block_td(arm: str, m: dict[str, Any]) -> str:
+def after_block_td(arm: str, cell: dict[str, Any]) -> str:
+    m = cell["arm_metrics"]
     if arm not in BLOCKING_ARMS:
         return '<span class="notrun">no gate in this arm, nothing is blocked</span>'
     b = m.get("blocks")
@@ -1157,6 +1172,8 @@ def after_block_td(arm: str, m: dict[str, Any]) -> str:
         extra = f" ({e(' and '.join(shares))}, shared out by step)" if shares else ""
         steps = f"{round(rec['steps']['mean'], 1):g}"
         parts.append(line(f"recovery: {e(steps)} steps after the first block{extra}"))
+        if shares:
+            parts.append(fork_note(cell, "share of cost and time"))
     return "".join(parts)
 
 
@@ -1178,10 +1195,10 @@ def arm_metrics_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = 
             '<td colspan="4" class="notrun">not in this results file</td></tr>'
         )
     return (
-        f'<tr><th scope="row">{head}<td data-label="Cost per run">{cost_td(m)}</td>'
-        f'<td data-label="Wall time per run">{wall_td(m)}</td>'
+        f'<tr><th scope="row">{head}<td data-label="Cost per run">{cost_td(cell)}</td>'
+        f'<td data-label="Wall time per run">{wall_td(cell)}</td>'
         f'<td data-label="{e(ATTEMPT_HEAD)}">{attempt_td(m)}</td>'
-        f'<td data-label="After a block">{after_block_td(arm, m)}</td></tr>'
+        f'<td data-label="After a block">{after_block_td(arm, cell)}</td></tr>'
     )
 
 

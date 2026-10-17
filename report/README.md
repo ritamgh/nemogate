@@ -63,7 +63,10 @@ What it shows:
   the block_only and gated arms what happened after a block (blocked calls and repeats per run,
   carry-over, re-plans, runs stuck, recovery steps with the cost and time shares marked as
   estimates; a line says how many runs carry-over and re-plans leave out because several task
-  calls ran at once). A cell without `arm_metrics` (older file) shows "not in this results file", and a
+  calls ran at once). A cell holding fork records (`n_forks` in the cell) says under its cost,
+  time and recovery shares that they are "after the fork point only" ("all forks", or "k of n
+  runs are forks"): a fork's cost and time cover only what ran after the fork point, so they are
+  not whole-run numbers. A cell without `arm_metrics` (older file) shows "not in this results file", and a
   page with none prints no table. The header's run block adds "Money in no rate": what errored
   runs cost, in all and per arm.
 - A one-sentence summary per (boundary, operator), only when the mutated violation rate, the

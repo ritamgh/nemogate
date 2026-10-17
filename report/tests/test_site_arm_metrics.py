@@ -321,3 +321,49 @@ def test_a_cell_where_every_run_is_ambiguous_shows_no_carry_over_number_and_does
 
     assert "carried into a later delegation" not in text
     assert "carry-over and re-plans leave out 2 runs with several task calls at once" in text
+
+
+def fork_page(n: int, n_forks: int | None) -> dict:
+    cell = with_metrics(
+        make_cell("gated", "drop", n, 0, n),
+        cost=stat(0.05, 0.04, 0.06, n),
+        wall_seconds={**stat(30.0, 20.0, 40.0, n), "unknown": 0},
+        attempt_rate=None,
+        blocks=BLOCKS,
+    )
+    if n_forks is not None:
+        cell["n_forks"] = n_forks
+    return one_constraint({"delegation:a->b": {"cells": [cell], "comparisons": []}})
+
+
+def test_a_cell_of_forks_says_cost_and_time_are_after_the_fork_point():
+    # Breaks if a paired sweep's fork cells print cost and time that read as whole-run numbers:
+    # a fork's record holds only what came after the fork point (replay/README.md, "A fork
+    # record is partial").
+    text = text_of(metrics_table(site.render(fork_page(2, 2))))
+
+    assert (
+        "$0.050 (range $0.040 to $0.060) mean of 2 runs all forks: after the fork point only"
+        in text
+    )
+    assert "30 s (range 20 to 40 s) mean of 2 runs all forks: after the fork point only" in text
+    assert (
+        "recovery: 4 steps after the first block (about $0.167 and 67 s, shared out by step)"
+        in text
+    )
+    assert text.count("after the fork point") == 3
+
+
+def test_a_cell_mixing_forks_and_whole_runs_says_how_many_are_partial():
+    # Breaks if a cell that pools forks with independent runs reads as whole runs, or as all forks.
+    text = text_of(metrics_table(site.render(fork_page(3, 1))))
+
+    assert "mean of 3 runs 1 of 3 runs are forks: their cost is after the fork point only" in text
+    assert "mean of 3 runs 1 of 3 runs are forks: their time is after the fork point only" in text
+
+
+def test_a_cell_without_forks_or_from_an_older_file_has_no_fork_label():
+    # Breaks if every cost cell is labelled, or a results file without n_forks is.
+    for n_forks in (None, 0):
+        text = text_of(metrics_table(site.render(fork_page(2, n_forks))))
+        assert "fork" not in text

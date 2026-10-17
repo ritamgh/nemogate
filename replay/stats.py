@@ -298,6 +298,10 @@ def _cell(
         "success": _rate(successes, n),
         "cost_usd": _round(math.fsum(run.record.cost_usd for run in runs)),
     }
+    if n_forks := sum(run.fork_source is not None for run in runs):
+        # A fork's cost, tokens and time cover the part after the fork point only, so the report
+        # must not read this cell's means as whole runs. Left out when there are none.
+        out["n_forks"] = n_forks
     if arm == Arm.natural:
         # Only without sabotage can the label say why a rule broke: lost in the handoff
         # (DROPPED) or carried and broken anyway (DISOBEYED).
