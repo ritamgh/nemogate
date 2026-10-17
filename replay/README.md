@@ -348,20 +348,26 @@ SHARES = {"dev": 0.20, "kill_gate": 0.10, "main_sweep": 0.40, "repair": 0.15, "f
 def runs_per_cell(bucket_usd: float, cost_per_run: float, n_pairs: int, n_tasks: int) -> int
     # floor(bucket / (cost_per_run * n_pairs * n_tasks)); ValueError unless all inputs > 0
 def plan(*, bucket: str, cost_per_run: float, arms, operators, n_tasks: int, config: AppConfig,
-         spent_usd: float, paired: bool = False) -> Plan
-    # Plan(bucket, bucket_usd, cost_per_run, pairs, source_runs, n_tasks, n, planned_usd,
-    #      spent_usd, stop_usd, capped): n from runs_per_cell with
-    # n_pairs = len(app.pairs(...)) + source_runs; source_runs is 1 when the plan has a
-    # non-natural pair, `paired` is True and (natural, none) is not itself a pair (the
-    # natural source runs `apaired` makes only to fork from), else 0. Every run is priced at
-    # cost_per_run, which must be a full run's cost.
+         spent_usd: float, paired: bool = False, refused=()) -> Plan
+    # Plan(bucket, bucket_usd, cost_per_run, pairs, source_runs, n_tasks, runs, n, planned_usd,
+    #      spent_usd, stop_usd, capped): n = floor(bucket / (cost_per_run * runs)), where runs
+    # (per repetition) sums, over tasks, the app.pairs(...) cells not in `refused` (a set of
+    # (task index, arm, operator)) plus source_runs for a task with a non-natural cell left;
+    # source_runs is 1 when the plan has a non-natural pair, `paired` is True and
+    # (natural, none) is not itself a pair (the natural source runs `apaired` makes only to fork
+    # from), else 0. `pairs` counts the pairs left for at least one task. ValueError when every
+    # cell is refused. Every run is priced at cost_per_run, which must be a full run's cost.
     # stop_usd = stop_at_fraction * total_usd; if spent + planned would pass stop_usd, n is
     # lowered to the largest value that fits and capped=True.
 def mean_cost(records: Iterable[RunRecord]) -> float     # ValueError on none
 main(): `python -m replay.budget --bucket kill_gate --arms natural mutated --operators none drop
         --tasks <id> <id> (--cost-per-run X | --from-runs runs/)` prints the plan, one fact per
         line, ending with `N per arm per task: <n>`. Exit 1 when n < 1. spent_usd from
-        common.spend.total_spent(). No model calls, no Contree.
+        common.spend.total_spent(). No model calls, no Contree. Task ids are the default app's
+        (an unknown one exits 2): the cells the runner would refuse for them
+        (`runner.default_refusals`, the runner's own check) come first as
+        `refused: <task> <arm> <operator>: <reason>` and are left out of the count, so its N is
+        the N of the sweep that can run once those cells are dropped.
 ```
 
 ## stats.py
@@ -688,7 +694,11 @@ delegations to the same agent are not told apart; planner delegations here are s
   for.
 - `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--top-up] [--yes]`
   refuses with exit code 2 unless `NEMOGATE_LIVE=1`; it prints `planned runs: N` and, without
-  `--yes`, exits 1 pointing at `python -m replay.budget`. With `--yes` it runs and prints one
+  `--yes`, exits 1 pointing at `python -m replay.budget`. N leaves out the cells the sweep would
+  refuse (`refusals(app, ledger, ...)`, the same check `arun` and `apaired` make up front); each
+  is listed as `refused: <task> <arm> <operator>: <reason>`, and if there is one the CLI exits 2
+  before `--yes` (`refusing to run: K cells are refused ...`), since such a sweep runs nothing.
+  An unknown task id exits 2 the same way. With `--yes` it runs and prints one
   line per record (`<run_id> task=.. arm=.. operator=.. violations=C-1,C-2|- task_success=..
   cost_usd=0.0000`), then `runs: X ok, Y errored` and, for each errored run,
   `errored <run_id> task=.. arm=.. operator=.. error_type=..`. Exit code 1 if any run errored,

@@ -149,8 +149,8 @@ lost only in the second review is unseen; (2) the boundary is a return, so under
 `hedge` the mutation removes the very line the rule needs and the oracle grades that mutated text,
 which makes mutated, block-only and gated T12 runs violate by construction. It is waiting on a
 per-reply output predicate from Shekhar (one verdict per reviewer reply, graded on the original
-reply); drop the two fields once that exists. `replay.budget` counts task ids only, so its run
-count for a sweep that includes T12 is an upper bound.
+reply); drop the two fields once that exists. `replay.budget` and the runner's `planned runs`
+list T12's refused cells and leave them out of the count.
 
 Check scripts:
 - Import the app from the repo they run in (`sys.path.insert(0, os.getcwd())`), use

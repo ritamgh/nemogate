@@ -652,6 +652,55 @@ def test_a_sweep_with_a_refused_cell_is_refused_before_any_run_starts(tmp_path):
     assert calls == []
 
 
+def test_refusals_lists_each_refused_cell_with_why_in_sweep_order():
+    # Breaks if the run count a human confirms is not checked with the runner's own refusal:
+    # X2 refuses every cell but natural x none, X1 none.
+    app = FakeApp()
+    app.tasks = lambda: [FakeTask("X1", "C-001"), RestrictedTask("X2", "C-002")]
+    got = runner.refusals(
+        app, LEDGER, ["X1", "X2"], [Arm.natural, Arm.mutated], [Operator.none, Operator.drop]
+    )
+    assert got == [
+        (
+            "X2",
+            Arm.mutated,
+            Operator.drop,
+            "task X2 only runs natural with none, not mutated with drop",
+        )
+    ]
+
+
+class NoSourceTask(FakeTask):
+    """A task that refuses the natural arm, the source every paired fork starts from."""
+
+    def refusal(self, arm, operator):
+        return "no natural runs here" if arm is Arm.natural else None
+
+
+def test_refusals_of_a_paired_sweep_refuse_the_forks_of_a_refused_source():
+    # Breaks if a paired count keeps forks whose natural source cannot run: apaired refuses the
+    # source cell, so none of that task's forks run either.
+    app = FakeApp()
+    app.tasks = lambda: [NoSourceTask("X1", "C-001")]
+    got = runner.refusals(app, LEDGER, ["X1"], [Arm.gated], [Operator.drop], paired=True)
+    assert got == [
+        ("X1", Arm.natural, Operator.none, "no natural runs here"),
+        (
+            "X1",
+            Arm.gated,
+            Operator.drop,
+            "the natural run it forks from is refused: no natural runs here",
+        ),
+    ]
+    # Not paired, the gated cell is its own run and the task lets it run.
+    assert runner.refusals(app, LEDGER, ["X1"], [Arm.gated], [Operator.drop]) == []
+
+
+def test_refusals_name_an_unknown_task_id():
+    with pytest.raises(ValueError, match="X9"):
+        runner.refusals(FakeApp(), LEDGER, ["X1", "X9"], [Arm.natural], [Operator.none])
+
+
 def test_a_restricted_task_still_runs_its_allowed_cell(tmp_path):
     # Breaks if the refusal blocks the restricted task's own cell, or tasks without `refusal`.
     h = Harness(tmp_path)
@@ -938,6 +987,17 @@ def _no_run(*args, **kwargs):
     raise AssertionError("run() must not be called")
 
 
+REAL_DEFAULT_REFUSALS = runner.default_refusals
+
+
+@pytest.fixture(autouse=True)
+def _made_up_task_ids_refuse_nothing(monkeypatch):
+    # The CLI tests name made-up tasks (X1, X2) that the default app does not have, so the
+    # up-front refusal check (the default app and ledger) is stubbed out; the tests of that check
+    # put REAL_DEFAULT_REFUSALS back.
+    monkeypatch.setattr(runner, "default_refusals", lambda *args, **kwargs: [])
+
+
 def test_cli_refuses_without_the_live_flag(monkeypatch, capsys):
     monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
     monkeypatch.setattr(runner, "run", _no_run)
@@ -1137,6 +1197,49 @@ def test_cli_top_up_refuses_a_paired_sweep(monkeypatch, capsys):
     monkeypatch.setattr(runner, "default_runner", _no_run)
     assert runner.main([*PAIRED_ARGS, "--paired", "--top-up", "--yes"]) == 2
     assert "--paired" in capsys.readouterr().err
+
+
+REFUSED_SWEEP = [
+    "--tasks", "T1", "T2",
+    "--arms", "mutated",
+    "--operators", "drop", "return_corrupt",
+    "--n", "3",
+]  # fmt: skip
+
+
+def test_cli_leaves_refused_cells_out_of_the_run_count_lists_them_and_refuses(monkeypatch, capsys):
+    # The gate does not build return_corrupt, so every mutated x return_corrupt cell is refused.
+    # Breaks if "planned runs" counts them: 2 tasks x 2 pairs x 3 = 12 for a sweep of which only
+    # the 6 drop runs can run, or if the sweep goes on to --yes with refused cells in it.
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "default_refusals", REAL_DEFAULT_REFUSALS)
+    monkeypatch.setattr(runner, "default_runner", _no_run)
+    for extra in ([], ["--yes"]):
+        assert runner.main([*REFUSED_SWEEP, *extra]) == 2
+        out = capsys.readouterr()
+        lines = out.out.splitlines()
+        assert "planned runs: 6" in lines
+        refused = [line for line in lines if line.startswith("refused: ")]
+        assert [line.split(": ")[1] for line in refused] == [
+            "T1 mutated return_corrupt",
+            "T2 mutated return_corrupt",
+        ]
+        assert all("the return_corrupt operator is not built" in line for line in refused)
+        assert "refusing to run: 2 cells are refused" in out.err
+
+
+def test_cli_with_paired_counts_only_the_runs_left_after_refusals(monkeypatch, capsys):
+    # Breaks if the paired count keeps a refused fork or the source of a task with no fork left:
+    # T1 and T2 each fork gated x drop from a natural source, gated x return_corrupt is refused,
+    # so 2 tasks x 3 seeds = 6 sources and 6 forks, not 18.
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "default_refusals", REAL_DEFAULT_REFUSALS)
+    argv = ["--tasks", "T1", "T2", "--arms", "gated", "--operators", "drop", "return_corrupt"]
+    assert runner.main([*argv, "--n", "3", "--paired"]) == 2
+    lines = capsys.readouterr().out.splitlines()
+    assert "planned runs: 12" in lines
+    assert "paired: 6 natural sources, 6 forks" in lines
+    assert sum(line.startswith("refused: ") for line in lines) == 2
 
 
 def test_cli_reports_a_refused_cell_as_a_refusal_not_a_traceback(monkeypatch, capsys):

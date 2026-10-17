@@ -651,14 +651,72 @@ class CellRefused(ValueError):
     """A task limits itself to other (arm, operator) cells than the one asked for."""
 
 
-def _refuse_cell(task: AppTask, arm: Arm, operator: Operator, ledger: Ledger) -> None:
-    """Raise CellRefused when the cell cannot be measured: the task limits itself to other cells
+def refusal(task: AppTask, arm: Arm, operator: Operator, ledger: Ledger) -> str | None:
+    """Why the cell cannot be measured, or None: the task limits itself to other cells
     (`task.refusal`, optional), or the gate would refuse the run (`cell_refusal`)."""
-    refusal = getattr(task, "refusal", None)
-    if refusal is not None and (why := refusal(arm, operator)) is not None:
+    limit = getattr(task, "refusal", None)
+    if limit is not None and (why := limit(arm, operator)) is not None:
+        return why
+    return cell_refusal(ledger, task, operator)
+
+
+def _refuse_cell(task: AppTask, arm: Arm, operator: Operator, ledger: Ledger) -> None:
+    if (why := refusal(task, arm, operator, ledger)) is not None:
         raise CellRefused(why)
-    if (why := cell_refusal(ledger, task, operator)) is not None:
-        raise CellRefused(why)
+
+
+def refusals(
+    app: App,
+    ledger: Ledger,
+    task_ids: Sequence[str],
+    arms: Sequence[Arm],
+    operators: Sequence[Operator],
+    *,
+    paired: bool = False,
+) -> list[tuple[str, Arm, Operator, str]]:
+    """The (task id, arm, operator, why) cells that `arun`, or `apaired` when `paired`, refuses,
+    in sweep order. Either refuses the whole sweep before its first run, so the cells left are
+    the runs that happen once these are dropped. A paired sweep's natural source is a cell too,
+    and a refused source refuses its task's forks. ValueError names an unknown task id."""
+    by_id = {t.id: t for t in app.tasks()}
+    if unknown := [t for t in task_ids if t not in by_id]:
+        raise ValueError(f"unknown task ids: {', '.join(unknown)}")
+    run_pairs = pairs(arms, operators)
+    fork_pairs = [(a, o) for a, o in run_pairs if a is not Arm.natural]
+    out = []
+    for task_id in task_ids:
+        task = by_id[task_id]
+        if not (paired and fork_pairs):
+            out += [
+                (task_id, a, o, why)
+                for a, o in run_pairs
+                if (why := refusal(task, a, o, ledger)) is not None
+            ]
+        elif (why := refusal(task, Arm.natural, Operator.none, ledger)) is not None:
+            out.append((task_id, Arm.natural, Operator.none, why))
+            forked = f"the natural run it forks from is refused: {why}"
+            out += [(task_id, a, o, forked) for a, o in fork_pairs]
+        else:
+            out += [
+                (task_id, a, o, why)
+                for a, o in fork_pairs
+                if (why := refusal(task, a, o, ledger)) is not None
+            ]
+    return out
+
+
+def default_refusals(
+    task_ids: Sequence[str],
+    arms: Sequence[Arm],
+    operators: Sequence[Operator],
+    *,
+    paired: bool = False,
+) -> list[tuple[str, Arm, Operator, str]]:
+    """`refusals` with the app and ledger `default_runner` uses, without building a runner."""
+    ledger = load_ledger_yaml(LEDGER_PATH.read_text(encoding="utf-8"))
+    from refapp.app import APP
+
+    return refusals(APP, ledger, task_ids, arms, operators, paired=paired)
 
 
 def _app_refusal(ledger: Ledger, rule: Constraint) -> str | None:
@@ -947,6 +1005,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        refused = default_refusals(args.tasks, args.arms, args.operators, paired=paired)
+    except ValueError as exc:
+        print(f"refusing to run: {exc}", file=sys.stderr)
+        return 2
+    dropped = {(t, a.value, o.value) for t, a, o, _ in refused}
     if args.top_up:
         sweep = default_runner(args.runs_dir)
         try:
@@ -957,6 +1021,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         cells = sweep_status.top_up_plan(
             sweep_status.scan(sweep.runs_dir), repro, args.tasks, args.arms, args.operators, args.n
         )
+        cells = [c for c in cells if (c.task_id, c.arm, c.operator) not in dropped]
         for cell in cells:
             print(
                 f"{cell.task_id} {cell.arm} {cell.operator}: "
@@ -965,14 +1030,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         seeds = {(c.task_id, c.arm, c.operator): c.seeds for c in cells}
         planned = sum(c.planned for c in cells)
     elif paired:
-        n_sources = len(args.tasks) * args.n
-        n_forks = n_sources * len(fork_pairs)
+        no_source = sum(a is Arm.natural for _, a, _, _ in refused)
+        n_sources = (len(args.tasks) - no_source) * args.n
+        n_forks = (len(args.tasks) * len(fork_pairs) - len(refused) + no_source) * args.n
         planned = n_sources + n_forks
     else:
-        planned = len(args.tasks) * len(pairs(args.arms, args.operators)) * args.n
+        n_cells = len(args.tasks) * len(pairs(args.arms, args.operators)) - len(refused)
+        planned = n_cells * args.n
     print(f"planned runs: {planned}")
     if paired and not args.top_up:
         print(f"paired: {n_sources} natural sources, {n_forks} forks")
+    for task_id, arm, operator, why in refused:
+        print(f"refused: {task_id} {arm.value} {operator.value}: {why}")
+    if refused:
+        print(
+            f"refusing to run: {len(refused)} cells are refused (listed above) and a sweep with "
+            "one runs nothing; drop them from --tasks, --arms or --operators",
+            file=sys.stderr,
+        )
+        return 2
     if not args.yes:
         print(
             "not started: run `python -m replay.budget` to check this count against the budget "
