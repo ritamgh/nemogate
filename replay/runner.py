@@ -24,6 +24,7 @@ from uuid import UUID
 from common import ConfigError, MissingEnvError, SpendCapReached, env
 from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
+from gate.operators import make_operator
 from replay import record, sweep_status
 from replay.app import App, AppTask, pairs
 from replay.boundaries import (
@@ -39,7 +40,15 @@ from replay.fsdiff import diff, snapshot
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
-from schemas.ledger import Ledger, load_ledger_yaml
+from schemas.ledger import (
+    ApprovalBefore,
+    Constraint,
+    Ledger,
+    OutputMustInclude,
+    OutputMustNotInclude,
+    PathForbidden,
+    load_ledger_yaml,
+)
 from schemas.run import RunRecord
 from schemas.trace import BoundaryOut, dump_event_jsonl, parse_trace_jsonl
 
@@ -252,7 +261,7 @@ class Runner:
         """One run. If it raises, the traceback goes to `error.txt`. A failure once the agents have
         started also gets an `error.json`, unless it is one that stops the sweep; a failure in
         setup never does. The exception is re-raised either way."""
-        _refuse_cell(task, arm, operator)
+        _refuse_cell(task, arm, operator, self.ledger)
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
         phase = _Phase()
@@ -509,7 +518,7 @@ class Runner:
         tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
         for task in tasks:  # CellRefused before any run starts
             for arm, operator in pairs(arms, operators):
-                _refuse_cell(task, arm, operator)
+                _refuse_cell(task, arm, operator, self.ledger)
         records: list[RunRecord] = []
         self.records, self.errors = records, []
         for task in tasks:
@@ -561,6 +570,9 @@ class Runner:
         by_id = {t.id: t for t in self.app.tasks()}
         tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
         fork_pairs = [(a, o) for a, o in pairs(arms, operators) if a is not Arm.natural]
+        for task in tasks:  # CellRefused before the first source runs
+            for arm, operator in [(Arm.natural, Operator.none), *fork_pairs]:
+                _refuse_cell(task, arm, operator, self.ledger)
         records: list[RunRecord] = []
         self.records, self.errors, self.unforkable = records, [], []
         self.not_forked = Counter()
@@ -639,11 +651,126 @@ class CellRefused(ValueError):
     """A task limits itself to other (arm, operator) cells than the one asked for."""
 
 
-def _refuse_cell(task: AppTask, arm: Arm, operator: Operator) -> None:
-    """Raise CellRefused when the task limits itself to other cells (`task.refusal`, optional)."""
-    refusal = getattr(task, "refusal", None)
-    if refusal is not None and (why := refusal(arm, operator)) is not None:
+def refusal(task: AppTask, arm: Arm, operator: Operator, ledger: Ledger) -> str | None:
+    """Why the cell cannot be measured, or None: the task limits itself to other cells
+    (`task.refusal`, optional), or the gate would refuse the run (`cell_refusal`)."""
+    limit = getattr(task, "refusal", None)
+    if limit is not None and (why := limit(arm, operator)) is not None:
+        return why
+    return cell_refusal(ledger, task, operator)
+
+
+def _refuse_cell(task: AppTask, arm: Arm, operator: Operator, ledger: Ledger) -> None:
+    if (why := refusal(task, arm, operator, ledger)) is not None:
         raise CellRefused(why)
+
+
+def refusals(
+    app: App,
+    ledger: Ledger,
+    task_ids: Sequence[str],
+    arms: Sequence[Arm],
+    operators: Sequence[Operator],
+    *,
+    paired: bool = False,
+) -> list[tuple[str, Arm, Operator, str]]:
+    """The (task id, arm, operator, why) cells that `arun`, or `apaired` when `paired`, refuses,
+    in sweep order. Either refuses the whole sweep before its first run, so the cells left are
+    the runs that happen once these are dropped. A paired sweep's natural source is a cell too,
+    and a refused source refuses its task's forks. ValueError names an unknown task id."""
+    by_id = {t.id: t for t in app.tasks()}
+    if unknown := [t for t in task_ids if t not in by_id]:
+        raise ValueError(f"unknown task ids: {', '.join(unknown)}")
+    run_pairs = pairs(arms, operators)
+    fork_pairs = [(a, o) for a, o in run_pairs if a is not Arm.natural]
+    out = []
+    for task_id in task_ids:
+        task = by_id[task_id]
+        if not (paired and fork_pairs):
+            out += [
+                (task_id, a, o, why)
+                for a, o in run_pairs
+                if (why := refusal(task, a, o, ledger)) is not None
+            ]
+        elif (why := refusal(task, Arm.natural, Operator.none, ledger)) is not None:
+            out.append((task_id, Arm.natural, Operator.none, why))
+            forked = f"the natural run it forks from is refused: {why}"
+            out += [(task_id, a, o, forked) for a, o in fork_pairs]
+        else:
+            out += [
+                (task_id, a, o, why)
+                for a, o in fork_pairs
+                if (why := refusal(task, a, o, ledger)) is not None
+            ]
+    return out
+
+
+def default_refusals(
+    task_ids: Sequence[str],
+    arms: Sequence[Arm],
+    operators: Sequence[Operator],
+    *,
+    paired: bool = False,
+) -> list[tuple[str, Arm, Operator, str]]:
+    """`refusals` with the app and ledger `default_runner` uses, without building a runner."""
+    ledger = load_ledger_yaml(LEDGER_PATH.read_text(encoding="utf-8"))
+    from refapp.app import APP
+
+    return refusals(APP, ledger, task_ids, arms, operators, paired=paired)
+
+
+def _app_refusal(ledger: Ledger, rule: Constraint) -> str | None:
+    """gate._check_app: a path_forbidden rule needs `app.repo_root` (tool paths are absolute) and
+    an approval_before rule needs `app.approval_tool`. It depends on the ledger and the rule, not
+    on the arm or the operator."""
+    if isinstance(rule.check, PathForbidden) and ledger.app.repo_root is None:
+        return f"{rule.id} is a path_forbidden rule and the ledger has no app.repo_root"
+    if isinstance(rule.check, ApprovalBefore) and ledger.app.approval_tool is None:
+        return f"{rule.id} is an approval_before rule and the ledger has no app.approval_tool"
+    return None
+
+
+def cell_refusal(ledger: Ledger, task: AppTask, operator: Operator) -> str | None:
+    """Why the gate would refuse `task` under `operator`, or None when it would not.
+
+    The gate refuses these when it is built, so a sweep would find out only at the cell's first
+    run, after earlier cells were paid for. This repeats its rules (gate._check_arm and
+    _check_target) for the part replay can see; replay/tests/test_cell_refusal.py checks the two
+    agree. An unmeasurable cell is one an operator would change the very thing it measures:
+    the compaction notes, or the reply an output rule grades. It also mirrors gate._check_app,
+    which needs only the ledger and the task's rule, so it applies to operator none as well.
+    An operator the gate has not built is refused too: `make_operator` raises
+    NotImplementedError for it when the gate is built, and builds the closure without calling a
+    model, so asking it with no model is a free probe that follows the gate if it builds that
+    operator later."""
+    rule = next((c for c in ledger.constraints if c.id == task.constraint), None)
+    if rule is not None and (why := _app_refusal(ledger, rule)) is not None:
+        return why  # gate._check_app: every arm builds the gate, operator none included
+    if operator is Operator.none:
+        return None
+    try:
+        make_operator(operator, "", None)
+    except NotImplementedError:
+        return (
+            f"the {operator.value} operator is not built in the gate: "
+            f"{task.constraint} on {task.boundary} cannot run under it"
+        )
+    kind, _, rest = task.boundary.partition(":")
+    if kind == "compaction":
+        return (
+            f"operators apply to a delegation or return boundary, not compaction: "
+            f"{task.constraint} targets {task.boundary} (operator {operator.value})"
+        )
+    if rule is None or not isinstance(rule.check, OutputMustInclude | OutputMustNotInclude):
+        return None
+    # "return:<sender>-><receiver>": only the graded agent's own replies are at stake.
+    if kind == "return" and rest.partition("->")[0] == rule.check.agent:
+        return (
+            f"{task.constraint} is an output rule: the {operator.value} operator on "
+            f"{task.boundary} would change the reply it grades; target the delegation to that "
+            "agent instead"
+        )
+    return None
 
 
 def _write_error(
@@ -878,6 +1005,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        refused = default_refusals(args.tasks, args.arms, args.operators, paired=paired)
+    except ValueError as exc:
+        print(f"refusing to run: {exc}", file=sys.stderr)
+        return 2
+    dropped = {(t, a.value, o.value) for t, a, o, _ in refused}
     if args.top_up:
         sweep = default_runner(args.runs_dir)
         try:
@@ -888,6 +1021,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         cells = sweep_status.top_up_plan(
             sweep_status.scan(sweep.runs_dir), repro, args.tasks, args.arms, args.operators, args.n
         )
+        cells = [c for c in cells if (c.task_id, c.arm, c.operator) not in dropped]
         for cell in cells:
             print(
                 f"{cell.task_id} {cell.arm} {cell.operator}: "
@@ -896,14 +1030,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         seeds = {(c.task_id, c.arm, c.operator): c.seeds for c in cells}
         planned = sum(c.planned for c in cells)
     elif paired:
-        n_sources = len(args.tasks) * args.n
-        n_forks = n_sources * len(fork_pairs)
+        # A source runs for a task with a fork left, or as the natural cell the user asked for;
+        # a task whose forks are all refused has no source to pay for (as in budget.plan).
+        lost = Counter(t for t, a, _, _ in refused if a is not Arm.natural)
+        no_source = {t for t, a, _, _ in refused if a is Arm.natural}
+        asked = (Arm.natural, Operator.none) in pairs(args.arms, args.operators)
+        n_sources = args.n * sum(
+            t not in no_source and (asked or lost[t] < len(fork_pairs)) for t in args.tasks
+        )
+        n_forks = (len(args.tasks) * len(fork_pairs) - sum(lost.values())) * args.n
         planned = n_sources + n_forks
     else:
-        planned = len(args.tasks) * len(pairs(args.arms, args.operators)) * args.n
+        n_cells = len(args.tasks) * len(pairs(args.arms, args.operators)) - len(refused)
+        planned = n_cells * args.n
     print(f"planned runs: {planned}")
     if paired and not args.top_up:
         print(f"paired: {n_sources} natural sources, {n_forks} forks")
+    for task_id, arm, operator, why in refused:
+        print(f"refused: {task_id} {arm.value} {operator.value}: {why}")
+    if refused:
+        print(
+            f"refusing to run: {len(refused)} cells are refused (listed above) and a sweep with "
+            "one runs nothing; drop them from --tasks, --arms or --operators",
+            file=sys.stderr,
+        )
+        return 2
     if not args.yes:
         print(
             "not started: run `python -m replay.budget` to check this count against the budget "

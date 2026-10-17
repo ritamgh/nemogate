@@ -2,6 +2,8 @@ import json
 
 import pytest
 
+from replay import budget, runner
+from replay.app import pairs
 from replay.budget import SHARES, Plan, main, mean_cost, plan, runs_per_cell
 from schemas.config import BudgetConfig, load_config
 from schemas.enums import Arm, Operator, Role
@@ -10,6 +12,14 @@ from schemas.run import RunRecord
 CONFIG = load_config("config.yaml").model_copy(
     update={"budget": BudgetConfig(total_usd=60, stop_at_fraction=0.8)}
 )
+
+
+@pytest.fixture(autouse=True)
+def _made_up_task_ids_refuse_nothing(monkeypatch):
+    # Most CLI tests name made-up tasks ("A", "T") that the default app does not have, so the
+    # refusal check (the default app and ledger) is stubbed out; the tests of that check put the
+    # runner's real one back.
+    monkeypatch.setattr(budget, "default_refusals", lambda *args, **kwargs: [])
 
 
 def _record(run_id: str, cost: float) -> RunRecord:
@@ -157,7 +167,7 @@ def test_plan_does_not_pay_twice_for_a_natural_arm_that_is_the_source():
     p = plan(
         bucket="kill_gate",
         cost_per_run=0.05,
-        arms=[Arm.natural, Arm.gated],
+        arms=[Arm.natural, Arm.mutated],
         operators=[Operator.none, Operator.drop],
         n_tasks=1,
         config=CONFIG,
@@ -283,3 +293,147 @@ def test_cli_from_runs_with_only_fork_records_has_nothing_to_average(spend_log, 
     (runs / "r-fork" / "fork.json").write_text("{}")
     with pytest.raises(SystemExit):
         main([*KILL_GATE, "--tasks", "A", "--from-runs", str(runs)])
+
+
+def test_plan_accepts_the_blocking_arms_with_operator_none():
+    # Breaks if gated or block_only x none is refused: the budget check would print "no pair
+    # to run" for the sweep that measures the gate on natural loss. 2 pairs, 6.0 / (0.05 * 2) = 60
+    # (independent runs, no source run).
+    p = plan(
+        bucket="kill_gate",
+        cost_per_run=0.05,
+        arms=[Arm.block_only, Arm.gated],
+        operators=[Operator.none],
+        n_tasks=1,
+        config=CONFIG,
+        spent_usd=0.0,
+    )
+    assert (p.pairs, p.n) == (2, 60)
+
+
+def test_pairs_keeps_natural_unmutated_and_mutated_mutated():
+    # Breaks if opening gated x none also lets natural run an operator or mutated run without
+    # one (mutated x none is just the natural arm under another name).
+    arms = [Arm.natural, Arm.mutated, Arm.block_only, Arm.gated]
+    assert pairs(arms, [Operator.none, Operator.drop]) == [
+        (Arm.natural, Operator.none),
+        (Arm.mutated, Operator.drop),
+        (Arm.block_only, Operator.none),
+        (Arm.block_only, Operator.drop),
+        (Arm.gated, Operator.none),
+        (Arm.gated, Operator.drop),
+    ]
+
+
+def test_plan_leaves_a_cell_refused_for_one_task_out_of_that_task_only():
+    # natural x none runs for both tasks, gated x none only for task 0: 3 runs a repetition,
+    # 6.0 / (0.05 * 3) = 40. Breaks if the refusal is applied to every task (2 runs, N 60) or
+    # ignored (4 runs, N 30).
+    p = plan(
+        bucket="kill_gate",
+        cost_per_run=0.05,
+        arms=[Arm.natural, Arm.gated],
+        operators=[Operator.none],
+        n_tasks=2,
+        config=CONFIG,
+        spent_usd=0.0,
+        refused={(1, Arm.gated, Operator.none)},
+    )
+    assert (p.pairs, p.runs, p.n) == (2, 3, 40)
+    assert p.planned_usd == pytest.approx(6.0)
+
+
+def test_plan_of_a_paired_sweep_pays_no_source_for_a_task_with_no_fork_left():
+    # Task 0 forks gated x drop from a natural source (2 runs); task 1's only fork is refused, so
+    # it has no source either: 6.0 / (0.05 * 2) = 60. Breaks if task 1's source is still paid
+    # for (3 runs, N 40).
+    p = plan(
+        bucket="kill_gate",
+        cost_per_run=0.05,
+        arms=[Arm.gated],
+        operators=[Operator.drop],
+        n_tasks=2,
+        config=CONFIG,
+        spent_usd=0.0,
+        paired=True,
+        refused={(1, Arm.gated, Operator.drop)},
+    )
+    assert (p.runs, p.n) == (2, 60)
+
+
+def test_plan_with_every_cell_refused_is_an_error():
+    with pytest.raises(ValueError, match="refused"):
+        plan(
+            bucket="kill_gate",
+            cost_per_run=0.05,
+            arms=[Arm.mutated],
+            operators=[Operator.drop],
+            n_tasks=1,
+            config=CONFIG,
+            spent_usd=0.0,
+            refused={(0, Arm.mutated, Operator.drop)},
+        )
+
+
+def test_cli_leaves_refused_cells_out_of_the_count_and_lists_them(spend_log, monkeypatch, capsys):
+    # The gate does not build return_corrupt, so the runner refuses mutated x return_corrupt for
+    # every task. Breaks if the budget prices those cells: pairs 2 and N 30, where the sweep that
+    # can run is the drop-only one, pairs 1 and N 60 = 6.0 / (0.05 * 1 pair * 2 tasks).
+    monkeypatch.setattr(budget, "default_refusals", runner.default_refusals)
+    argv = ["--bucket", "kill_gate", "--arms", "mutated", "--tasks", "T1", "T2"]
+    argv += ["--cost-per-run", "0.05", "--operators", "drop"]
+    assert main([*argv, "return_corrupt"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert ("pairs: 1" in lines, lines[-1]) == (True, "N per arm per task: 60")
+    refused = [line for line in lines if line.startswith("refused: ")]
+    assert [line.split(": ")[1] for line in refused] == [
+        "T1 mutated return_corrupt",
+        "T2 mutated return_corrupt",
+    ]
+    assert all("the return_corrupt operator is not built" in line for line in refused)
+    assert main(argv) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert ("pairs: 1" in lines, lines[-1]) == (True, "N per arm per task: 60")
+    assert not any(line.startswith("refused: ") for line in lines)
+
+
+def test_cli_names_an_unknown_task_id(spend_log, monkeypatch, capsys):
+    monkeypatch.setattr(budget, "default_refusals", runner.default_refusals)
+    with pytest.raises(SystemExit):
+        main([*KILL_GATE, "--tasks", "T1", "NOPE", "--cost-per-run", "0.05"])
+    assert "NOPE" in capsys.readouterr().err
+
+
+def natural_only(task_id, real):
+    """`default_refusals` as if `task_id` ran natural x none only (`only_arms`/`only_operators`).
+    No reference task sets them since T12 got its own rule (#66), so the tests that need a task
+    whose forks are all refused simulate one here, at the same hook the runner and budget read."""
+
+    def refusals(task_ids, arms, operators, *, paired=False):
+        out = list(real(task_ids, arms, operators, paired=paired))
+        if task_id in task_ids:
+            out += [
+                (task_id, arm, operator, f"task {task_id} only runs natural with none")
+                for arm, operator in pairs(arms, operators)
+                if (arm, operator) != (Arm.natural, Operator.none)
+            ]
+        return out
+
+    return refusals
+
+
+def test_cli_of_a_paired_sweep_prices_no_orphan_source(spend_log, monkeypatch, capsys):
+    # T12 runs natural x none only (simulated, natural_only), so its gated fork is refused and
+    # its natural source has nothing to fork into. Breaks if that source is still paid for: 3 runs
+    # a repetition and
+    # N 40 instead of T1's source and fork, 2 runs and N 60 = 6.0 / (0.05 * 2). With natural x
+    # none among the cells T12's natural run is a cell of its own: T1 natural + 2 gated forks,
+    # T12 natural, 4 runs and N 30. The runner's "planned runs" agrees (test_runner).
+    monkeypatch.setattr(budget, "default_refusals", natural_only("T12", runner.default_refusals))
+    argv = ["--bucket", "kill_gate", "--tasks", "T1", "T12", "--cost-per-run", "0.05", "--paired"]
+    assert main([*argv, "--arms", "gated", "--operators", "drop"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert ("runs per repetition: 2" in lines, lines[-1]) == (True, "N per arm per task: 60")
+    assert main([*argv, "--arms", "natural", "gated", "--operators", "none", "drop"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert ("runs per repetition: 4" in lines, lines[-1]) == (True, "N per arm per task: 30")

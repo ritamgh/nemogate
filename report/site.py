@@ -705,14 +705,22 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
         else "There are no gated runs of this case yet."
     )
     phrase = OPERATOR_PHRASE.get(op, f"altered by {op}")
+    # The sentence quotes one compaction setting's cells: name it, and say others exist
+    several = len(compaction_settings(cells)) > 1
+    under = f", under {e(compaction_note(comp.get('compaction')))}" if several else ""
+    others = (
+        " Other compaction settings were run at this handoff; each has its own rows below."
+        if several
+        else ""
+    )
     return (
         '<p class="verdict-line"><strong>Largest effect found.</strong> '
         f'At <a href="#{e(anchors.section(cid, bid))}"><code>{e(cid)}</code> on '
-        f"<code>{e(bid)}</code></a>, with the rule {e(phrase)}, it was broken in "
+        f"<code>{e(bid)}</code></a>{under}, with the rule {e(phrase)}, it was broken in "
         f"{e(mut['violations'])} of {e(mut['n'])} runs ({pct(mut['cvr']['rate'])}) against "
         f"{e(nat['violations'])} of {e(nat['n'])} with no sabotage ({pct(nat['cvr']['rate'])}): "
         f"{e(pp(comp['diff']))} (95% interval {e(pp(comp['lo']))} to {e(pp(comp['hi']))}"
-        f"{e(tail)}). {gated}</p>"
+        f"{e(tail)}). {gated}{others}</p>"
     )
 
 
@@ -804,6 +812,54 @@ def unexercised_note(cell: dict[str, Any]) -> str:
     return f'<span class="count">the rule never came up in {e(count)} of {e(cell["n"])} runs</span>'
 
 
+PLACED = ("CARRIED_OBEYED", "DISOBEYED", "DROPPED_LUCKY", "DROPPED")
+
+
+def presence_grid(cell: dict[str, Any]) -> str:
+    """For a cell with `labels` (operator none): was the rule in the handoff, and was it kept.
+
+    The carriage label answers both at once: carried or dropped (present or lost) and kept or
+    broken. Runs the classifier could not place (the rule never came up, no verdict, no
+    carriage.json) are counted below the grid, so the grid and the note add up to the cell's n.
+    Empty when the field is absent (older results files); `cell_row` then keeps its older notes.
+    """
+    labels = cell["labels"]
+
+    def count(name: str) -> str:
+        return f'<span role="cell">{e(labels.get(name, 0))}</span>'
+
+    unclear = sum(v for k, v in labels.items() if k not in (*PLACED, "NOT_EXERCISED", "unlabelled"))
+    unplaced = (
+        (labels.get("NOT_EXERCISED", 0), "where the rule never came up"),
+        (unclear, "the classifier could not place"),
+        (labels.get("unlabelled", 0), "with no carriage record"),
+    )
+    parts = [f"{k} {text}" for k, text in unplaced if k]
+    foot = f'<span class="count">Not placed: {e(", ".join(parts))}.</span>' if parts else ""
+    # block_only and gated count a blocked attempt as "broke" (replay/carriage.py: broke =
+    # violated or blocked), but the violation rate beside the grid counts only what got through
+    blocking = cell.get("arm") in ("block_only", "gated")
+    broke_header = "Agent broke it or tried to" if blocking else "Agent broke it"
+    if blocking:
+        foot += (
+            '<span class="count">Blocked attempts count here; the violation rate counts only '
+            "what got through.</span>"
+        )
+    if cell.get("arm") == "gated":  # the label describes what the receiver got, re-pin included
+        foot += "<span class=\"count\">Gated: 'in the handoff' includes the gate's re-pin.</span>"
+    return (
+        '<span class="presence" role="table" aria-label="Rule in the handoff against '
+        'whether the agent kept it">'
+        '<span role="row"><span role="presentation"></span>'
+        '<span role="columnheader">Agent kept it</span>'
+        f'<span role="columnheader">{broke_header}</span></span>'
+        '<span role="row"><span role="rowheader">Rule in the handoff</span>'
+        f"{count('CARRIED_OBEYED')}{count('DISOBEYED')}</span>"
+        '<span role="row"><span role="rowheader">Rule lost in the handoff</span>'
+        f"{count('DROPPED_LUCKY')}{count('DROPPED')}</span></span>" + foot
+    )
+
+
 def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> str:
     label = (
         f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}'
@@ -825,7 +881,10 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> 
             "so these ranges are too narrow.</span>"
         )
     cvr = fraction_cell(cell["violations"], n, cell["cvr"])
-    if cell.get("arm") == "natural":
+    if op == "none" and "labels" in cell:
+        # `labels` counts every run, so it holds the numbers of both older natural notes
+        cvr += presence_grid(cell)
+    elif cell.get("arm") == "natural":
         cvr += split_note(cell) + unexercised_note(cell)
     success = fraction_cell(cell["successes"], n, cell["success"])
     return (
@@ -1090,19 +1149,33 @@ def line(text: str) -> str:
     return f'<span class="count">{text}</span>'
 
 
-def cost_td(m: dict[str, Any]) -> str:
-    cost = m["cost"]
-    return mean_text(cost, money) + line(runs_note(cost["n"]))
+def fork_note(cell: dict[str, Any], what: str) -> str:
+    """A fork's cost and time cover only what came after the fork point (replay/README.md, "A
+    fork record is partial"): say so under any mean that includes one. `n_forks` is left out of
+    a cell without forks and of a results file from before it, which get no note."""
+    forks = cell.get("n_forks") or 0
+    if not forks:
+        return ""
+    if forks >= cell["n"]:
+        return line("all forks: after the fork point only")
+    return line(
+        f"{e(forks)} of {e(cell['n'])} runs are forks: their {what} is after the fork point only"
+    )
 
 
-def wall_td(m: dict[str, Any]) -> str:
-    wall = m["wall_seconds"]
+def cost_td(cell: dict[str, Any]) -> str:
+    cost = cell["arm_metrics"]["cost"]
+    return mean_text(cost, money) + line(runs_note(cost["n"])) + fork_note(cell, "cost")
+
+
+def wall_td(cell: dict[str, Any]) -> str:
+    wall = cell["arm_metrics"]["wall_seconds"]
     if not wall["n"]:
         return '<span class="notrun">unknown</span>' + line("no timing recorded")
     note = runs_note(wall["n"])
     if wall.get("unknown"):
         note += f"; {e(wall['unknown'])} not timed"
-    return mean_text(wall, whole, " s") + line(note)
+    return mean_text(wall, whole, " s") + line(note) + fork_note(cell, "time")
 
 
 def attempt_td(m: dict[str, Any]) -> str:
@@ -1118,7 +1191,8 @@ def attempt_td(m: dict[str, Any]) -> str:
     )
 
 
-def after_block_td(arm: str, m: dict[str, Any]) -> str:
+def after_block_td(arm: str, cell: dict[str, Any]) -> str:
+    m = cell["arm_metrics"]
     if arm not in BLOCKING_ARMS:
         return '<span class="notrun">no gate in this arm, nothing is blocked</span>'
     b = m.get("blocks")
@@ -1157,6 +1231,8 @@ def after_block_td(arm: str, m: dict[str, Any]) -> str:
         extra = f" ({e(' and '.join(shares))}, shared out by step)" if shares else ""
         steps = f"{round(rec['steps']['mean'], 1):g}"
         parts.append(line(f"recovery: {e(steps)} steps after the first block{extra}"))
+        if shares:
+            parts.append(fork_note(cell, "share of cost and time"))
     return "".join(parts)
 
 
@@ -1178,10 +1254,10 @@ def arm_metrics_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = 
             '<td colspan="4" class="notrun">not in this results file</td></tr>'
         )
     return (
-        f'<tr><th scope="row">{head}<td data-label="Cost per run">{cost_td(m)}</td>'
-        f'<td data-label="Wall time per run">{wall_td(m)}</td>'
+        f'<tr><th scope="row">{head}<td data-label="Cost per run">{cost_td(cell)}</td>'
+        f'<td data-label="Wall time per run">{wall_td(cell)}</td>'
         f'<td data-label="{e(ATTEMPT_HEAD)}">{attempt_td(m)}</td>'
-        f'<td data-label="After a block">{after_block_td(arm, m)}</td></tr>'
+        f'<td data-label="After a block">{after_block_td(arm, cell)}</td></tr>'
     )
 
 
@@ -1377,6 +1453,8 @@ def render_method(results: dict[str, Any]) -> str:
 # --- page -------------------------------------------------------------------------------------
 
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8")
+# Only for a page that has a presence grid, so a page without one is the page it always was.
+PRESENCE_CSS = (Path(__file__).parent / "presence.css").read_text(encoding="utf-8")
 
 
 def render(
@@ -1414,16 +1492,18 @@ def render(
             '<div class="empty"><strong>No runs were counted.</strong> There is nothing to chart '
             "yet: no boundary, no constraint and no rate. Nothing here is a zero.</div>"
         )
+    body = (
+        f"{render_header(results, render_verdict(results, anchors))}"
+        f"{panels.render_coverage(results, ledger)}{graph_section}"
+        f"{panels.render_patch_panel(repairs)}{render_method(results)}"
+    )
+    css = CSS + PRESENCE_CSS if 'class="presence"' in body else CSS
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="light dark">'
         "<title>NemoGate: rule survival across handoffs</title>"
-        f"<style>{CSS}</style></head><body><main>"
-        f"{render_header(results, render_verdict(results, anchors))}"
-        f"{panels.render_coverage(results, ledger)}{graph_section}"
-        f"{panels.render_patch_panel(repairs)}{render_method(results)}"
-        "</main></body></html>\n"
+        f"<style>{css}</style></head><body><main>{body}</main></body></html>\n"
     )
 
 

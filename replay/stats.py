@@ -69,6 +69,8 @@ class LoadedRun:
     knobs: tuple[int | None, int | None] | None = None
     trace: tuple[Event, ...] | None = None  # trace.jsonl (a fork's own events); None if unreadable
     wall_seconds: float | None = None  # timing.json "seconds"; None for a run made before it
+    # carriage.json "classifier_version"; None if the file has none or there is no file
+    classifier_version: int | None = None
 
     @property
     def source_id(self) -> str:
@@ -112,7 +114,7 @@ def _read_run(folder: Path) -> LoadedRun | None:
     """The run in `folder`, or None if record.json, fork.json or carriage.json is unusable."""
     try:
         record = RunRecord.model_validate_json((folder / "record.json").read_bytes())
-        fork_source = label = knobs = None
+        fork_source = label = knobs = version = None
         if (folder / "fork.json").exists():
             fork_source = json.loads((folder / "fork.json").read_bytes())["source_run_id"]
             if not isinstance(fork_source, str) or not fork_source.strip():
@@ -120,6 +122,7 @@ def _read_run(folder: Path) -> LoadedRun | None:
         if (folder / "carriage.json").exists():
             carriage = json.loads((folder / "carriage.json").read_bytes())
             label = Label(carriage["label"])
+            version = carriage.get("classifier_version")
             if isinstance(carriage.get("knobs"), dict):
                 knobs = _effective_knobs(carriage["knobs"])
     except (OSError, ValueError, KeyError, TypeError):
@@ -131,6 +134,7 @@ def _read_run(folder: Path) -> LoadedRun | None:
         knobs=knobs,
         trace=_read_trace(folder),
         wall_seconds=_read_wall_seconds(folder),
+        classifier_version=version,
     )
 
 
@@ -298,6 +302,17 @@ def _cell(
         "success": _rate(successes, n),
         "cost_usd": _round(math.fsum(run.record.cost_usd for run in runs)),
     }
+    if n_forks := sum(run.fork_source is not None for run in runs):
+        # A fork's cost, tokens and time cover the part after the fork point only, so the report
+        # must not read this cell's means as whole runs. Left out when there are none.
+        out["n_forks"] = n_forks
+    if operator == "none" and any(run.label for run in runs):
+        # Every run by its label, not only the violating ones: whether the rule was in the
+        # handoff (carried or dropped) against whether the agent broke it. Only where nothing
+        # sabotaged the handoff, so the arms that block (block_only, gated) count too. Left out
+        # when no run has a carriage.json, so older run folders give the file they always did.
+        counts = Counter(run.label or UNLABELLED for run in runs)
+        out["labels"] = dict(sorted(counts.items()))
     if arm == Arm.natural:
         # Only without sabotage can the label say why a rule broke: lost in the handoff
         # (DROPPED) or carried and broken anyway (DISOBEYED).
@@ -365,6 +380,23 @@ def _facts(run: LoadedRun, constraint: Any, repo_root: str | None) -> RunFacts:
     return RunFacts(run.record.task_success, run.record.cost_usd, run.wall_seconds, blocks)
 
 
+def _one_classifier_version(
+    constraint_id: str, boundary: str, key: tuple[str, str, Any], runs: Sequence[LoadedRun]
+) -> None:
+    """ValueError if the labelled runs of one cell carry labels from more than one carriage
+    classifier version: a label's meaning changes between versions, so they cannot be pooled.
+    A file without a version counts as one version of its own; a run without a label, none."""
+    versions = {run.classifier_version for run in runs if run.label is not None}
+    if len(versions) > 1:
+        ordered = sorted(versions, key=lambda v: (v is None, v or 0))
+        shown = ", ".join("none" if v is None else str(v) for v in ordered)
+        raise ValueError(
+            f"cell {constraint_id} {boundary} {key[0]}/{key[1]} pools carriage labels from "
+            f"classifier versions {shown}; re-derive the older runs with "
+            "`python -m replay.carriage RUN_DIR...` first"
+        )
+
+
 def aggregate(
     runs: Sequence[LoadedRun],
     *,
@@ -409,6 +441,8 @@ def aggregate(
             order = sorted(
                 cell_runs, key=lambda key: (ARM_ORDER[key[0]], key[1], _knob_rank(key[2]))
             )
+            for key in order:
+                _one_classifier_version(constraint_id, boundary, key, cell_runs[key])
             cells = [_cell(*key, cell_runs[key]) for key in order]
             for cell, key in zip(cells, order, strict=True):
                 cell["arm_metrics"] = cell_metrics(

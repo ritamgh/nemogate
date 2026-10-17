@@ -146,8 +146,7 @@ T12 runs every arm with every built operator. Operators edit the planner's hando
 reply the oracle reads, so a mutated, block-only or gated run is graded on the reviewer's real
 replies; the gate also refuses an operator on the reviewer's own return, which is why the target
 is the delegation and not the return. `only_arms` / `only_operators` stay in the loader and the
-runner (any task may use them), T12 just no longer sets them. `replay.budget` counts
-task ids only, so its run count for a sweep that includes T12 is an upper bound.
+runner (any task may use them), T12 just no longer sets them.
 
 Check scripts:
 - Import the app from the repo they run in (`sys.path.insert(0, os.getcwd())`), use

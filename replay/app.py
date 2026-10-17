@@ -63,8 +63,18 @@ class App(Protocol):
 
 
 def pairs(arms: Sequence[Arm], operators: Sequence[Operator]) -> list[tuple[Arm, Operator]]:
-    """Every (arm, operator) to run: natural only unmutated, every other arm only mutated.
+    """Every (arm, operator) to run: natural only unmutated, mutated only mutated, and the
+    blocking arms (block_only, gated) with any operator, `none` included: the gate acting on a
+    run whose handoff nothing sabotaged.
 
     Arms outer, both in the order given.
     """
-    return [(a, o) for a in arms for o in operators if (a == Arm.natural) == (o == Operator.none)]
+
+    def runs(arm: Arm, operator: Operator) -> bool:
+        if arm == Arm.natural:
+            return operator == Operator.none
+        if arm == Arm.mutated:
+            return operator != Operator.none
+        return True
+
+    return [(a, o) for a in arms for o in operators if runs(a, o)]

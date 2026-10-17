@@ -947,3 +947,207 @@ def test_the_header_says_never_exercised_runs_are_not_left_out(rich):
     text = text_of(site.render(rich))
     assert "inconclusive runs, left out of every rate below" in text
     assert "Natural runs where the rule never came up are not among them" in text
+
+
+def load_bearing_comparison(setting, diff, lo, hi, op="drop"):
+    return {
+        "name": "load_bearing",
+        "operator": op,
+        "compaction": setting,
+        "a": {"arm": "mutated", "operator": op},
+        "b": {"arm": "natural", "operator": "none"},
+        "metric": "cvr",
+        "diff": diff,
+        "lo": lo,
+        "hi": hi,
+    }
+
+
+def verdict_boundary(settings):
+    """Natural runs broke the rule 2 of 10 times and mutated runs 8 of 10, under each setting."""
+    cells = [
+        with_setting(make_cell(arm, op, 10, broken, 8), setting)
+        for setting in settings
+        for arm, op, broken in (("natural", "none", 2), ("mutated", "drop", 8))
+    ]
+    comparisons = [load_bearing_comparison(setting, 0.6, 0.3, 0.8) for setting in settings]
+    return {"delegation:planner->coder": {"cells": cells, "comparisons": comparisons}}
+
+
+def test_the_verdict_names_the_compaction_setting_when_the_boundary_has_several():
+    # Breaks if the headline sentence quotes one setting's rates and effect with nothing to say
+    # that another setting exists on the same handoff and was not the one shown.
+    page = site.render(one_constraint(verdict_boundary([OFF, ON])))
+
+    text = verdict_text(page)
+    assert "At C-900 on delegation:planner->coder, under compaction off, with the rule" in text
+    assert text.endswith(
+        "Other compaction settings were run at this handoff; each has its own rows below."
+    )
+
+
+def test_the_verdict_of_a_single_compaction_setting_is_unchanged():
+    # Breaks if the headline gains a compaction clause when nothing was split.
+    page = site.render(one_constraint(verdict_boundary([OFF])))
+
+    assert "compaction" not in verdict_text(page)
+
+
+# --- presence against behaviour, from the carriage labels --------------------------------------
+
+LABELS = {
+    "CARRIED_OBEYED": 4,
+    "DISOBEYED": 2,
+    "DROPPED": 1,
+    "DROPPED_LUCKY": 1,
+    "NOT_EXERCISED": 1,
+    "UNKNOWN": 1,
+    "unlabelled": 2,
+}
+
+
+def natural_with_labels(labels):
+    cell = {
+        **make_cell("natural", "none", 12, 3, 9),
+        "violations_by_label": {"DISOBEYED": 2, "DROPPED": 1},
+        "not_exercised": 1,
+    }
+    if labels is not None:
+        cell["labels"] = labels
+    return cell
+
+
+def natural_card(labels):
+    boundary = {"delegation:planner->coder": {"cells": [natural_with_labels(labels)]}}
+    return text_of(article(site.render(one_constraint(boundary)), "C-900"))
+
+
+def test_a_natural_cell_shows_whether_the_rule_was_in_the_handoff_against_whether_it_was_kept():
+    # Breaks if the card cannot say, per run, the two separate things: was the rule present in
+    # the handoff, and did the agent obey it. Hand-checked from LABELS: carried and kept 4,
+    # carried and broken 2, lost and kept 1, lost and broken 1; 1 + 1 + 2 not placed (12 runs).
+    text = natural_card(LABELS)
+
+    assert (
+        "Rule in the handoff 4 2 Rule lost in the handoff 1 1" in text
+        and "Agent kept it Agent broke it" in text
+    )
+    assert (
+        "Not placed: 1 where the rule never came up, 1 the classifier could not place, "
+        "2 with no carriage record." in text
+    )
+
+
+def test_the_two_by_two_replaces_the_older_notes_so_no_number_is_shown_twice():
+    # Breaks if the same runs are counted both in the 2x2 and in the older "k of n broken" and
+    # "never came up" lines under the violation rate.
+    text = natural_card(LABELS)
+
+    assert "broken:" not in text
+    assert "never came up in" not in text
+
+
+def test_a_cell_without_labels_keeps_its_older_notes_and_has_no_two_by_two():
+    # Breaks if a results file from before `labels` loses the split under the violation rate or
+    # gains an empty 2x2.
+    text = natural_card(None)
+
+    assert "3 of 12 broken: 1 lost in the handoff, 2 carried but disobeyed" in text
+    assert "the rule never came up in 1 of 12 runs" in text
+    assert "Agent kept it" not in text
+
+
+def test_the_two_by_two_leaves_out_the_footnote_when_every_run_is_placed():
+    # Breaks if a complete 2x2 is followed by "Not placed: ." or a zero count.
+    text = natural_card({"CARRIED_OBEYED": 1, "DISOBEYED": 1})
+
+    assert "Rule in the handoff 1 1 Rule lost in the handoff 0 0" in text
+    assert "Not placed" not in text
+
+
+def test_the_grid_styles_ship_only_with_a_page_that_has_a_grid():
+    # Breaks if every page carries the grid's CSS, so a results file from before `labels` no
+    # longer renders to the bytes it always did.
+    boundary = lambda labels: {  # noqa: E731
+        "delegation:planner->coder": {"cells": [natural_with_labels(labels)]}
+    }
+    assert ".presence{" in site.render(one_constraint(boundary(LABELS)))
+    assert ".presence{" not in site.render(one_constraint(boundary(None)))
+
+
+def operator_none_card(arm, labels):
+    cell = {**make_cell(arm, "none", 6, 1, 5), "labels": labels}
+    boundary = {"delegation:planner->coder": {"cells": [cell]}}
+    return text_of(article(site.render(one_constraint(boundary)), "C-900"))
+
+
+def test_a_block_only_cell_without_an_operator_gets_the_grid_and_no_note():
+    # Breaks if the grid is limited to the natural arm: block_only with operator none has
+    # meaningful labels too (#67).
+    text = operator_none_card("block_only", {"CARRIED_OBEYED": 3, "DISOBEYED": 1, "DROPPED": 2})
+
+    assert "Rule in the handoff 3 1 Rule lost in the handoff 0 2" in text
+    assert "re-pin" not in text
+
+
+def test_the_blocking_arms_name_the_broke_column_for_blocked_attempts_too():
+    # Breaks if a block_only or gated grid says "Agent broke it" over counts that include
+    # blocked attempts (replay/carriage.py: broke = violated or blocked) while the violation
+    # rate beside it counts only what got through: "0% . 0 of 4 runs" over "2 broke it".
+    for arm in ("block_only", "gated"):
+        text = operator_none_card(arm, {"CARRIED_OBEYED": 3, "DISOBEYED": 1, "DROPPED": 2})
+        assert "Agent kept it Agent broke it or tried to" in text
+        assert (
+            "Blocked attempts count here; the violation rate counts only what got through." in text
+        )
+
+
+def test_a_gated_run_whose_pinned_rule_has_no_anchor_lands_under_in_the_handoff():
+    # Breaks if the classifier finds the gate's re-pin by the check's anchor (#67) and so reads a
+    # pinned rule whose ledger text lacks the anchor as lost: the card would then put it under
+    # "Rule lost in the handoff", directly above "in the handoff includes the gate's re-pin".
+    # The labels come from the real classifier, through aggregate, into the page.
+    from replay.stats import aggregate
+    from replay.tests.test_carriage import ANCHORLESS, PLAIN_TEXT, pinned_run
+    from replay.tests.test_stats import B1, LEDGER, make_run
+
+    check, user_message, rule_text = ANCHORLESS[0]
+    labels = [
+        pinned_run(check, user_message, rule_text, PLAIN_TEXT, broke=broke).label.value
+        for broke in ("blocked", "violated")
+    ]
+    runs = [make_run(f"g-{i}", arm="gated", label=label) for i, label in enumerate(labels)]
+    cell = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)["constraints"][
+        "C-001"
+    ]["boundaries"][B1]["cells"][0]
+    assert cell["labels"] == {"DISOBEYED": 2}
+
+    text = text_of(article(site.render(one_constraint({B1: {"cells": [cell]}})), "C-900"))
+    assert "Rule in the handoff 0 2 Rule lost in the handoff 0 0" in text
+
+
+def test_a_natural_grid_keeps_the_plain_broke_column_and_no_blocked_attempts_line():
+    # Breaks if the blocking arms' wording leaks into the natural arm, where nothing is blocked
+    # and "broke it" is exactly the violation count.
+    text = natural_card(LABELS)
+
+    assert "Agent kept it Agent broke it Rule" in text
+    assert "tried to" not in text and "Blocked attempts" not in text
+
+
+def test_a_gated_cell_without_an_operator_gets_the_grid_and_says_the_re_pin_counts():
+    # Breaks if a gated grid reads as the planner's own handoff: the label describes what the
+    # receiver got, with the gate's re-pin included.
+    text = operator_none_card("gated", {"CARRIED_OBEYED": 5, "DISOBEYED": 1})
+
+    assert "Rule in the handoff 5 1 Rule lost in the handoff 0 0" in text
+    assert "Gated: 'in the handoff' includes the gate's re-pin." in text
+
+
+def test_a_cell_with_an_operator_gets_no_grid():
+    # Breaks if a sabotaged cell is given a grid from a stray `labels` field.
+    cell = {**make_cell("mutated", "drop", 6, 4, 2), "labels": {"DROPPED": 6}}
+    boundary = {"delegation:planner->coder": {"cells": [cell]}}
+    text = text_of(article(site.render(one_constraint(boundary)), "C-900"))
+
+    assert "Agent kept it" not in text
