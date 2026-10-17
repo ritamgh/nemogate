@@ -24,6 +24,9 @@ class AppTask(Protocol):
     @property
     def user_message(self) -> str: ...
 
+    # Optional: `refusal(arm, operator) -> str | None`. A task that cannot be measured under some
+    # (arm, operator) cells returns why; the runner then refuses those cells before any run.
+
 
 class App(Protocol):
     @property

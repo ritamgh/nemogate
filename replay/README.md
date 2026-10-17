@@ -499,7 +499,10 @@ delegations to the same agent are not told apart; planner delegations here are s
 - `error.txt` covers the whole run after its folder is named (ledger, config, base image,
   session, build, invoke, diff, task check, trace check, oracle), not only the invoke.
 - `arun` resolves every task id before the first run, so an unknown id raises `KeyError`
-  without wasting a run.
+  without wasting a run. It likewise checks every task against every (arm, operator) pair: a task
+  with an optional `refusal(arm, operator) -> str | None` (see `AppTask`) that returns a reason
+  makes the whole sweep raise `CellRefused` before the first run; `run_one` and `fork_one` refuse
+  the same way, and the CLI prints `refusing to run: <reason>` and exits 2.
 - `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--top-up] [--yes]`
   refuses with exit code 2 unless `NEMOGATE_LIVE=1`; it prints `planned runs: N` and, without
   `--yes`, exits 1 pointing at `python -m replay.budget`. With `--yes` it runs and prints one
