@@ -4,8 +4,9 @@ It tells the stacks apart by lc_agent_name (refapp/README.md, "Paths and agent n
 every boundary and tool call (file paths repo-relative, so the oracle needs no app facts), and
 mutates the text crossing the run's target boundary only: a delegation's description, or a
 subagent's reply on its way back. Text the helper wrote carries the helper's model id. If the
-first handoff there carries no rule to mutate, the operator's NothingToMutate ends the run (it is
-no sample); a later one that carries none passes on unchanged.
+first handoff there cannot be mutated, the operator's MutationFailed ends the run (NothingToMutate:
+no sample); a later one that cannot be passes on unchanged, and its boundary_in then carries
+the system under test's model id instead of the helper's, which is how the trace marks it.
 
 Arms (SPEC, Experiment design):
 - block_only: tool calls the oracle would count as a violation are blocked before they run
@@ -24,7 +25,7 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,7 +34,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.config import get_config
 from langgraph.types import Command
 
-from gate.operators import NothingToMutate
+from gate.operators import MutationFailed
 from gate.policy import blocking_constraint
 from gate.text import message_text as _text
 from gate.trace import TraceWriter
@@ -133,6 +134,7 @@ class GateMiddleware(AgentMiddleware):
         mutator_model_id: str | None = None,
         block: bool = False,
         gated: bool = False,
+        prior: Sequence[Event] = (),
     ) -> None:
         super().__init__()
         self._cfg = run_config
@@ -142,11 +144,20 @@ class GateMiddleware(AgentMiddleware):
         self._mutator_model_id = mutator_model_id
         self._block = block or gated
         self._gated = gated
+        # A fork's events before the fork point (steps 0..n-1): its approvals still count. This
+        # run's own steps start at 0 again, so they are compared shifted past the prior ones.
+        self._prior_approvals = [e for e in prior if isinstance(e, Approval)]
+        self._step_offset = len(prior)
         self._approvals: list[Event] = []
         self._fail_closed_left = MAX_FAIL_CLOSED
         self._fail_closed_lock = threading.Lock()  # async replies run _after in worker threads
         self._mutated_once = False  # a handoff at the target boundary has been mutated
         self._main = main_agent_name(run_config.target_boundary)
+
+    def _after_prior(self, event: Any) -> Any:
+        if not self._step_offset:
+            return event
+        return event.model_copy(update={"step": event.step + self._step_offset})
 
     def _take_fail_closed(self) -> bool:
         with self._fail_closed_lock:
@@ -162,9 +173,10 @@ class GateMiddleware(AgentMiddleware):
             return text, None
         try:
             out = self._mutate(text)
-        except NothingToMutate:
+        except MutationFailed:
             # Only a run whose target handoff was never mutated is no sample. Once one was, a
-            # later handoff without the rule (a re-delegation, a retry) passes on unchanged.
+            # later handoff the operator cannot mutate (no rule left in it, or nothing would be
+            # left of it) passes on unchanged rather than ending a run that is already a sample.
             if self._mutated_once:
                 return text, None
             raise
@@ -210,7 +222,11 @@ class GateMiddleware(AgentMiddleware):
         candidate = self._writer.preview(
             ToolCall, agent=agent, boundary=self._inbound(agent), tool=call["name"], args=args
         )
-        hit = blocking_constraint(self._ledger, self._approvals, candidate)
+        hit = blocking_constraint(
+            self._ledger,
+            [*self._prior_approvals, *map(self._after_prior, self._approvals)],
+            self._after_prior(candidate),
+        )
         if hit is None:
             return None
         reason = BLOCKED_GATED.format(rule=hit.text) if self._gated else BLOCKED

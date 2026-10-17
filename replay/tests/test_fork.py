@@ -420,6 +420,51 @@ def test_fork_one_replays_only_the_part_after_the_boundary_under_the_new_arm(tmp
     assert fork.checkpoint_id != source.checkpoint_id
 
 
+class Sequenced(App):
+    """One app for a whole paired sweep: each build takes the next (planner, coder) scripts, as
+    the source run and every fork are separate graphs with their own stub models."""
+
+    def __init__(self, scripts: list[tuple[list, list]]):
+        super().__init__(*scripts[0])
+        self.scripts = list(scripts)
+
+    def build(self, backend, **kw):
+        self.planner, self.coder = self.scripts.pop(0)
+        return super().build(backend, **kw)
+
+
+def test_apaired_forks_each_arm_from_the_one_natural_recording_with_its_seed(tmp_path):
+    """Catches arms that come from separate recordings (the Oct 16 failure): every fork must name
+    the same source and seed, and start from the very same prefix."""
+    world = World(tmp_path)
+    fork_scripts = (["Done after the fork."], [write("w2", "/repo/locked/b.txt", "two"), "Ok."])
+    app = Sequenced(
+        [
+            (recorded_app().planner, recorded_app().coder),
+            fork_scripts,
+            fork_scripts,
+        ]
+    )
+    records = asyncio.run(
+        world.runner(app).apaired(["X1"], [Arm.block_only, Arm.mutated], [Operator.drop], 1, "HEAD")
+    )
+
+    source, first, second = records
+    assert (source.arm, first.arm, second.arm) == (Arm.natural, Arm.block_only, Arm.mutated)
+    assert len(world.run_ids()) == 3
+    origins = [
+        json.loads((world.runs_dir / r.run_id / "fork.json").read_text()) for r in (first, second)
+    ]
+    assert [o["source_run_id"] for o in origins] == [source.run_id, source.run_id]
+    seeds = [
+        json.loads((world.runs_dir / r.run_id / "run_config.json").read_text())["seed"]
+        for r in (source, first, second)
+    ]
+    assert seeds == [0, 0, 0]
+    prefixes = [(world.runs_dir / r.run_id / "prefix.jsonl").read_bytes() for r in (first, second)]
+    assert prefixes[0] == prefixes[1] != b""
+
+
 FORK_IN_NEW_PROCESS = """
 import sys
 from pathlib import Path
@@ -615,14 +660,19 @@ def test_an_approval_before_the_fork_point_still_authorises_the_forks_action(tmp
 
 
 @pytest.mark.parametrize("arm", [Arm.block_only, Arm.gated])
-def test_a_blocking_fork_after_an_approval_is_refused_until_the_gate_can_be_told(tmp_path, arm):
+def test_a_blocking_fork_honours_an_approval_given_before_the_fork_point(tmp_path, arm):
     """Catches a blocking-arm fork whose fresh gate never saw the approval before the fork point
-    and so would block an action that was authorised."""
+    and so blocks an action that was authorised."""
     world = World(tmp_path)
     source = world.record(ask_and_delegate(), ledger=ASK_FIRST)
-    with pytest.raises(ValueError, match="approval"):
-        world.fork(fork_app(), source, arm, Operator.drop, ledger=ASK_FIRST)
-    assert world.run_ids() == [source.run_id]
+    again = App(
+        planner=["Done."],
+        coder=[turn(call("delete", "d2", file_path="/repo/README.md")), "Deleted."],
+    )
+    fork = world.fork(again, source, arm, Operator.drop, ledger=ASK_FIRST)
+    assert fork.violations == ()
+    trace = parse_trace_jsonl((world.runs_dir / fork.run_id / "trace.jsonl").read_text())
+    assert [e.blocked for e in trace if isinstance(e, ToolCall) and e.tool == "delete"] == [False]
 
 
 def test_fork_one_refuses_when_the_task_no_longer_targets_what_was_recorded(tmp_path):

@@ -51,7 +51,15 @@ def repo_backend(tmp_path: Path) -> LocalShellBackend:
     )
 
 
-def run_team(backend, planner_script, coder_script, compaction, tmp_path, reviewer_script=None):
+def run_team(
+    backend,
+    planner_script,
+    coder_script,
+    compaction,
+    tmp_path,
+    reviewer_script=None,
+    user_message=USER_MESSAGE,
+):
     models = {
         "planner": SpyModel(role="sut", responses=planner_script),
         "coder": get_model("sut", stub_responses=coder_script),
@@ -62,7 +70,7 @@ def run_team(backend, planner_script, coder_script, compaction, tmp_path, review
         # The runner's own checkpointer, so the private event is proven to survive its storage.
         async with AsyncSqliteSaver.from_conn_string(str(tmp_path / "c.sqlite")) as saver:
             team = build_team(backend, models=models, checkpointer=saver, compaction=compaction)
-            await team.ainvoke({"messages": [HumanMessage(USER_MESSAGE)]}, CONFIG)
+            await team.ainvoke({"messages": [HumanMessage(user_message)]}, CONFIG)
             state = await team.aget_state(CONFIG)
             return state, await compaction_evidence(team, CONFIG, state, BOUNDARY)
 
@@ -224,3 +232,65 @@ def test_the_app_installs_compaction_from_the_environment(monkeypatch):
     refapp.app.APP.build(object(), middleware=[], subagent_middleware=[], checkpointer=None)
 
     assert [kw["compaction"] for kw in seen] == [(7000, 3), None]
+
+
+def test_the_summariser_is_shown_the_whole_history_not_its_last_four_thousand_tokens(
+    repo_backend, tmp_path
+):
+    # Breaks if the planner's SummarizationMiddleware keeps its constructor default of
+    # trim_tokens_to_summarize=4000 (deepagents/middleware/summarization.py:556) instead of the
+    # None that create_deep_agent uses (:1777): the summariser would see only the tail of a long
+    # first message, never the user's rule at its head, and compaction would lose the rule before
+    # any model summarised.
+    long_message = f"{USER_MESSAGE} " + "Background: " + "lorem ipsum " * 4000
+    planner = [
+        call("ls", "p-ls", path="/repo"),
+        AIMessage(content="FIRST-SUMMARY"),
+        DELEGATE,
+        AIMessage(content="SECOND-SUMMARY"),
+        AIMessage(content="All done."),
+    ]
+    run_team(
+        repo_backend,
+        planner,
+        CODER,
+        compaction=(1, 1),
+        tmp_path=tmp_path,
+        user_message=long_message,
+    )
+
+    summariser_inputs = [s for s in SEEN if s.startswith("<role>\nContext Extraction Assistant")]
+    assert summariser_inputs
+    assert "nothing under migrations/ may be touched" in summariser_inputs[0]
+
+
+def test_every_delegation_to_the_target_is_judged_for_compaction(repo_backend, tmp_path):
+    # Breaks if compaction is judged only at the first delegation (carriage.json then says "did
+    # not fire" for a run whose second delegation was written from a compacted context): the
+    # first delegation here predates every summary, the second follows LATE-SUMMARY.
+    big_report = "x" * 60000
+    coder = [
+        call("ls", "c-ls-1", path="/repo"),
+        AIMessage(content=big_report),
+        call("ls", "c-ls-2", path="/repo"),
+        AIMessage(content="Removed it."),
+    ]
+    second = call("task", "c-task-2", description="Remove the file.", subagent_type="coder")
+    planner = [
+        call("ls", "p-ls", path="/repo"),
+        DELEGATE,
+        AIMessage(content="LATE-SUMMARY"),
+        second,
+        AIMessage(content="LATER-SUMMARY"),  # the big report is still in context after the second
+        AIMessage(content="All done."),
+    ]
+    _, evidence = run_team(repo_backend, planner, coder, compaction=(8000, 1), tmp_path=tmp_path)
+
+    assert [d["cutoff_index"] > 0 for d in evidence["delegations"]] == [False, True]
+    assert evidence["delegations"][0]["summary"] == ""
+    assert "LATE-SUMMARY" in evidence["delegations"][1]["summary"]
+    # The top level is the first compacted delegation's event, so a run compacted before any
+    # delegation after the first still reports that it was compacted.
+    assert evidence["cutoff_index"] > 0
+    assert "LATE-SUMMARY" in evidence["summary"]
+    assert evidence["before_delegation"] is True

@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import types
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -135,9 +136,17 @@ class FakeGraph:
             ],
         )
         yield SimpleNamespace(
-            metadata={"step": 3}, values={"_summarization_event": event, "messages": [delegation]}
+            config={"configurable": {"checkpoint_id": "ckpt-7"}},
+            parent_config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            metadata={"step": 3},
+            values={"_summarization_event": event, "messages": [delegation]},
         )
-        yield SimpleNamespace(metadata={"step": 0}, values={"messages": []})
+        yield SimpleNamespace(
+            config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            parent_config=None,
+            metadata={"step": 0},
+            values={"messages": []},
+        )
 
 
 def trace_events(rc: RunConfig, *, ledger_hash: str | None = None, bad=None, handoff=None) -> list:
@@ -615,6 +624,59 @@ def test_run_is_the_sync_wrapper_of_arun(tmp_path):
     assert len(out) == 1
 
 
+class RestrictedTask(FakeTask):
+    """A task that, like one with `only_arms` in its task.yaml, runs one cell only."""
+
+    def refusal(self, arm, operator):
+        if (arm, operator) == (Arm.natural, Operator.none):
+            return None
+        return f"task {self.id} only runs natural with none, not {arm} with {operator}"
+
+
+def restrict_x2(h: Harness) -> None:
+    h.app.tasks = lambda: [FakeTask("X1", "C-001"), RestrictedTask("X2", "C-002")]
+
+
+def test_a_sweep_with_a_refused_cell_is_refused_before_any_run_starts(tmp_path):
+    # Breaks if the refusal is checked per run: X1's runs would be paid for before X2's cell is
+    # refused, leaving a half sweep.
+    h = Harness(tmp_path)
+    restrict_x2(h)
+    calls: list = []
+    stub_run_one(h, calls)
+
+    with pytest.raises(
+        runner.CellRefused, match="task X2 only runs natural with none, not gated with drop"
+    ):
+        h.runner.run(["X1", "X2"], [Arm.natural, Arm.gated], [Operator.none, Operator.drop], 1)
+    assert calls == []
+
+
+def test_a_restricted_task_still_runs_its_allowed_cell(tmp_path):
+    # Breaks if the refusal blocks the restricted task's own cell, or tasks without `refusal`.
+    h = Harness(tmp_path)
+    restrict_x2(h)
+    calls: list = []
+    stub_run_one(h, calls)
+
+    h.runner.run(["X1", "X2"], [Arm.natural], [Operator.none], 1)
+
+    assert [c[:3] for c in calls] == [
+        ("X1", Arm.natural, Operator.none),
+        ("X2", Arm.natural, Operator.none),
+    ]
+
+
+def test_run_one_refuses_a_cell_the_task_does_not_allow_before_creating_a_run_folder(tmp_path):
+    # Breaks if only the sweep entry point checks: a direct run_one call would spend credit.
+    h = Harness(tmp_path)
+    task = RestrictedTask("X2", "C-002")
+
+    with pytest.raises(ValueError, match="only runs natural with none"):
+        asyncio.run(h.runner.run_one(task, Arm.gated, Operator.drop, seed=0, repo_ref="HEAD"))
+    assert not h.runs_dir.exists() or list(h.runs_dir.iterdir()) == []
+
+
 # ---- afork / fork ---------------------------------------------------------------------------
 
 
@@ -662,6 +724,157 @@ def test_fork_is_the_sync_wrapper_of_afork(tmp_path):
     out = h.runner.fork("r-src", [Arm.mutated], [Operator.hedge], 1)
     assert calls == [("r-src", Arm.mutated, Operator.hedge, 0, "main")]
     assert len(out) == 1
+
+
+# ---- apaired / paired ------------------------------------------------------------------------
+
+
+def stub_paired(h: Harness, calls: list, *, source_errors=(), fork_raises=None):
+    """run_one records a source `r-src-<seed>`; fork_one records its fork. `source_errors` are
+    the seeds whose source run errors; `fork_raises` maps (source id, arm) to an exception."""
+
+    async def run_one(task, arm, operator, *, seed, repo_ref="main"):
+        calls.append(("run", task.id, arm, operator, seed))
+        if seed in source_errors:
+            exc = RuntimeError("boom")
+            exc.nemogate_run_error = runner.RunError(
+                f"r-err-{seed}", task.id, arm.value, operator.value, "builtins.RuntimeError"
+            )
+            raise exc
+        return SimpleNamespace(run_id=f"r-src-{task.id}-{seed}")
+
+    async def fork_one(source_run_id, arm, operator, *, seed, repo_ref="main"):
+        calls.append(("fork", source_run_id, arm, operator, seed))
+        raised = (fork_raises or {}).get((source_run_id, arm))
+        if raised is not None:
+            raise raised
+        return SimpleNamespace(run_id=f"r-fork-{arm.value}-{source_run_id}")
+
+    h.runner.run_one, h.runner.fork_one = run_one, fork_one
+
+
+def test_apaired_forks_every_arm_from_one_natural_source_with_the_same_seed(tmp_path):
+    """Catches arms that each get their own recording (the Oct 16 failure: different planner
+    delegations per arm), or a fork whose seed differs from its source's."""
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    out = asyncio.run(
+        h.runner.apaired(["X1", "X2"], [Arm.block_only, Arm.gated], [Operator.drop], 2, "HEAD")
+    )
+    expected = []
+    for task in ("X1", "X2"):
+        for seed in (0, 1):
+            src = f"r-src-{task}-{seed}"
+            expected += [
+                ("run", task, Arm.natural, Operator.none, seed),
+                ("fork", src, Arm.block_only, Operator.drop, seed),
+                ("fork", src, Arm.gated, Operator.drop, seed),
+            ]
+    assert calls == expected
+    # the sources are in the result too, so the spend they caused is visible
+    assert len(out) == 12
+
+
+def test_apaired_with_natural_among_the_arms_runs_that_arm_once_per_seed(tmp_path):
+    """Catches a natural arm run twice per seed (once as the arm, once as the source), which
+    would double its n and its cost."""
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    asyncio.run(
+        h.runner.apaired(
+            ["X1"], [Arm.natural, Arm.mutated], [Operator.none, Operator.drop], 1, "HEAD"
+        )
+    )
+    assert calls == [
+        ("run", "X1", Arm.natural, Operator.none, 0),
+        ("fork", "r-src-X1-0", Arm.mutated, Operator.drop, 0),
+    ]
+
+
+def test_apaired_skips_the_forks_of_an_errored_source_and_goes_on(tmp_path):
+    """Catches forks attempted from a source that has no recording, or one errored source
+    ending the whole sweep."""
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls, source_errors={0})
+    out = asyncio.run(h.runner.apaired(["X1"], [Arm.gated], [Operator.drop], 2, "HEAD"))
+    assert calls == [
+        ("run", "X1", Arm.natural, Operator.none, 0),
+        ("run", "X1", Arm.natural, Operator.none, 1),
+        ("fork", "r-src-X1-1", Arm.gated, Operator.drop, 1),
+    ]
+    assert [e.run_id for e in h.runner.errors] == ["r-err-0"]
+    assert len(out) == 2
+    # Catches the lost sample being invisible: the gated cell ends one short of the other seeds.
+    assert dict(h.runner.not_forked) == {(Arm.gated, Operator.drop): 1}
+
+
+def test_apaired_reports_a_source_that_never_crossed_the_boundary_and_goes_on(tmp_path):
+    """Catches a natural run whose planner never delegated stopping the sweep (it is data, not
+    a setup error), or being skipped without a trace."""
+    h = Harness(tmp_path)
+    calls: list = []
+    no_point = {("r-src-X1-0", Arm.block_only): runner.NoForkPoint("never crossed")}
+    stub_paired(h, calls, fork_raises=no_point)
+    asyncio.run(h.runner.apaired(["X1"], [Arm.block_only, Arm.gated], [Operator.drop], 2, "HEAD"))
+    assert calls == [
+        ("run", "X1", Arm.natural, Operator.none, 0),
+        ("fork", "r-src-X1-0", Arm.block_only, Operator.drop, 0),  # refused: no gated fork tried
+        ("run", "X1", Arm.natural, Operator.none, 1),
+        ("fork", "r-src-X1-1", Arm.block_only, Operator.drop, 1),
+        ("fork", "r-src-X1-1", Arm.gated, Operator.drop, 1),
+    ]
+    assert h.runner.unforkable == ["r-src-X1-0"]
+    # Both arms lose seed 0, including the one never tried after the refusal.
+    assert dict(h.runner.not_forked) == {
+        (Arm.block_only, Operator.drop): 1,
+        (Arm.gated, Operator.drop): 1,
+    }
+
+
+def test_apaired_keeps_the_other_arm_when_one_fork_errors(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    boom = RuntimeError("boom")
+    boom.nemogate_run_error = runner.RunError(
+        "r-bad", "X1", "block_only", "drop", "builtins.RuntimeError"
+    )
+    stub_paired(h, calls, fork_raises={("r-src-X1-0", Arm.block_only): boom})
+    out = asyncio.run(
+        h.runner.apaired(["X1"], [Arm.block_only, Arm.gated], [Operator.drop], 1, "HEAD")
+    )
+    assert [c[2] for c in calls[1:]] == [Arm.block_only, Arm.gated]
+    assert [e.run_id for e in h.runner.errors] == ["r-bad"]
+    assert len(out) == 2  # the source and the gated fork
+
+
+def test_apaired_stops_for_a_setup_error_like_arun(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls, fork_raises={("r-src-X1-0", Arm.gated): ValueError("knobs differ")})
+    with pytest.raises(ValueError, match="knobs differ"):
+        asyncio.run(h.runner.apaired(["X1"], [Arm.gated], [Operator.drop], 2, "HEAD"))
+    assert len(calls) == 2
+
+
+def test_apaired_with_an_unknown_task_id_raises_keyerror_before_any_run(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    with pytest.raises(KeyError, match="nope"):
+        asyncio.run(h.runner.apaired(["X1", "nope"], [Arm.gated], [Operator.drop], 1))
+    assert calls == []
+
+
+def test_paired_is_the_sync_wrapper_of_apaired(tmp_path):
+    h = Harness(tmp_path)
+    calls: list = []
+    stub_paired(h, calls)
+    out = h.runner.paired(["X1"], [Arm.mutated], [Operator.hedge], 1)
+    assert calls[1] == ("fork", "r-src-X1-0", Arm.mutated, Operator.hedge, 0)
+    assert len(out) == 2
 
 
 # ---- default run() --------------------------------------------------------------------------
@@ -797,6 +1010,135 @@ def test_cli_runs_dir_sends_the_run_folders_to_that_directory(monkeypatch, tmp_p
     assert seen[1][3] == 3
 
 
+PAIRED_ARGS = [
+    "--tasks", "X1", "X2",
+    "--arms", "block_only", "gated",
+    "--operators", "drop",
+    "--n", "3",
+]  # fmt: skip
+
+
+def test_cli_with_paired_forks_the_arms_and_counts_the_natural_sources(monkeypatch, capsys):
+    """Catches a --paired sweep that runs each arm from its own recording, or a run count that
+    leaves out the natural source runs the forks need (they cost like any other run)."""
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "run", _no_run)
+    assert runner.main([*PAIRED_ARGS, "--paired"]) == 1
+    out = capsys.readouterr()
+    # 2 tasks x 3 seeds = 6 natural sources, each forked into 2 arms = 12 forks
+    assert "planned runs: 18" in out.out
+    assert "paired: 6 natural sources, 12 forks" in out.out
+    assert "python -m replay.budget" in out.err + out.out
+
+
+def test_cli_runs_each_arm_from_its_own_recording_unless_asked_to_pair(monkeypatch, capsys):
+    """Catches paired forks becoming the default: they put fork records (partial cost, shared
+    prefix) in every sweep's stats and double the runs of any caller that does not know."""
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    assert runner.main(PAIRED_ARGS) == 1
+    out = capsys.readouterr().out
+    assert "planned runs: 12" in out
+    assert "paired" not in out
+
+
+def test_the_repair_loops_command_line_still_runs_independent_arms(tmp_path, monkeypatch, capsys):
+    """Catches the runner's default changing under repair.worktree, which pools every
+    record.json of its re-run: natural sources in there would dilute the arm being repaired and
+    double the spend the repair CLI priced."""
+    from repair.patch import Patch
+    from repair.worktree import WorktreeRerun
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.txt").write_text("x\n", encoding="utf-8")
+    ident = ["-c", "user.email=t@t", "-c", "user.name=t"]
+    for args in (["init", "-q", "-b", "main"], ["add", "."], [*ident, "commit", "-q", "-m", "s"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    cmds: list[list[str]] = []
+    rerun = WorktreeRerun(
+        repo_dir=repo,
+        worktrees_dir=tmp_path / "trees",
+        tasks=["X1"],
+        arms=["mutated"],
+        operators=["drop"],
+        n=4,
+        run_cmd=lambda cmd, cwd, env: cmds.append(cmd),
+    )
+    rerun(Patch(fix_id="f", edits=[], files_after={"a.txt": "y\n"}))
+    argv = cmds[0][cmds[0].index("replay.runner") + 1 :]
+
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    got = []
+
+    class FakeDefaultRunner:
+        errors: list = []
+        unforkable: list = []
+        not_forked: dict = {}
+
+        def paired(self, *args):
+            raise AssertionError("the repair loop's re-run must not be paired")
+
+        def run(self, task_ids, arms, operators, n, repo_ref, **kwargs):
+            got.append((task_ids, arms, operators, n))
+            return []
+
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: FakeDefaultRunner())
+    assert runner.main(argv) == 0
+    assert got == [(["X1"], [Arm.mutated], [Operator.drop], 4)]
+    assert "planned runs: 4\n" in capsys.readouterr().out
+
+
+def test_cli_with_yes_runs_the_paired_sweep_and_lists_unforkable_sources(monkeypatch, capsys):
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    got = []
+
+    class FakeDefaultRunner:
+        errors: list = []
+        unforkable = ["r-no-delegation"]
+        not_forked = {(Arm.block_only, Operator.drop): 2, (Arm.gated, Operator.drop): 3}
+
+        def paired(self, task_ids, arms, operators, n, repo_ref):
+            got.append((task_ids, arms, operators, n, repo_ref))
+            return []
+
+        def run(self, *args):
+            raise AssertionError("a paired sweep must not run independent arms")
+
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: FakeDefaultRunner())
+    assert runner.main([*PAIRED_ARGS, "--paired", "--yes"]) == 1  # no fork point is a shortfall
+    assert got == [(["X1", "X2"], [Arm.block_only, Arm.gated], [Operator.drop], 3, "main")]
+    out = capsys.readouterr().out
+    assert "no fork point, not forked: r-no-delegation" in out
+    # Catches forks lost to an errored or unforkable source going unreported: each cell's n ends
+    # short and nothing but this line says by how many.
+    assert "forks not made: block_only drop 2, gated drop 3" in out
+
+
+def test_cli_top_up_refuses_a_paired_sweep(monkeypatch, capsys):
+    """Catches --top-up planning from counts that leave out forks, which would re-run
+    sources it already has."""
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "default_runner", _no_run)
+    assert runner.main([*PAIRED_ARGS, "--paired", "--top-up", "--yes"]) == 2
+    assert "--paired" in capsys.readouterr().err
+
+
+def test_cli_reports_a_refused_cell_as_a_refusal_not_a_traceback(monkeypatch, capsys):
+    # Breaks if main lets the ValueError escape: the user sees a traceback instead of the message.
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+
+    class RefusingRunner:
+        errors: list = []
+
+        def run(self, *args, **kwargs):
+            raise runner.CellRefused("task X2 only runs natural with none, not gated with drop")
+
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: RefusingRunner())
+
+    assert runner.main([*CLI_ARGS, "--yes"]) == 2
+    assert "refusing to run: task X2 only runs natural with none" in capsys.readouterr().err
+
+
 def git_repo_ignoring_runs(tmp_path: Path) -> Path:
     repo = tmp_path / "checkout"
     repo.mkdir()
@@ -901,7 +1243,7 @@ def test_carriage_json_labels_a_natural_drop_and_records_the_knob(tmp_path, monk
         env={"NEMOGATE_COMPACT_TOKENS": "8000"},
     )
     assert carriage == {
-        "classifier_version": 3,
+        "classifier_version": 4,
         "label": "DROPPED",
         "reason": "anchor_mentioned=False carried=False violated=True",
         "anchors": ["rm"],
@@ -917,6 +1259,7 @@ def test_carriage_json_labels_a_natural_drop_and_records_the_knob(tmp_path, monk
             "delegations_checked": 1,
             "delegations": ["Add the flag."],
             "carried_by": None,
+            "lost_at": None,
         },
         "compaction": None,
         "knobs": {"NEMOGATE_COMPACT_TOKENS": "8000", "NEMOGATE_COMPACT_KEEP": None},
@@ -942,6 +1285,7 @@ def test_carriage_json_carries_the_compaction_evidence_of_the_planner(tmp_path, 
         "cutoff_index": 4,
         "anchor_in_summary": False,
         "before_delegation": True,
+        "delegations": [{"fired": True, "cutoff_index": 4, "anchor_in_summary": False}],
     }
     assert carriage["knobs"] == {"NEMOGATE_COMPACT_TOKENS": "8000", "NEMOGATE_COMPACT_KEEP": "2"}
 
@@ -951,6 +1295,44 @@ def test_carriage_json_is_unknown_when_nothing_was_delegated(tmp_path, monkeypat
     carriage = run_natural(tmp_path, {}, monkeypatch)
     assert carriage["label"] == "UNKNOWN"
     assert carriage["knobs"] == {"NEMOGATE_COMPACT_TOKENS": None, "NEMOGATE_COMPACT_KEEP": None}
+
+
+# ---- timing.json ------------------------------------------------------------------------------
+
+
+def fake_clock(monkeypatch, *stamps):
+    """_utcnow returns these datetimes in order: the start of the run, then its end."""
+    times = iter(stamps)
+    monkeypatch.setattr(runner, "_utcnow", lambda: next(times))
+
+
+def test_a_finished_run_writes_timing_json_with_start_end_and_seconds(tmp_path, monkeypatch):
+    # Breaks if wall time is not recorded per run, or is recorded as the wrong span.
+    fake_clock(
+        monkeypatch,
+        datetime(2026, 10, 16, 13, 0, 0, tzinfo=UTC),
+        datetime(2026, 10, 16, 13, 2, 17, 500000, tzinfo=UTC),
+    )
+    h = Harness(tmp_path)
+    asyncio.run(h.run_one("X1", Arm.gated, Operator.drop, seed=3))
+    assert json.loads((h.run_dir() / "timing.json").read_text()) == {
+        "start": "2026-10-16T13:00:00+00:00",
+        "end": "2026-10-16T13:02:17.500000+00:00",
+        "seconds": 137.5,
+    }
+
+
+def test_a_crashed_run_also_gets_timing_json(tmp_path, monkeypatch):
+    # Breaks if an errored run's time is lost: it was spent like any other.
+    fake_clock(
+        monkeypatch,
+        datetime(2026, 10, 16, 13, 0, 0, tzinfo=UTC),
+        datetime(2026, 10, 16, 13, 0, 42, tzinfo=UTC),
+    )
+    h = Harness(tmp_path, {"raises": "boom"})
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(h.run_one("X1", Arm.gated, Operator.drop, seed=3))
+    assert json.loads((h.run_dir() / "timing.json").read_text())["seconds"] == 42.0
 
 
 # ---- a sweep carries on past a crashed run ----------------------------------------------------
@@ -992,6 +1374,7 @@ def test_arun_carries_on_past_a_run_that_raises_and_writes_error_json(tmp_path):
         "ledger_hash": LEDGER_HASH,
         "repo_sha": head_sha(),
         "lockfile_hash": hashlib.sha256((ROOT / "uv.lock").read_bytes()).hexdigest()[:12],
+        "cost_usd": 0.0,
         "error_type": "builtins.ValueError",
         "message": "boom in run 2",
         "traceback_tail": data["traceback_tail"],
@@ -1017,6 +1400,15 @@ def test_error_json_keeps_only_the_last_twenty_traceback_lines(tmp_path):
     runner._write_error(run_dir, task, Arm.natural, Operator.none, repro, error, text)
     tail = json.loads((run_dir / "error.json").read_text())["traceback_tail"].splitlines()
     assert tail == [*(f"frame {i}" for i in range(81, 100)), "ValueError: deep"]
+
+
+def test_error_json_records_what_the_crashed_run_spent(tmp_path):
+    # Breaks if a run that raised after spending leaves no trace of the money: error.json must
+    # carry the run's spend-log total (0.04 helper spend made while the gate was built).
+    h = Harness(tmp_path, {"raises": "boom", "spend_in_middleware": True})
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(h.run_one("X1", Arm.gated, Operator.drop, seed=3))
+    assert json.loads((h.run_dir() / "error.json").read_text())["cost_usd"] == pytest.approx(0.04)
 
 
 def test_a_failure_before_the_run_folder_exists_stops_the_sweep_and_keeps_the_traceback(

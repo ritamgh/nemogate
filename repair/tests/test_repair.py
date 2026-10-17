@@ -340,10 +340,10 @@ def test_repair_once_accepts_only_a_strict_cvr_drop_without_losing_success(after
     assert result.before == Rates(3, 2, 3)
 
 
-def test_repair_once_rejects_a_guard_failure_without_rerunning():
+def test_repair_once_rejects_a_guard_failure_twice_without_rerunning():
     planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
     unsafe = {**EDIT, "new_string": "Hand it over."}
-    writer = get_model("sut", stub_responses=[structured("EditList", {"edits": [unsafe]})])
+    writer = get_model("sut", stub_responses=[structured("EditList", {"edits": [unsafe]})] * 2)
 
     def rerun(patch):
         raise AssertionError("must not re-run a patch that failed the guards")
@@ -358,14 +358,69 @@ def test_repair_once_rejects_a_guard_failure_without_rerunning():
         rerun=rerun,
     )
     assert result.accepted is False
-    assert result.reason.startswith("guard:")
+    assert result.reason.startswith("guard:") and result.reason.endswith("(2 tries)")
     assert result.after is None
+
+
+def test_a_patch_refused_by_a_guard_is_written_once_more_with_the_reason():
+    # Live 2026-10-16: Super's insert used an anchor that occurs more than once in the prompts
+    # file, the guard refused it and the iteration ended with no re-run. The writer now gets the
+    # guard's reason and its own edits back, once, and the guards check the new edits again.
+    planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
+    twice = {"file": "app/prompts.py", "old_string": "\n", "new_string": "\nCopy every rule.\n"}
+    writer = Spy(
+        get_model(
+            "sut",
+            stub_responses=[
+                structured("EditList", {"edits": [twice]}),
+                structured("EditList", {"edits": [EDIT]}),
+            ],
+        )
+    )
+    seen = []
+
+    def rerun(patch):
+        seen.append(patch)
+        return [record(f"p{i}", False) for i in range(3)]
+
+    result = repair_once(
+        evidence=EVIDENCE,
+        baseline=BASELINE,
+        files=FILES,
+        agents=["lead", "worker"],
+        planner_model=planner,
+        writer_model=writer,
+        rerun=rerun,
+    )
+    assert result.accepted is True and len(seen) == 1
+    first, second = writer.prompts
+    assert "A guard rejected" not in first
+    assert second.startswith(first)
+    assert "must occur exactly once in app/prompts.py (it occurs" in second
+    assert '"old_string": "\\n"' in second  # its own rejected edit, shown back
+
+
+class Spy:
+    """A structured-output model that records each prompt."""
+
+    def __init__(self, model):
+        self.model, self.prompts = model, []
+
+    def with_structured_output(self, schema):
+        bound, spy = self.model.with_structured_output(schema), self
+
+        class _Recorder:
+            def invoke(self, prompt):
+                spy.prompts.append(prompt)
+                return bound.invoke(prompt)
+
+        return _Recorder()
 
 
 def test_repair_once_rejects_an_empty_patch_without_rerunning():
     # A patch with no edits would re-run unchanged code and spend the repair bucket for nothing.
     planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
-    writer = get_model("sut", stub_responses=[structured("EditList", {"edits": []})])
+    writer = get_model("sut", stub_responses=[structured("EditList", {"edits": []})] * 2)
 
     def rerun(patch):
         raise AssertionError("must not re-run an empty patch")
@@ -379,7 +434,10 @@ def test_repair_once_rejects_an_empty_patch_without_rerunning():
         writer_model=writer,
         rerun=rerun,
     )
-    assert (result.accepted, result.reason) == (False, "guard: the patch makes no change")
+    assert (result.accepted, result.reason) == (
+        False,
+        "guard: the patch makes no change (2 tries)",
+    )
 
 
 def test_too_few_runs_is_never_accepted():

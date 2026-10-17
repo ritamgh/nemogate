@@ -69,8 +69,8 @@ class TraceEvidence:
     exemplars: dict[tuple[str, str], Exemplar]
     read: int  # run folders loaded
     skipped: int  # run folders with a config but no usable record or trace
-    not_counted: int = 0  # loaded folders the statistics did not count (other conditions, or
-    # inconclusive: the rule never came up)
+    not_counted: int = 0  # loaded folders not shown as examples (other conditions than the
+    # counted runs, or the rule never came up: counted in the rates, but not a run that kept it)
 
 
 def _read_events(path: Path) -> list[Event]:
@@ -377,7 +377,7 @@ def render_trace_panel(ex: Exemplar | None, evidence: TraceEvidence) -> str:
             '<p class="note"><span class="notrun">Trace: no violating mutated run for this rule at '
             f"this boundary among the {e(evidence.read)} run folders read "
             f"({e(evidence.skipped)} skipped as unreadable, {e(evidence.not_counted)} not "
-            "counted: made under other conditions, or the rule never came up).</span></p>"
+            "shown: made under other conditions, or the rule never came up).</span></p>"
         )
     boundary = ex.violating.record.boundary
     action_html, ev = violating_action(ex.violating)

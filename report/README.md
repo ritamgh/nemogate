@@ -9,7 +9,7 @@ uv run python -m report.site --results results/results.json --out results/site/i
     [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]
 ```
 
-Reads the `results.json` that `replay/stats.py` writes (`format_version` 1; any other version is
+Reads the `results.json` that `replay/stats.py` writes (`format_version` 2; any other version is
 refused with exit code 2) and writes one self-contained HTML file: inline CSS and SVG, no script,
 no font, CDN or other network request. The output depends only on the input, so two runs are
 byte-identical. Generated pages are not committed.
@@ -18,8 +18,20 @@ What it shows:
 
 - Top: one plain verdict line made from the data (the largest rule effect among graded
   constraints, preferring one whose interval excludes 0, with its runs, interval and what the
-  gated runs did in the same case; "No comparison has enough runs yet" when there is none), then
-  a key defining the four arms and the operators in method words.
+  gated runs did in the same case; when gated was never broken, the rule is one the gate blocks
+  before the call (`blocked_before_call` in the results, from `gate.policy`) and some gated run
+  was blocked, it adds that the 0 comes from blocking, which block-only gets by construction;
+  for any other rule it adds nothing of the kind; "No comparison has enough runs yet" when there
+  is none), then a key defining the four arms and the operators in method words.
+- Under the key, "What each part fixes": four static lines. The gate blocks a tool call that
+  breaks a rule checkable before the call (path, tool and approval rules), whatever the cause, and
+  gated also holds back a reply that misses an output rule (`gate/policy.py`, `gate/middleware.py`);
+  repair targets rules lost in the handoff (`repair/menu.py`); rules checked on the filesystem diff
+  are graded after the run and not blocked (docs/SPEC.md, predicate table). A fourth line
+  says that for a path, tool or approval rule a 0 broken in the block-only and gated arms comes
+  from blocking (the gate refuses with the check that grades the run, so both get it by
+  construction), that for other rules a 0 is a measured result, and that whether carrying the
+  rule adds anything over blocking is the hypothesis being measured, not a result.
 - Header: the reproducibility group (short hashes, with the full value in the tooltip, and the
   model ids), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
@@ -36,12 +48,24 @@ What it shows:
   boundary; the table links to all of them.
 - One card per constraint: rule text, kind, a Graded / Not graded tag, and per boundary a
   table of cells (arm, operator, runs, violation rate and task success with their 95% Wilson
-  intervals and a small interval bar). A cell that was not run prints "not run", not 0. A cell with
+  intervals and a small interval bar). A `natural` cell whose results carry `violations_by_label`
+  adds one line under the violation rate, such as "2 of 3 broken: 1 lost in the handoff,
+  1 carried but disobeyed"; without the field (older results files) nothing is added. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
   (`load_bearing`) and gate effect on task success (`ledger_value`) are shown with their interval,
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
   `has_check: false` is tagged Not graded and shows no rate, comparison or trace (only a count of
   its runs); its cells are also left out of the boundary graph's pooled rates.
+- Under each cell table, "Cost and time per run": per arm and operator, mean cost and wall time
+  with a 95% bootstrap interval from five runs and the lowest to highest value, labelled
+  "range", from fewer (unknown time is said, not shown as 0; the means cover graded runs only,
+  and the table says so), the attempt rate, and for
+  the block_only and gated arms what happened after a block (blocked calls and repeats per run,
+  carry-over, re-plans, runs stuck, recovery steps with the cost and time shares marked as
+  estimates; a line says how many runs carry-over and re-plans leave out because several task
+  calls ran at once). A cell without `arm_metrics` (older file) shows "not in this results file", and a
+  page with none prints no table. The header's run block adds "Money in no rate": what errored
+  runs cost, in all and per arm.
 - A one-sentence summary per (boundary, operator), only when the mutated violation rate, the
   block-only success and the gated success all exist. It uses those cells' numbers and nothing
   else.
@@ -80,7 +104,28 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   no numbers table, the raw text is shown escaped. The
   summary does not say which constraint, arm or operator the numbers came from; the page says so.
 
-## Deploying the results page (Nebius Serverless Endpoints)
+## Publishing on GitHub Pages
+
+The demo URL is the results page served by GitHub Pages from the `gh-pages` branch, which holds
+only the built page (`index.html`) and an empty `.nojekyll`. The page is built locally, because
+its trace and patch panels read `runs/`, which is not in git. From the repo root:
+
+```
+uv run python -m replay.stats runs/r-* --ledger nemogate.yaml --out results/results.json
+uv run python -m report.site --results results/results.json --out results/site/index.html \
+    --runs runs --ledger nemogate.yaml [--repair runs/repair]
+git fetch origin gh-pages && git worktree add /tmp/nemogate-pages gh-pages
+cp results/site/index.html /tmp/nemogate-pages/index.html
+git -C /tmp/nemogate-pages commit -am "Publish results page" && git -C /tmp/nemogate-pages push
+git worktree remove /tmp/nemogate-pages
+```
+
+Pages serves it at `https://ritamgh.github.io/nemogate/` a minute or so after the push. Whatever
+is on `gh-pages` is public, so publish only pages built from runs you mean to show. Serving on
+Nebius Serverless Endpoints instead is optional (the hackathon encourages it but does not require
+it, and its credits are Token Factory only).
+
+## Deploying the results page on Nebius Serverless Endpoints (optional)
 
 `serve.py` is a stdlib file server for `results/site/` (GET and HEAD only, no directory listing,
 `/healthz` returns 200, port from `--port` or `$PORT`, default 8080). `Dockerfile` copies it and

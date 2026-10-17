@@ -13,8 +13,10 @@ import os
 import subprocess
 import sys
 import traceback
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -39,7 +41,7 @@ from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
 from schemas.ledger import Ledger, load_ledger_yaml
 from schemas.run import RunRecord
-from schemas.trace import Approval, BoundaryOut, dump_event_jsonl, parse_trace_jsonl
+from schemas.trace import BoundaryOut, dump_event_jsonl, parse_trace_jsonl
 
 ROOT = record.ROOT
 LEDGER_PATH = ROOT / "nemogate.yaml"
@@ -48,6 +50,7 @@ RUNS_DIR = ROOT / "runs"
 CHECKPOINTS = "checkpoints.sqlite"  # file names in a run folder
 BOUNDARIES = "boundaries.json"
 PREFIX = "prefix.jsonl"  # a fork: the source's trace events before the fork point
+TIMING = "timing.json"  # a run's wall time; stats reads it (older run folders have none)
 ERROR = "error.json"  # a run that raised: what `arun` writes before it carries on
 TRACEBACK_LINES = 20  # how much of the traceback error.json keeps
 # A failure that no later run can avoid, or that a human must hear about: it stops the sweep.
@@ -62,6 +65,10 @@ def _default_client() -> Any:
     env.load_dotenv()
     env.require_env("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID")
     return Contree()
+
+
+class NoForkPoint(ValueError):
+    """The source run never crossed its target boundary, so there is nothing to fork before."""
 
 
 @dataclass(frozen=True)
@@ -127,6 +134,10 @@ class Runner:
         self.repo_dir = repo_dir
         self.records: list[RunRecord] = []  # what the latest `arun` finished
         self.errors: list[RunError] = []  # and the runs it caught raising
+        self.unforkable: list[str] = []  # natural sources the latest `apaired` could not fork
+        # forks the latest `apaired` never made, per (arm, operator): an errored or unforkable
+        # source costs every compared arm one sample, and only this says so
+        self.not_forked: Counter[tuple[Arm, Operator]] = Counter()
 
     def _default_backend(self, session: Any) -> Any:
         # Imported here so tests never need the SDK.
@@ -199,7 +210,7 @@ class Runner:
         )
         crossing = fork_point(recording, source.boundary)
         if crossing is None:
-            raise ValueError(
+            raise NoForkPoint(
                 f"cannot fork {source_run_id}: it never crossed {source.boundary}, so there is "
                 "nothing to fork before"
             )
@@ -215,12 +226,8 @@ class Runner:
                 f"{task.boundary}, but the run recorded {source.constraint_id} at {source.boundary}"
             )
         prefix = _prefix(source_dir, crossing)
-        if arm in (Arm.block_only, Arm.gated) and any(isinstance(e, Approval) for e in prefix):
-            raise ValueError(
-                f"cannot fork {source_run_id} under the {arm.value} arm: an approval was given "
-                "before the fork point, and the gate has no way yet to be told of it, so it could "
-                "block an action that was authorised"
-            )
+        # A blocking arm's gate reads the prefix (gate.PRIOR_EVENTS) and so still honours an
+        # approval given before the fork point.
         fork = _Fork(
             source_dir,
             recording,
@@ -245,11 +252,13 @@ class Runner:
         """One run. If it raises, the traceback goes to `error.txt`. A failure once the agents have
         started also gets an `error.json`, unless it is one that stops the sweep; a failure in
         setup never does. The exception is re-raised either way."""
+        _refuse_cell(task, arm, operator)
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
         phase = _Phase()
+        started = _utcnow()
         try:
-            return await self._execute(
+            run_record = await self._execute(
                 run_id,
                 run_dir,
                 task,
@@ -269,7 +278,10 @@ class Runner:
                 exc.nemogate_run_error = _write_error(  # type: ignore[attr-defined]
                     run_dir, task, arm, operator, repro, exc, text
                 )
+                _write_timing(run_dir, started)
             raise
+        _write_timing(run_dir, started)
+        return run_record
 
     async def _execute(
         self,
@@ -495,6 +507,9 @@ class Runner:
         """
         by_id = {t.id: t for t in self.app.tasks()}
         tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
+        for task in tasks:  # CellRefused before any run starts
+            for arm, operator in pairs(arms, operators):
+                _refuse_cell(task, arm, operator)
         records: list[RunRecord] = []
         self.records, self.errors = records, []
         for task in tasks:
@@ -523,6 +538,73 @@ class Runner:
         seeds: Mapping[sweep_status.Cell, Iterable[int]] | None = None,
     ) -> list[RunRecord]:
         return asyncio.run(self.arun(task_ids, arms, operators, n, repo_ref, seeds=seeds))
+
+    async def apaired(
+        self,
+        task_ids: Sequence[str],
+        arms: Sequence[Arm],
+        operators: Sequence[Operator],
+        n: int,
+        repo_ref: str = "main",
+    ) -> list[RunRecord]:
+        """Arms compared on the same handoffs. For each task and seed in `range(n)`: one natural
+        run (the source; it is the natural arm when that is among `arms`), then a fork of it for
+        every other (arm, operator) pair, with the same seed. Every compared arm therefore shares
+        the source's prefix up to the boundary, so a difference between them is not a difference
+        in what the planner happened to delegate.
+
+        Errors are handled as in `arun`. A source that errored gets no forks. A source that
+        never crossed its boundary (`NoForkPoint`) is listed in `self.unforkable` and gets no
+        forks; anything else a fork raises stops the sweep. `self.records` holds the sources too.
+        `self.not_forked` counts the forks that were never made, per (arm, operator).
+        """
+        by_id = {t.id: t for t in self.app.tasks()}
+        tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
+        fork_pairs = [(a, o) for a, o in pairs(arms, operators) if a is not Arm.natural]
+        records: list[RunRecord] = []
+        self.records, self.errors, self.unforkable = records, [], []
+        self.not_forked = Counter()
+        for task in tasks:
+            for seed in range(n):
+                try:
+                    source = await self.run_one(
+                        task, Arm.natural, Operator.none, seed=seed, repo_ref=repo_ref
+                    )
+                except Exception as exc:
+                    failure = getattr(exc, "nemogate_run_error", None)
+                    if failure is None:
+                        raise
+                    self.errors.append(failure)
+                    self.not_forked.update(fork_pairs)
+                    continue
+                records.append(source)
+                for i, (arm, operator) in enumerate(fork_pairs):
+                    try:
+                        records.append(
+                            await self.fork_one(
+                                source.run_id, arm, operator, seed=seed, repo_ref=repo_ref
+                            )
+                        )
+                    except NoForkPoint:
+                        self.unforkable.append(source.run_id)
+                        self.not_forked.update(fork_pairs[i:])
+                        break
+                    except Exception as exc:
+                        failure = getattr(exc, "nemogate_run_error", None)
+                        if failure is None:
+                            raise
+                        self.errors.append(failure)
+        return records
+
+    def paired(
+        self,
+        task_ids: Sequence[str],
+        arms: Sequence[Arm],
+        operators: Sequence[Operator],
+        n: int,
+        repo_ref: str = "main",
+    ) -> list[RunRecord]:
+        return asyncio.run(self.apaired(task_ids, arms, operators, n, repo_ref))
 
     async def afork(
         self,
@@ -553,6 +635,17 @@ class Runner:
         return asyncio.run(self.afork(source_run_id, arms, operators, n, repo_ref))
 
 
+class CellRefused(ValueError):
+    """A task limits itself to other (arm, operator) cells than the one asked for."""
+
+
+def _refuse_cell(task: AppTask, arm: Arm, operator: Operator) -> None:
+    """Raise CellRefused when the task limits itself to other cells (`task.refusal`, optional)."""
+    refusal = getattr(task, "refusal", None)
+    if refusal is not None and (why := refusal(arm, operator)) is not None:
+        raise CellRefused(why)
+
+
 def _write_error(
     run_dir: Path,
     task: AppTask,
@@ -575,12 +668,29 @@ def _write_error(
         "boundary": task.boundary,
         **{k: v for k, v in repro.items() if k != "model_ids"},
         "model_ids": {str(role): name for role, name in repro["model_ids"].items()},
+        "cost_usd": run_totals(run_dir.name)[1],  # spent even though the run was not graded
         "error_type": error_type,
         "message": str(exc),
         "traceback_tail": "\n".join(text.splitlines()[-TRACEBACK_LINES:]),
     }
     (run_dir / ERROR).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return RunError(run_dir.name, task.id, arm.value, operator.value, error_type)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _write_timing(run_dir: Path, started: datetime) -> None:
+    """Write `timing.json`: when the run began and ended and how many seconds that was. It
+    covers sandbox setup and the checks after the agents, not only the agents."""
+    ended = _utcnow()
+    data = {
+        "start": started.isoformat(),
+        "end": ended.isoformat(),
+        "seconds": round((ended - started).total_seconds(), 3),
+    }
+    (run_dir / TIMING).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _knobs() -> dict[str, str | None]:
@@ -735,6 +845,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "today's reproducibility fields (a record or an error counts as one), and run only the "
         "shortfall to --n",
     )
+    parser.add_argument(
+        "--paired",
+        action="store_true",
+        help="fork every arm other than natural from the same natural run (the source) with the "
+        "same seed, so the arms share one prefix up to the boundary; the sources are extra runs "
+        "unless natural is among --arms. Fork records cover only the part after the boundary "
+        "(cost, tokens). Without it, every arm is its own full run",
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the run count and go")
     args = parser.parse_args(argv)
 
@@ -751,6 +869,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     sweep: Runner | None = None
     seeds: dict[sweep_status.Cell, range] | None = None
+    fork_pairs = [(a, o) for a, o in pairs(args.arms, args.operators) if a is not Arm.natural]
+    paired = bool(fork_pairs) and args.paired
+    if paired and args.top_up:
+        print(
+            "refusing to run: --top-up counts independent runs and leaves forks out, so it "
+            "cannot top up a paired sweep; drop --paired",
+            file=sys.stderr,
+        )
+        return 2
     if args.top_up:
         sweep = default_runner(args.runs_dir)
         try:
@@ -768,9 +895,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         seeds = {(c.task_id, c.arm, c.operator): c.seeds for c in cells}
         planned = sum(c.planned for c in cells)
+    elif paired:
+        n_sources = len(args.tasks) * args.n
+        n_forks = n_sources * len(fork_pairs)
+        planned = n_sources + n_forks
     else:
         planned = len(args.tasks) * len(pairs(args.arms, args.operators)) * args.n
     print(f"planned runs: {planned}")
+    if paired and not args.top_up:
+        print(f"paired: {n_sources} natural sources, {n_forks} forks")
     if not args.yes:
         print(
             "not started: run `python -m replay.budget` to check this count against the budget "
@@ -781,11 +914,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     sweep = sweep or default_runner(args.runs_dir)
     extra = {} if seeds is None else {"seeds": seeds}
     try:
-        records = sweep.run(args.tasks, args.arms, args.operators, args.n, args.repo_ref, **extra)
+        if paired:
+            records = sweep.paired(args.tasks, args.arms, args.operators, args.n, args.repo_ref)
+        else:
+            records = sweep.run(
+                args.tasks, args.arms, args.operators, args.n, args.repo_ref, **extra
+            )
     except SpendCapReached as exc:
         print(f"stopped: {exc}", file=sys.stderr)
         _print_summary(sweep.records, sweep.errors, "before the stop")
         return 3
+    except CellRefused as exc:  # raised before the first run
+        print(f"refusing to run: {exc}", file=sys.stderr)
+        return 2
     for r in records:
         print(
             f"{r.run_id} task={r.task_id} arm={r.arm.value} operator={r.operator.value} "
@@ -793,7 +934,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"cost_usd={r.cost_usd:.4f}"
         )
     _print_summary(records, sweep.errors)
-    return 1 if sweep.errors else 0
+    unforkable = sweep.unforkable if paired else []
+    for run_id in unforkable:
+        print(f"no fork point, not forked: {run_id}")
+    missing = sweep.not_forked if paired else {}
+    if missing:
+        print(
+            "forks not made: "
+            + ", ".join(f"{a.value} {o.value} {k}" for (a, o), k in sorted(missing.items()))
+        )
+    return 1 if sweep.errors or unforkable else 0
 
 
 def _print_summary(

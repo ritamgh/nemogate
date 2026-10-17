@@ -356,7 +356,8 @@ def raise_c002_effect(data: dict) -> None:
 
 def test_verdict_states_the_largest_effect_with_its_runs_interval_and_the_gated_result(rich):
     # Breaks if the page opens without a plain result, or picks a smaller effect, or leaves out
-    # the counts, the interval or what the gate did in the same case.
+    # the counts, the interval or what the gate did in the same case. C-002 is not a rule the
+    # gate blocks before the call here, so a 0 is not credited to blocking.
     raise_c002_effect(rich)
 
     assert verdict_text(site.render(rich)) == (
@@ -364,6 +365,19 @@ def test_verdict_states_the_largest_effect_with_its_runs_interval_and_the_gated_
         "broken in 8 of 10 runs (80%) against 3 of 10 with no sabotage (30%): +60 pp (95% "
         "interval +20 pp to +90 pp). With the gate on, it was broken in 0 of 10 gated runs "
         "(0%, 95% interval 0% to 28%)."
+    )
+
+
+def test_verdict_credits_blocking_for_a_zero_only_on_a_rule_the_gate_blocks_before_the_call(rich):
+    # Breaks if the sentence is added for any rule: a frozen-file or output rule is never refused
+    # before the call, so block-only does not get 0 for it "by construction".
+    raise_c002_effect(rich)
+    rich["constraints"]["C-002"]["blocked_before_call"] = True
+
+    assert verdict_text(site.render(rich)).endswith(
+        "(0%, 95% interval 0% to 28%). That 0 comes from blocking: the block-only arm refuses "
+        "the same action with the same check, so it gets 0 by construction and the figure does "
+        "not show that carrying the rule helps."
     )
 
 
@@ -574,13 +588,13 @@ def test_zero_runs_page_still_shows_the_honesty_strip_and_no_graph():
 
 
 def test_unknown_format_version_is_refused(rich, tmp_path, capsys):
-    rich["format_version"] = 2
-    with pytest.raises(ValueError, match="format_version 2"):
+    rich["format_version"] = 3
+    with pytest.raises(ValueError, match="format_version 3"):
         site.render(rich)
     src = tmp_path / "results.json"
     src.write_text(json.dumps(rich), encoding="utf-8")
     assert site.main(["--results", str(src), "--out", str(tmp_path / "out.html")]) == 2
-    assert "format_version 2" in capsys.readouterr().err
+    assert "format_version 3" in capsys.readouterr().err
     assert not (tmp_path / "out.html").exists()
 
 
@@ -709,3 +723,227 @@ def test_unwritable_output_is_a_clean_error(tmp_path, capsys):
     assert err.count("\n") == 1
     assert site.main(["--results", str(src), "--out", "/dev/null/index.html"]) == 2
     assert capsys.readouterr().err.startswith("report.site: ")
+
+
+# --- natural violations split by carriage label --------------------------------------------------
+
+
+def natural_split(page: dict, split: dict | None) -> dict:
+    """`rich` with C-002's natural cell (3 violations in 10 runs) carrying `split`, if any."""
+    out = copy.deepcopy(page)
+    for cell in out["constraints"]["C-002"]["boundaries"]["delegation:planner->coder"]["cells"]:
+        if cell["arm"] == "natural":
+            assert cell["violations"] == 3
+            if split is not None:
+                cell["violations_by_label"] = split
+    return out
+
+
+def test_natural_cell_says_how_many_violations_were_dropped_and_how_many_disobeyed(rich):
+    # Breaks if a dropped rule and a disobeyed one are shown as one undifferentiated rate again.
+    page = site.render(natural_split(rich, {"DROPPED": 1, "DISOBEYED": 2}))
+    text = text_of(article(page, "C-002"))
+    assert "3 of 10 broken: 1 lost in the handoff, 2 carried but disobeyed" in text
+
+
+def test_natural_split_names_a_run_that_could_not_be_classified(rich):
+    # Breaks if a violation with no usable label vanishes from the sentence, so the parts no
+    # longer add up to the violation count.
+    page = site.render(natural_split(rich, {"DROPPED": 1, "unlabelled": 1, "UNKNOWN": 1}))
+    text = text_of(article(page, "C-002"))
+    assert "3 of 10 broken: 1 lost in the handoff, 2 not classified" in text
+
+
+def test_natural_split_is_only_shown_in_the_natural_row(rich):
+    # Breaks if the sentence is repeated on a sabotaged arm, where "dropped" is by design.
+    data = natural_split(rich, {"DROPPED": 3})
+    for cell in data["constraints"]["C-002"]["boundaries"]["delegation:planner->coder"]["cells"]:
+        if cell["arm"] == "mutated":
+            cell["violations_by_label"] = {"DROPPED": 8}
+    text = text_of(article(site.render(data), "C-002"))
+    assert text.count("broken:") == 1
+
+
+@pytest.mark.parametrize("split", [None, {}])
+def test_natural_cell_without_a_split_renders_as_before(rich, split):
+    # Breaks if an older results file (no field) fails to render or shows an empty sentence.
+    text = text_of(article(site.render(natural_split(rich, split)), "C-002"))
+    assert "broken:" not in text
+    assert "Natural none 10 30% (11–60%) 3 of 10 runs 70% (40–89%) 7 of 10 runs" in text
+
+
+# --- what each part fixes -----------------------------------------------------------------------
+
+
+def test_page_says_what_the_gate_and_repair_each_fix_and_what_neither_does(rich):
+    # Breaks if the page claims more than the code does: the gate blocks only checks decidable
+    # before the call, repair acts on rules lost in the handoff, frozen files are graded after.
+    page = site.render(rich)
+    text = text_of(page)
+    assert "What each part fixes" in text
+    section = text.split("What each part fixes", 1)[1].split("What these numbers can")[0]
+    assert "blocks a tool call that breaks a rule it can check before the call" in section
+    assert "path, tool and approval rules" in section
+    assert "rule that arrived but was ignored" in section
+    assert "Gated also holds back a reply that misses an output rule" in section
+    assert "Repair targets rules lost in the handoff" in section
+    assert "checked on the files an agent changed, such as frozen files," in section
+    assert "are graded after the run. The gate does not block them" in section
+    assert not re.search(r"\bT[1-8]\b|C-00\d", section)
+
+
+# --- cells split by the compaction knobs -------------------------------------------------------
+
+
+def test_cells_made_under_different_compaction_settings_each_get_a_row():
+    # Breaks if the table finds a cell by (arm, operator) alone: the compacted natural runs
+    # (2 of 4 broken) would be hidden behind the uncompacted ones (0 of 4), with no sign that
+    # a second setting exists.
+    off = {**make_cell("natural", "none", 4, 0, 4), "compaction": {"tokens": None, "keep": None}}
+    on = {**make_cell("natural", "none", 4, 2, 2), "compaction": {"tokens": 6000, "keep": 6}}
+    page = site.render(
+        one_constraint({"delegation:planner->coder": {"cells": [off, on], "comparisons": []}})
+    )
+
+    text = text_of(article(page, "C-900"))
+    assert "none compaction off" in text
+    assert "none compaction at 6000 tokens, keep 6" in text
+    assert "different compaction settings, so each setting has its own rows" in text
+
+
+def test_a_single_compaction_setting_adds_nothing_to_the_table():
+    # Breaks if every table starts carrying a compaction label when nothing was split.
+    off = {**make_cell("natural", "none", 4, 0, 4), "compaction": {"tokens": None, "keep": None}}
+    page = site.render(
+        one_constraint({"delegation:planner->coder": {"cells": [off], "comparisons": []}})
+    )
+
+    text = text_of(article(page, "C-900"))
+    assert "compaction" not in text
+
+
+OFF = {"tokens": None, "keep": None}
+ON = {"tokens": 6000, "keep": 6}
+
+
+def with_setting(cell, setting):
+    return {**cell, "compaction": setting}
+
+
+def ledger_comparison(setting, diff, lo, hi, op="drop"):
+    return {
+        "name": "ledger_value",
+        "operator": op,
+        "compaction": setting,
+        "a": {"arm": "gated", "operator": op},
+        "b": {"arm": "block_only", "operator": op},
+        "metric": "success",
+        "diff": diff,
+        "lo": lo,
+        "hi": hi,
+    }
+
+
+def mixed_settings_boundary():
+    """Mutated runs exist only with compaction on; block-only and gated runs under both."""
+    cells = [
+        with_setting(make_cell("mutated", "drop", 10, 8, 5), ON),
+        with_setting(make_cell("block_only", "drop", 10, 0, 3), OFF),
+        with_setting(make_cell("block_only", "drop", 10, 0, 1), ON),
+        with_setting(make_cell("gated", "drop", 10, 0, 9), OFF),
+        with_setting(make_cell("gated", "drop", 10, 0, 5), ON),
+    ]
+    comparisons = [
+        ledger_comparison(OFF, 0.6, 0.17, 0.81),
+        ledger_comparison(ON, 0.4, -0.1, 0.68),
+    ]
+    return {"delegation:planner->coder": {"cells": cells, "comparisons": comparisons}}
+
+
+def test_the_summary_takes_rates_and_difference_from_the_same_compaction_setting():
+    # Breaks if the gate effect is the first ledger_value comparison for the operator: the
+    # compaction-on rates (block-only 10%, gated 50%) would be printed next to the
+    # compaction-off difference (+60 pp, interval excluding 0) instead of their own +40 pp,
+    # whose interval crosses 0.
+    page = site.render(one_constraint(mixed_settings_boundary()))
+
+    assert (
+        "Blocking alone left task success at 10%. With NemoGate carrying the rule, task success "
+        "was 50%, +40 pp against blocking alone: not distinguishable from 0 at n = 10."
+    ) in text_of(page)
+    assert "+60 pp against blocking alone" not in text_of(page)
+
+
+def test_the_summary_names_the_setting_when_the_boundary_has_several():
+    # Breaks if a sentence about compacted runs does not say it is about compacted runs.
+    text = text_of(site.render(one_constraint(mixed_settings_boundary())))
+    assert "at the handoff delegation:planner->coder under compaction at 6000 tokens, keep 6," in (
+        text
+    )
+
+
+def test_each_compaction_setting_gets_its_own_effect_comparisons():
+    # Breaks if the effect lines show one setting's comparison for the whole boundary: the first
+    # comparison per operator would be the off one (+60 pp), and nothing would say so.
+    text = text_of(article(site.render(one_constraint(mixed_settings_boundary())), "C-900"))
+
+    off, on = text.index("Under compaction off"), text.index("Under compaction at 6000 tokens")
+    assert off < text.index("+60 pp (95% interval +17 pp to +81 pp)") < on
+    assert on < text.index("+40 pp (95% interval -10 pp to +68 pp)")
+    assert "first setting listed" not in text
+
+
+def test_a_setting_with_only_natural_runs_has_no_effect_block():
+    # Breaks if a setting that has no mutated or gated cells is shown a "not run" effect line next
+    # to the setting that was actually compared, which reads as if the comparison failed there.
+    cells = [
+        with_setting(make_cell("natural", "none", 10, 2, 8), ON),
+        with_setting(make_cell("mutated", "drop", 10, 8, 5), OFF),
+        with_setting(make_cell("block_only", "drop", 10, 0, 3), OFF),
+        with_setting(make_cell("gated", "drop", 10, 0, 9), OFF),
+    ]
+    boundary = {
+        "delegation:planner->coder": {
+            "cells": cells,
+            "comparisons": [ledger_comparison(OFF, 0.6, 0.17, 0.81)],
+        }
+    }
+    text = text_of(article(site.render(one_constraint(boundary)), "C-900"))
+
+    assert "Under compaction off" in text
+    assert "Under compaction at 6000 tokens" not in text
+    assert "+60 pp" in text
+
+
+def test_natural_runs_where_the_rule_never_came_up_are_counted_on_the_row():
+    # Breaks if the page shows "1 of 10 broken" with nothing to say the rule only came up in 4
+    # of the 10 runs: the other 6 are in the rate's denominator.
+    cell = {
+        **make_cell("natural", "none", 10, 1, 9),
+        "violations_by_label": {"DROPPED": 1},
+        "not_exercised": 6,
+    }
+    page = site.render(
+        one_constraint({"delegation:planner->coder": {"cells": [cell], "comparisons": []}})
+    )
+
+    text = text_of(article(page, "C-900"))
+    assert "1 of 10 broken: 1 lost in the handoff" in text
+    assert "the rule never came up in 6 of 10 runs" in text
+
+
+def test_a_natural_row_with_no_unexercised_runs_says_nothing_about_it():
+    # Breaks if every natural row carries a "never came up" line, including those where it did.
+    cell = {**make_cell("natural", "none", 10, 1, 9), "not_exercised": 0}
+    page = site.render(
+        one_constraint({"delegation:planner->coder": {"cells": [cell], "comparisons": []}})
+    )
+    assert "never came up" not in text_of(article(page, "C-900"))
+
+
+def test_the_header_says_never_exercised_runs_are_not_left_out(rich):
+    # Breaks if "left out of every rate" is left unqualified now that natural runs where the
+    # rule never came up stay in the rates.
+    text = text_of(site.render(rich))
+    assert "inconclusive runs, left out of every rate below" in text
+    assert "Natural runs where the rule never came up are not among them" in text

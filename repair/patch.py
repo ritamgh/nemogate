@@ -23,6 +23,14 @@ short and general: do not paste conversation history or task details.
 
 {files}"""
 
+RETRY_PROMPT = """
+
+A guard rejected your previous edits, so nothing was applied: {error}
+Your previous edits:
+{edits}
+Write the edits again so that they pass. Copy each old_string exactly from its file, and \
+include enough of the text around it (a whole line or more) that it occurs exactly once."""
+
 
 class Edit(BaseModel):
     file: str
@@ -46,11 +54,23 @@ def _files_text(files: Mapping[str, str]) -> str:
 
 
 def write_patch(
-    model: Any, fix: Fix, choice: Any, evidence: Evidence, files: Mapping[str, str]
+    model: Any,
+    fix: Fix,
+    choice: Any,
+    evidence: Evidence,
+    files: Mapping[str, str],
+    *,
+    rejected: tuple[Sequence[Edit], str] | None = None,
 ) -> list[Edit]:
+    """Super's edits for `fix`. `rejected` is (the previous edits, the guard's reason): the
+    retry shows the writer what failed, and the guards check the new edits all over again."""
     prompt = WRITE_PROMPT.format(
         fix=fix.instruction, agent=choice.agent, rule=evidence.rule, files=_files_text(files)
     )
+    if rejected is not None:
+        edits, error = rejected
+        listed = EditList(edits=list(edits)).model_dump_json(indent=2)
+        prompt += RETRY_PROMPT.format(error=error, edits=listed)
     return list(model.with_structured_output(EditList).invoke(prompt).edits)
 
 
