@@ -402,3 +402,19 @@ def test_cli_names_an_unknown_task_id(spend_log, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         main([*KILL_GATE, "--tasks", "T1", "NOPE", "--cost-per-run", "0.05"])
     assert "NOPE" in capsys.readouterr().err
+
+
+def test_cli_of_a_paired_sweep_prices_no_orphan_source(spend_log, monkeypatch, capsys):
+    # T12 runs natural x none only, so its gated fork is refused and its natural source has
+    # nothing to fork into. Breaks if that source is still paid for: 3 runs a repetition and
+    # N 40 instead of T1's source and fork, 2 runs and N 60 = 6.0 / (0.05 * 2). With natural x
+    # none among the cells T12's natural run is a cell of its own: T1 natural + 2 gated forks,
+    # T12 natural, 4 runs and N 30. The runner's "planned runs" agrees (test_runner).
+    monkeypatch.setattr(budget, "default_refusals", runner.default_refusals)
+    argv = ["--bucket", "kill_gate", "--tasks", "T1", "T12", "--cost-per-run", "0.05", "--paired"]
+    assert main([*argv, "--arms", "gated", "--operators", "drop"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert ("runs per repetition: 2" in lines, lines[-1]) == (True, "N per arm per task: 60")
+    assert main([*argv, "--arms", "natural", "gated", "--operators", "none", "drop"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert ("runs per repetition: 4" in lines, lines[-1]) == (True, "N per arm per task: 30")

@@ -1229,9 +1229,9 @@ def test_cli_leaves_refused_cells_out_of_the_run_count_lists_them_and_refuses(mo
 
 
 def test_cli_with_paired_counts_only_the_runs_left_after_refusals(monkeypatch, capsys):
-    # Breaks if the paired count keeps a refused fork or the source of a task with no fork left:
-    # T1 and T2 each fork gated x drop from a natural source, gated x return_corrupt is refused,
-    # so 2 tasks x 3 seeds = 6 sources and 6 forks, not 18.
+    # Breaks if the paired count keeps a refused fork: T1 and T2 each fork gated x drop from a
+    # natural source, gated x return_corrupt is refused, so 2 tasks x 3 seeds = 6 sources and
+    # 6 forks, not 18. Both tasks keep a fork; the orphan source is the next test.
     monkeypatch.setattr(runner, "is_live", lambda: True)
     monkeypatch.setattr(runner, "default_refusals", REAL_DEFAULT_REFUSALS)
     argv = ["--tasks", "T1", "T2", "--arms", "gated", "--operators", "drop", "return_corrupt"]
@@ -1240,6 +1240,27 @@ def test_cli_with_paired_counts_only_the_runs_left_after_refusals(monkeypatch, c
     assert "planned runs: 12" in lines
     assert "paired: 6 natural sources, 6 forks" in lines
     assert sum(line.startswith("refused: ") for line in lines) == 2
+
+
+def test_cli_with_paired_drops_the_source_of_a_task_whose_forks_are_all_refused(
+    monkeypatch, capsys
+):
+    # T12 runs natural x none only, so its gated x drop fork is refused and its natural source
+    # would be forked into nothing. Breaks if that orphan source is still counted: 9 runs
+    # (6 sources, 3 forks) instead of T1's 3 sources and 3 forks, which budget.plan prices too.
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+    monkeypatch.setattr(runner, "default_refusals", REAL_DEFAULT_REFUSALS)
+    argv = ["--tasks", "T1", "T12", "--n", "3", "--paired"]
+    assert runner.main([*argv, "--arms", "gated", "--operators", "drop"]) == 2
+    lines = capsys.readouterr().out.splitlines()
+    assert "planned runs: 6" in lines
+    assert "paired: 3 natural sources, 3 forks" in lines
+    # With natural x none among the cells the source is a run the user asked for: T12 keeps it.
+    # T1 forks gated x none and gated x drop (6 forks), T1 and T12 each have a source (6).
+    assert runner.main([*argv, "--arms", "natural", "gated", "--operators", "none", "drop"]) == 2
+    lines = capsys.readouterr().out.splitlines()
+    assert "planned runs: 12" in lines
+    assert "paired: 6 natural sources, 6 forks" in lines
 
 
 def test_cli_reports_a_refused_cell_as_a_refusal_not_a_traceback(monkeypatch, capsys):

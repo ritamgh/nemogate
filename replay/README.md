@@ -695,7 +695,9 @@ delegations to the same agent are not told apart; planner delegations here are s
 - `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--top-up] [--yes]`
   refuses with exit code 2 unless `NEMOGATE_LIVE=1`; it prints `planned runs: N` and, without
   `--yes`, exits 1 pointing at `python -m replay.budget`. N leaves out the cells the sweep would
-  refuse (`refusals(app, ledger, ...)`, the same check `arun` and `apaired` make up front); each
+  refuse (`refusals(app, ledger, ...)`, the same check `arun` and `apaired` make up front), and
+  under `--paired` the natural source of a task whose forks are all refused unless natural x
+  none is itself among the cells, as `budget.plan` prices it; each refused cell
   is listed as `refused: <task> <arm> <operator>: <reason>`, and if there is one the CLI exits 2
   before `--yes` (`refusing to run: K cells are refused ...`), since such a sweep runs nothing.
   An unknown task id exits 2 the same way. With `--yes` it runs and prints one

@@ -1030,9 +1030,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         seeds = {(c.task_id, c.arm, c.operator): c.seeds for c in cells}
         planned = sum(c.planned for c in cells)
     elif paired:
-        no_source = sum(a is Arm.natural for _, a, _, _ in refused)
-        n_sources = (len(args.tasks) - no_source) * args.n
-        n_forks = (len(args.tasks) * len(fork_pairs) - len(refused) + no_source) * args.n
+        # A source runs for a task with a fork left, or as the natural cell the user asked for;
+        # a task whose forks are all refused has no source to pay for (as in budget.plan).
+        lost = Counter(t for t, a, _, _ in refused if a is not Arm.natural)
+        no_source = {t for t, a, _, _ in refused if a is Arm.natural}
+        asked = (Arm.natural, Operator.none) in pairs(args.arms, args.operators)
+        n_sources = args.n * sum(
+            t not in no_source and (asked or lost[t] < len(fork_pairs)) for t in args.tasks
+        )
+        n_forks = (len(args.tasks) * len(fork_pairs) - sum(lost.values())) * args.n
         planned = n_sources + n_forks
     else:
         n_cells = len(args.tasks) * len(pairs(args.arms, args.operators)) - len(refused)
