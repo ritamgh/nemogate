@@ -634,7 +634,17 @@ delegations to the same agent are not told apart; planner delegations here are s
   without wasting a run. It likewise checks every task against every (arm, operator) pair: a task
   with an optional `refusal(arm, operator) -> str | None` (see `AppTask`) that returns a reason
   makes the whole sweep raise `CellRefused` before the first run; `run_one` and `fork_one` refuse
-  the same way, and the CLI prints `refusing to run: <reason>` and exits 2.
+  the same way, and the CLI prints `refusing to run: <reason>` and exits 2. `apaired` checks the
+  natural source cell and every fork cell up front too, so a paired sweep does not pay for a
+  source whose first fork would be refused.
+- The same up-front refusal covers the cells the real gate would refuse when it is built
+  (`cell_refusal(ledger, task, operator)`): an operator on a compaction boundary, and an operator
+  on the `return:<agent>-><receiver>` boundary of an output rule (`output_must_include` /
+  `output_must_not_include`) graded on that `<agent>`'s replies, which the operator would cut or
+  blur. Mutate the delegation to that agent instead; operator `none` is never refused. It repeats
+  `gate._check_arm` / `_check_target` because `gate` exposes no public form of them;
+  `replay/tests/test_cell_refusal.py` runs a grid of (rule type, boundary, operator) through both
+  and fails if they disagree.
 - `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--top-up] [--yes]`
   refuses with exit code 2 unless `NEMOGATE_LIVE=1`; it prints `planned runs: N` and, without
   `--yes`, exits 1 pointing at `python -m replay.budget`. With `--yes` it runs and prints one

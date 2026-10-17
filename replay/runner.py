@@ -39,7 +39,7 @@ from replay.fsdiff import diff, snapshot
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
-from schemas.ledger import Ledger, load_ledger_yaml
+from schemas.ledger import Ledger, OutputMustInclude, OutputMustNotInclude, load_ledger_yaml
 from schemas.run import RunRecord
 from schemas.trace import BoundaryOut, dump_event_jsonl, parse_trace_jsonl
 
@@ -252,7 +252,7 @@ class Runner:
         """One run. If it raises, the traceback goes to `error.txt`. A failure once the agents have
         started also gets an `error.json`, unless it is one that stops the sweep; a failure in
         setup never does. The exception is re-raised either way."""
-        _refuse_cell(task, arm, operator)
+        _refuse_cell(task, arm, operator, self.ledger)
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
         phase = _Phase()
@@ -509,7 +509,7 @@ class Runner:
         tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
         for task in tasks:  # CellRefused before any run starts
             for arm, operator in pairs(arms, operators):
-                _refuse_cell(task, arm, operator)
+                _refuse_cell(task, arm, operator, self.ledger)
         records: list[RunRecord] = []
         self.records, self.errors = records, []
         for task in tasks:
@@ -561,6 +561,9 @@ class Runner:
         by_id = {t.id: t for t in self.app.tasks()}
         tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
         fork_pairs = [(a, o) for a, o in pairs(arms, operators) if a is not Arm.natural]
+        for task in tasks:  # CellRefused before the first source runs
+            for arm, operator in [(Arm.natural, Operator.none), *fork_pairs]:
+                _refuse_cell(task, arm, operator, self.ledger)
         records: list[RunRecord] = []
         self.records, self.errors, self.unforkable = records, [], []
         self.not_forked = Counter()
@@ -639,11 +642,43 @@ class CellRefused(ValueError):
     """A task limits itself to other (arm, operator) cells than the one asked for."""
 
 
-def _refuse_cell(task: AppTask, arm: Arm, operator: Operator) -> None:
-    """Raise CellRefused when the task limits itself to other cells (`task.refusal`, optional)."""
+def _refuse_cell(task: AppTask, arm: Arm, operator: Operator, ledger: Ledger) -> None:
+    """Raise CellRefused when the cell cannot be measured: the task limits itself to other cells
+    (`task.refusal`, optional), or the gate would refuse the run (`cell_refusal`)."""
     refusal = getattr(task, "refusal", None)
     if refusal is not None and (why := refusal(arm, operator)) is not None:
         raise CellRefused(why)
+    if (why := cell_refusal(ledger, task, operator)) is not None:
+        raise CellRefused(why)
+
+
+def cell_refusal(ledger: Ledger, task: AppTask, operator: Operator) -> str | None:
+    """Why the gate would refuse `task` under `operator`, or None when it would not.
+
+    The gate refuses these when it is built, so a sweep would find out only at the cell's first
+    run, after earlier cells were paid for. This repeats its rules (gate._check_arm and
+    _check_target) for the part replay can see; replay/tests/test_cell_refusal.py checks the two
+    agree. An unmeasurable cell is one an operator would change the very thing it measures:
+    the compaction notes, or the reply an output rule grades."""
+    if operator is Operator.none:
+        return None
+    kind, _, rest = task.boundary.partition(":")
+    if kind == "compaction":
+        return (
+            f"operators apply to a delegation or return boundary, not compaction: "
+            f"{task.constraint} targets {task.boundary} (operator {operator.value})"
+        )
+    rule = next((c for c in ledger.constraints if c.id == task.constraint), None)
+    if rule is None or not isinstance(rule.check, OutputMustInclude | OutputMustNotInclude):
+        return None
+    # "return:<sender>-><receiver>": only the graded agent's own replies are at stake.
+    if kind == "return" and rest.partition("->")[0] == rule.check.agent:
+        return (
+            f"{task.constraint} is an output rule: the {operator.value} operator on "
+            f"{task.boundary} would change the reply it grades; target the delegation to that "
+            "agent instead"
+        )
+    return None
 
 
 def _write_error(
