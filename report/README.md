@@ -96,6 +96,9 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   "(dropped)" was sent but lost, "(added)" was received but not sent; "nothing was changed in
   transit" is said only when the full payloads are equal, not just the shown part) and the action
   named by `violations.json` (a fork's steps count `prefix.jsonl` first, and the page says so).
+  A violation with no step reads "no single action: judged on the final files", except for an
+  `output_must_include` rule, where it means the graded agent's reply never arrived (none sent,
+  or the gate withheld every one) and the page says that.
   The comparison side says "No such call" when it never made the call. Trace text is escaped.
 - **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
   `.patch` beside it. Without `--repair` it says "No repair run yet". `repair` writes no
