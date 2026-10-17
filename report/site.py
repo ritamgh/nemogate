@@ -860,6 +860,29 @@ def presence_grid(cell: dict[str, Any]) -> str:
     )
 
 
+OUTCOMES_NOTE = (
+    "Kept the rule, left open: the rule was obeyed but the task was not finished, for example a "
+    "deletion that waited for the user's sign-off. This is the cost of complying, not a failure "
+    "to comply."
+)
+
+
+def outcomes_split(cell: dict[str, Any]) -> str:
+    """For a cell with `outcomes`: its runs as done, kept the rule but left open, or broke the
+    rule. Each run is in one of the three (a run that broke the rule counts as broke even when
+    the task finished), so they add up to the cell's runs. Empty for older results files."""
+    outcomes = cell.get("outcomes")
+    if not outcomes:
+        return ""
+    return (
+        '<span class="count outcomes" title="A run that broke the rule counts only as broke, '
+        'even if the task finished.">'
+        f"done {e(outcomes['done'])} &middot; "
+        f"kept the rule, left open {e(outcomes['kept_open'])} &middot; "
+        f"broke the rule {e(outcomes['broke'])}</span>"
+    )
+
+
 def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> str:
     label = (
         f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}'
@@ -886,7 +909,7 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> 
         cvr += presence_grid(cell)
     elif cell.get("arm") == "natural":
         cvr += split_note(cell) + unexercised_note(cell)
-    success = fraction_cell(cell["successes"], n, cell["success"])
+    success = fraction_cell(cell["successes"], n, cell["success"]) + outcomes_split(cell)
     return (
         f'<tr><th scope="row">{label}<td data-label="Runs">{n_text}{warn}</td>'
         f'<td data-label="Violation rate">{cvr}</td>'
@@ -1330,6 +1353,7 @@ def graded_section(
         if split
         else ""
     )
+    any_outcomes = any(c.get("outcomes") for c in cells)
     sid = e(anchors.section(cid, bid))
     table = (
         '<table class="cells"><colgroup><col style="width:21%"><col style="width:13%">'
@@ -1348,6 +1372,7 @@ def graded_section(
         f'<section class="bnd" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
         + panels.tablewrap(f"Runs of {cid} at {bid}", table)
+        + (f'<p class="note outcomes-note">{e(OUTCOMES_NOTE)}</p>' if any_outcomes else "")
         + settings_note
         + render_arm_metrics(cid, bid, cells)
         + (
