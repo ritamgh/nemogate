@@ -1193,10 +1193,10 @@ def test_one_classifier_version_per_cell_pools_and_unlabelled_runs_do_not_count(
     }
 
 
-def test_labels_are_left_out_when_no_run_has_a_carriage_file_and_for_other_arms():
+def test_labels_are_left_out_when_no_run_has_a_carriage_file_and_for_cells_with_an_operator():
     # Breaks if every cell of a sweep gains a `labels` key: runs without carriage.json (older
-    # folders) must give the same results file as before, and only the natural arm's label says
-    # whether the handoff carried the rule.
+    # folders) must give the same results file as before, and only a cell with operator none
+    # says whether the handoff carried the rule: an operator changed what the receiver got.
     plain = aggregate(
         [make_run("n-1"), make_run("n-2", violated=True)],
         unreadable=0,
