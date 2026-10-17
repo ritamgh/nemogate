@@ -444,6 +444,12 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   "no split known". A natural cell also has `not_exercised`: how many
   of its runs are labelled `NOT_EXERCISED` (the guarded thing never came up). They are in `n`;
   subtract them to see the rate over the runs where the rule came up.
+- **One classifier version per cell.** A label's meaning changes between carriage classifier
+  versions (`classifier_version` in `carriage.json`), so `aggregate` refuses a cell whose
+  labelled runs carry more than one version, and the CLI exits 2 naming the cell and the
+  versions. A `carriage.json` without the key counts as a version of its own; a run with no
+  `carriage.json` has no label and does not count. Re-derive the older runs with
+  `uv run python -m replay.carriage RUN_DIR...` and run stats again.
 - **Per-arm numbers (`arm_metrics`, `format_version` 2).** Every cell has an `arm_metrics`
   block (`replay/arm_metrics.py`), so the arms can be compared on more than the violation count:
   - `cost`: mean `cost_usd` per run with a 95% interval; `wall_seconds`: mean `timing.json`
