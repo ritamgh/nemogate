@@ -192,6 +192,13 @@ def run_totals(run_id: str, log_path: Path | str | None = None) -> tuple[dict[Ro
     return tokens, _spent(lines)
 
 
+def run_cost(run_id: str, log_path: Path | str | None = None) -> float | None:
+    """One run's cost from the log, or None when the log has no line for it (a missing or
+    rotated log, or a run made on another machine): unknown, not $0."""
+    lines = [line for line in _read_lines(log_path) if line.get("run_id") == run_id]
+    return _spent(lines) if lines else None
+
+
 def _cap_error(
     config: AppConfig, cap: float, spent: float, estimate: float = 0.0
 ) -> SpendCapReached:
