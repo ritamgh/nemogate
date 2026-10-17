@@ -46,6 +46,29 @@ BOUNDARIES = [
 ]
 
 
+# The same rules with the app block left out or half filled: the gate refuses a path_forbidden
+# rule without app.repo_root and an approval_before rule without app.approval_tool, whatever the
+# arm and operator (gate._check_app).
+APP_LEDGERS = {
+    "no-app": "version: 1\n",
+    "repo-root-only": "version: 1\napp: {repo_root: /repo}\n",
+    "approval-only": "version: 1\napp: {approval_tool: request_approval}\n",
+    "both": "version: 1\napp: {repo_root: /repo, approval_tool: request_approval}\n",
+}
+APP_RULES = """\
+constraints:
+  - {id: C-001, text: "Keep out of the frozen folder", kind: constraint, source: user,
+     authority: binding, scope: [coder], origin: declared,
+     check: {type: path_forbidden, glob: "frozen/**", ops: [write, delete]}}
+  - {id: C-003, text: "Ask before deleting", kind: constraint, source: user,
+     authority: binding, scope: [coder], origin: declared,
+     check: {type: approval_before, tool: delete_file}}
+  - {id: C-004, text: "Don't use the network", kind: constraint, source: user,
+     authority: binding, scope: [coder], origin: declared,
+     check: {type: tool_forbidden, name: http_get}}
+"""
+
+
 def cell(constraint: str, boundary: str):
     return SimpleNamespace(id="X1", constraint=constraint, boundary=boundary)
 
@@ -84,6 +107,44 @@ def test_replay_refuses_exactly_the_cells_the_gate_refuses(tmp_path, rule, bound
     assert (why is not None) == gate_refuses
     if why is not None:
         assert boundary in why
+
+
+@pytest.mark.parametrize("operator", [Operator.none, Operator.drop], ids=lambda o: o.value)
+@pytest.mark.parametrize("rule", ["C-001", "C-003", "C-004"])
+@pytest.mark.parametrize("app", APP_LEDGERS)
+def test_replay_refuses_a_rule_the_app_block_cannot_support_as_the_gate_does(
+    tmp_path, app, rule, operator
+):
+    # Breaks if replay lets a path_forbidden rule through without app.repo_root, or an
+    # approval_before rule without app.approval_tool: the gate raises (gate._check_app) on the
+    # first run of the cell, for every arm and for operator none too.
+    text = APP_LEDGERS[app] + APP_RULES
+    ledger_path = tmp_path / "ledger.yaml"
+    ledger_path.write_text(text, encoding="utf-8")
+    run_config = RunConfig(
+        run_id="r-test",
+        task_id="X1",
+        arm=Arm.natural if operator is Operator.none else Arm.mutated,
+        operator=operator,
+        target_boundary="delegation:planner->coder",
+        target_constraint=rule,
+        ledger_path=str(ledger_path),
+        trace_path=str(tmp_path / "trace.jsonl"),
+        seed=1,
+    )
+    try:
+        build_middleware(run_config, helper=get_model("helper", stub_responses=[]))
+        gate_refuses = False
+    except ValueError:
+        gate_refuses = True
+
+    why = runner.cell_refusal(
+        load_ledger_yaml(text), cell(rule, "delegation:planner->coder"), operator
+    )
+
+    assert (why is not None) == gate_refuses
+    if why is not None:
+        assert rule in why
 
 
 def test_an_operator_the_gate_cannot_build_is_refused_on_a_cell_the_gate_would_otherwise_accept():

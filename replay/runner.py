@@ -40,7 +40,15 @@ from replay.fsdiff import diff, snapshot
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
-from schemas.ledger import Ledger, OutputMustInclude, OutputMustNotInclude, load_ledger_yaml
+from schemas.ledger import (
+    ApprovalBefore,
+    Constraint,
+    Ledger,
+    OutputMustInclude,
+    OutputMustNotInclude,
+    PathForbidden,
+    load_ledger_yaml,
+)
 from schemas.run import RunRecord
 from schemas.trace import BoundaryOut, dump_event_jsonl, parse_trace_jsonl
 
@@ -653,6 +661,17 @@ def _refuse_cell(task: AppTask, arm: Arm, operator: Operator, ledger: Ledger) ->
         raise CellRefused(why)
 
 
+def _app_refusal(ledger: Ledger, rule: Constraint) -> str | None:
+    """gate._check_app: a path_forbidden rule needs `app.repo_root` (tool paths are absolute) and
+    an approval_before rule needs `app.approval_tool`. It depends on the ledger and the rule, not
+    on the arm or the operator."""
+    if isinstance(rule.check, PathForbidden) and ledger.app.repo_root is None:
+        return f"{rule.id} is a path_forbidden rule and the ledger has no app.repo_root"
+    if isinstance(rule.check, ApprovalBefore) and ledger.app.approval_tool is None:
+        return f"{rule.id} is an approval_before rule and the ledger has no app.approval_tool"
+    return None
+
+
 def cell_refusal(ledger: Ledger, task: AppTask, operator: Operator) -> str | None:
     """Why the gate would refuse `task` under `operator`, or None when it would not.
 
@@ -660,10 +679,15 @@ def cell_refusal(ledger: Ledger, task: AppTask, operator: Operator) -> str | Non
     run, after earlier cells were paid for. This repeats its rules (gate._check_arm and
     _check_target) for the part replay can see; replay/tests/test_cell_refusal.py checks the two
     agree. An unmeasurable cell is one an operator would change the very thing it measures:
-    the compaction notes, or the reply an output rule grades. An operator the gate has not built
-    is refused too: `make_operator` raises NotImplementedError for it when the gate is built,
-    and builds the closure without calling a model, so asking it with no model is a free probe
-    that follows the gate if it builds that operator later."""
+    the compaction notes, or the reply an output rule grades. It also mirrors gate._check_app,
+    which needs only the ledger and the task's rule, so it applies to operator none as well.
+    An operator the gate has not built is refused too: `make_operator` raises
+    NotImplementedError for it when the gate is built, and builds the closure without calling a
+    model, so asking it with no model is a free probe that follows the gate if it builds that
+    operator later."""
+    rule = next((c for c in ledger.constraints if c.id == task.constraint), None)
+    if rule is not None and (why := _app_refusal(ledger, rule)) is not None:
+        return why  # gate._check_app: every arm builds the gate, operator none included
     if operator is Operator.none:
         return None
     try:
@@ -679,7 +703,6 @@ def cell_refusal(ledger: Ledger, task: AppTask, operator: Operator) -> str | Non
             f"operators apply to a delegation or return boundary, not compaction: "
             f"{task.constraint} targets {task.boundary} (operator {operator.value})"
         )
-    rule = next((c for c in ledger.constraints if c.id == task.constraint), None)
     if rule is None or not isinstance(rule.check, OutputMustInclude | OutputMustNotInclude):
         return None
     # "return:<sender>-><receiver>": only the graded agent's own replies are at stake.
