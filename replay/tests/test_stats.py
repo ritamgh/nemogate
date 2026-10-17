@@ -1137,6 +1137,62 @@ def test_natural_cell_counts_every_run_by_carriage_label_in_sorted_order():
     }
 
 
+# ---------------------------------------------------------------- carriage classifier versions
+
+
+def write_versioned(parent, run_id, label, version, **kwargs):
+    folder = write_run(parent, make_run(run_id, **kwargs))
+    carriage = {"label": label}
+    if version is not None:
+        carriage["classifier_version"] = version
+    (folder / "carriage.json").write_text(json.dumps(carriage))
+    return folder
+
+
+def test_load_runs_reads_the_carriage_classifier_version(tmp_path):
+    # Breaks if the version is read from the wrong key, or a file without one is given a version.
+    write_versioned(tmp_path, "v5", "DROPPED", 5, violated=True)
+    write_versioned(tmp_path, "old", "DROPPED", None, violated=True)
+    write_run(tmp_path, make_run("none"))  # no carriage.json
+    got = {run.record.run_id: run.classifier_version for run in load_runs([tmp_path]).runs}
+    assert got == {"v5": 5, "old": None, "none": None}
+
+
+def test_a_cell_pooling_labels_from_two_classifier_versions_is_refused(tmp_path):
+    # Breaks if a cell pools carriage labels whose meaning differs: a version 3 DROPPED and a
+    # version 5 DROPPED are not the same finding, so violations_by_label would add unlike things.
+    write_versioned(tmp_path, "n-old", "DROPPED", 3, violated=True)
+    write_versioned(tmp_path, "n-new", "DROPPED", 5, violated=True)
+    loaded = load_runs([tmp_path])
+    with pytest.raises(ValueError, match=r"classifier versions 3, 5.*replay\.carriage"):
+        aggregate(loaded.runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+
+def test_a_file_without_a_classifier_version_is_its_own_version(tmp_path):
+    # Breaks if a carriage.json that predates the version key pools with a versioned one.
+    write_versioned(tmp_path, "n-old", "DROPPED", None, violated=True)
+    write_versioned(tmp_path, "n-new", "DROPPED", 5, violated=True)
+    loaded = load_runs([tmp_path])
+    with pytest.raises(ValueError, match=r"classifier versions 5, none"):
+        aggregate(loaded.runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+
+def test_one_classifier_version_per_cell_pools_and_unlabelled_runs_do_not_count(tmp_path):
+    # Breaks if the check counts a run with no carriage.json as a second version, or refuses
+    # two cells that each hold one version.
+    write_versioned(tmp_path, "n-1", "DROPPED", 5, violated=True)
+    write_versioned(tmp_path, "n-2", "DISOBEYED", 5, violated=True)
+    write_run(tmp_path, make_run("n-3", violated=True))  # no carriage.json: unlabelled
+    write_versioned(tmp_path, "m-1", "UNKNOWN", 3, arm="mutated", operator="drop", violated=True)
+    loaded = load_runs([tmp_path])
+    got = aggregate(loaded.runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    assert natural_cell_among(got)["violations_by_label"] == {
+        "DISOBEYED": 1,
+        "DROPPED": 1,
+        "unlabelled": 1,
+    }
+
+
 def test_labels_are_left_out_when_no_run_has_a_carriage_file_and_for_other_arms():
     # Breaks if every cell of a sweep gains a `labels` key: runs without carriage.json (older
     # folders) must give the same results file as before, and only the natural arm's label says
@@ -1192,3 +1248,22 @@ def test_a_cell_with_an_operator_has_no_labels_even_when_its_runs_do():
     cells = got["constraints"]["C-001"]["boundaries"][B1]["cells"]
 
     assert all("labels" not in c for c in cells)
+
+
+def natural_cell_among(results: dict) -> dict:
+    cells = results["constraints"]["C-001"]["boundaries"][B1]["cells"]
+    return next(cell for cell in cells if cell["arm"] == "natural")
+
+
+def test_the_cli_reports_mixed_classifier_versions_and_writes_nothing(tmp_path, capsys):
+    # Breaks if the refusal escapes as a traceback or a results file is still written.
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    write_versioned(runs, "n-old", "DROPPED", 3, violated=True)
+    write_versioned(runs, "n-new", "DROPPED", 5, violated=True)
+    ledger = tmp_path / "nemogate.yaml"
+    ledger.write_text(LEDGER_YAML)
+    out = tmp_path / "results.json"
+    assert main([str(runs), "--ledger", str(ledger), "--out", str(out)]) == 2
+    assert "classifier versions 3, 5" in capsys.readouterr().err
+    assert not out.exists()
