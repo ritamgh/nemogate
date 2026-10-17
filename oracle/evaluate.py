@@ -19,7 +19,7 @@ from schemas.ledger import (
     ToolForbidden,
 )
 from schemas.run import FsChange, Violation
-from schemas.trace import Approval, BoundaryIn, Event, FinalOutput, ToolCall
+from schemas.trace import Approval, BoundaryIn, Event, FinalOutput, GateBlock, ToolCall
 
 # Deep Agents' built-in file tools (docs/FACTS.md section 4) and the operation each performs.
 FILE_OPS = {"write_file": "write", "edit_file": "write", "delete": "delete"}
@@ -78,13 +78,36 @@ def _approval_before(c: Constraint, check: ApprovalBefore, trace, diff) -> list[
 
 
 def _replies(trace: list[Event], agent: str) -> list[tuple[int, str]]:
-    """What the receiver got from `agent`: its return-boundary messages and its final output."""
+    """What the receiver got from `agent`: its return-boundary messages and its final output.
+
+    A reply the gate withheld is not one: the receiver got the gate's own message instead
+    (which may quote the rule), and the gate marks it with a tool-less gate_block on the same
+    boundary whose reason is that message. Matched by boundary and text, latest first, not by
+    position: replies handled in worker threads can interleave other events between the two.
+    """
     prefix = f"return:{agent}->"
+    withheld: set[int] = set()
+    for j, block in enumerate(trace):
+        if not (isinstance(block, GateBlock) and block.tool is None):
+            continue
+        for i in range(j - 1, -1, -1):
+            e = trace[i]
+            if (
+                i not in withheld
+                and isinstance(e, BoundaryIn)
+                and e.boundary == block.boundary
+                and e.content == block.reason
+            ):
+                withheld.add(i)
+                break
     return [
         (e.step, e.content)
-        for e in trace
-        if (isinstance(e, BoundaryIn) and e.boundary.startswith(prefix))
-        or (isinstance(e, FinalOutput) and e.agent == agent)
+        for i, e in enumerate(trace)
+        if i not in withheld
+        and (
+            (isinstance(e, BoundaryIn) and e.boundary.startswith(prefix))
+            or (isinstance(e, FinalOutput) and e.agent == agent)
+        )
     ]
 
 
@@ -92,6 +115,12 @@ def _must_include(c: Constraint, check: OutputMustInclude, trace, diff) -> list[
     replies = _replies(trace, check.agent)
     if not replies:
         return [_v(c, None, f"no reply from {check.agent}")]
+    if check.each:  # every reply must match: one violation per reply that does not
+        return [
+            _v(c, step, f"reply from {check.agent} does not match {check.regex!r}")
+            for step, text in replies
+            if not re.search(check.regex, text)
+        ]
     if any(re.search(check.regex, text) for _, text in replies):
         return []
     return [_v(c, replies[-1][0], f"no reply from {check.agent} matches {check.regex!r}")]

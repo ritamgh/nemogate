@@ -275,7 +275,9 @@ class GateMiddleware(AgentMiddleware):
         missed = next(
             (c for c in self._ledger.constraints if _misses(c, pending.sub, received)), None
         )
+        withheld = None
         if self._gated and missed is not None and self._take_fail_closed():
+            withheld = missed
             received = FAILED_CLOSED.format(agent=pending.sub, rule=missed.text)
             writer_id = None  # the gate wrote it
             result = _with_text(result, received, error=True)
@@ -289,6 +291,18 @@ class GateMiddleware(AgentMiddleware):
             content=received,
             model_id=writer_id,
         )
+        if withheld is not None:
+            # The receiver got the gate's message instead of the reply. A gate_block with no
+            # tool, right after that boundary_in, marks it: the oracle does not grade it as a
+            # reply (oracle.evaluate._replies), so catching a reply never counts against gated.
+            self._writer.emit(
+                GateBlock,
+                agent=pending.sub,
+                boundary=boundary,
+                tool=None,
+                constraint_id=withheld.id,
+                reason=received,
+            )
         return result
 
     def _after(self, pending: _Pending, result: Any) -> Any:

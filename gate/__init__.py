@@ -18,7 +18,13 @@ from gate.trace import TraceWriter
 from ledger import load_ledger, scope_to
 from schemas.config import load_config
 from schemas.enums import Arm, Operator, Role
-from schemas.ledger import ApprovalBefore, Ledger, PathForbidden
+from schemas.ledger import (
+    ApprovalBefore,
+    Ledger,
+    OutputMustInclude,
+    OutputMustNotInclude,
+    PathForbidden,
+)
 from schemas.run import RunConfig
 from schemas.trace import Event, parse_trace_jsonl
 
@@ -41,6 +47,27 @@ def _check_arm(run_config: RunConfig) -> None:
 
 def _boundary_kind(run_config: RunConfig) -> str:
     return run_config.target_boundary.partition(":")[0]
+
+
+def _check_target(run_config: RunConfig, ledger: Ledger) -> None:
+    """An operator on a return boundary would cut or blur the very reply an output rule grades
+    (the oracle reads what the receiver got), so the run would break the rule by construction
+    and measure the operator, not a handoff loss. Mutate the delegation to that agent instead."""
+    check = ledger.constraints[0].check
+    if not isinstance(check, OutputMustInclude | OutputMustNotInclude):
+        return
+    # "return:<sender>-><receiver>": only the graded agent's own replies are at stake.
+    sender = run_config.target_boundary.partition(":")[2].partition("->")[0]
+    if (
+        run_config.operator is not Operator.none
+        and _boundary_kind(run_config) == "return"
+        and sender == check.agent
+    ):
+        raise ValueError(
+            f"{run_config.target_constraint} is an output rule: an operator on "
+            f"{run_config.target_boundary} would change the reply it grades; target the "
+            "delegation to that agent instead"
+        )
 
 
 def _check_app(ledger: Ledger) -> None:
@@ -66,6 +93,7 @@ def build_middleware(run_config: RunConfig, *, helper: Any | None = None) -> lis
     loaded = load_ledger(run_config.ledger_path)  # the FULL ledger: it carries the app block
     ledger = scope_to(loaded.ledger, run_config.target_constraint)
     _check_app(ledger)
+    _check_target(run_config, ledger)
     config = load_config(REPO_ROOT / "config.yaml")
     model_id, safe_hash = config.models[Role.sut].id, config.safe_config.hash
     if model_id is None or safe_hash is None:

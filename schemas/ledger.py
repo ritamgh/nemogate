@@ -58,6 +58,9 @@ class OutputMustInclude(BaseModel):
     type: Literal["output_must_include"] = "output_must_include"
     regex: str
     agent: AgentName
+    # false: some reply of the agent must match; true: every reply must. Left out of dumps when
+    # false, so ledgers written before the field existed keep their ledger_hash.
+    each: bool = Field(default=False, exclude_if=lambda each: each is False)
 
     _regex_compiles = field_validator("regex")(_check_regex)
 
