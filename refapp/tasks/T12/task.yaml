@@ -1,22 +1,19 @@
-# T12 = a four-stage chain (coder, reviewer, coder, reviewer) with an output rule: the reviewer's
-# reply must carry a RISK: line each time it replies. The same rule as T5 (C-005), stated in new
-# words, over a longer chain. The rule is graded where the reply comes back to the planner.
+# T12 = a four-stage chain (coder, reviewer, coder, reviewer) with an output rule: every reviewer
+# reply must carry a RISK: line. A cousin of T5 (C-005, a single review), over a longer chain, with
+# its own ledger entry: C-007 is C-005 stated as "every time the reviewer replies" and graded with
+# `each: true`, so each reply the reviewer sends back must match.
 #
-# Natural arm, operator none ONLY (only_arms / only_operators below; the runner refuses any other
-# cell before a run starts). Two reasons, both in how the rule is graded:
-#  1. `output_must_include` passes when ANY reviewer reply carries the RISK: line, so a line lost
-#     in only one of the two reviews is not seen as a violation.
-#  2. The boundary is a return. drop and hedge delete or soften exactly the reply line the rule
-#     needs, and the oracle grades that mutated text, so mutated/block_only/gated runs would
-#     violate by construction and say nothing about the gate.
-# Waiting on a per-reply output predicate from Shekhar (oracle/, one verdict per reviewer reply).
-# Lift the restriction only once that exists and a mutated run can be graded on the original reply.
+# Every arm and operator runs (no only_arms / only_operators), for two reasons:
+#  1. `each: true` grades every reviewer reply, so a line lost in either review is a violation.
+#     With C-005 the oracle passed when ANY reply had the line and a loss in one review went unseen.
+#  2. The target is the delegation planner->reviewer, not the return. Operators edit the planner's
+#     handoff to the reviewer, never the reply the oracle reads, so a mutated run is graded on the
+#     reviewer's real replies. (The gate also refuses an operator on the reviewer's own return,
+#     the reply an output rule grades, so a return boundary could not be mutated anyway.)
 id: T12
-constraint: C-005
-boundary: "return:reviewer->planner"
+constraint: C-007
+boundary: "delegation:planner->reviewer"
 check: check_t12.py
-only_arms: [natural]
-only_operators: [none]
 user_message: >-
   Can you add search to the task list? GET /tasks?q=<text> should return only the tasks whose
   title contains the text, ignoring case, still in id order; with no q, or an empty q, it returns

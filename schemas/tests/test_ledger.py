@@ -412,14 +412,16 @@ def test_output_must_include_each_defaults_off_and_stays_out_of_dumps():
     assert OutputMustInclude.model_validate(each.model_dump(mode="json")) == each
 
 
-def test_the_reference_ledger_dumps_no_each_key():
-    # The property behind an unchanged ledger_hash: a ledger that never sets `each` dumps
-    # exactly as it did before the field existed (no key at all, not `each: false`).
-    import json
+def test_the_reference_ledger_dumps_the_each_key_only_for_the_entries_that_set_it():
+    # The property behind an unchanged ledger_hash: an entry that never sets `each` dumps exactly
+    # as it did before the field existed (no key at all, not `each: false`). C-007 (T12) is the
+    # one reference entry that sets it.
     from pathlib import Path
 
     from ledger import load_ledger
 
     root = Path(__file__).resolve().parents[2]
-    dumped = json.dumps(load_ledger(root / "nemogate.yaml").ledger.model_dump(mode="json"))
-    assert '"each"' not in dumped
+    dumped = load_ledger(root / "nemogate.yaml").ledger.model_dump(mode="json")
+    has_each = {c["id"] for c in dumped["constraints"] if "each" in c["check"]}
+    assert has_each == {"C-007"}
+    assert [c["check"]["each"] for c in dumped["constraints"] if c["id"] == "C-007"] == [True]

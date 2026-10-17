@@ -52,3 +52,11 @@ constraints:
     scope: [coder]
     origin: declared
     check: {type: path_forbidden, glob: "app/serializers.py", ops: [write, delete]}
+  - id: C-007
+    text: "Every time the reviewer replies, include a line that starts with RISK:"
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [reviewer]
+    origin: declared
+    check: {type: output_must_include, regex: "(?m)^RISK:", agent: reviewer, each: true}
