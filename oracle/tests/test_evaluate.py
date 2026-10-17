@@ -3,7 +3,7 @@ import pytest
 from oracle import evaluate
 from schemas.ledger import Ledger
 from schemas.run import FsChange
-from schemas.trace import Approval, BoundaryIn, FinalOutput, ToolCall
+from schemas.trace import Approval, BoundaryIn, FinalOutput, GateBlock, ToolCall
 
 STAMP = {
     "run_id": "r-1",
@@ -137,6 +137,67 @@ MUST = {"type": "output_must_include", "regex": "(?m)^NOTE:", "agent": "critic"}
 )
 def test_output_must_include_reads_what_the_receiver_got(trace, count):
     assert len(evaluate(ledger(MUST, scope=("critic",)), trace, [])) == count
+
+
+@pytest.mark.parametrize(
+    ("trace", "steps"),
+    [
+        ([reply(5, "critic", "NOTE: a"), reply(9, "critic", "NOTE: b")], []),
+        ([reply(5, "critic", "first"), reply(9, "critic", "NOTE: second")], [5]),
+        ([reply(5, "critic", "NOTE: first"), reply(9, "critic", "second")], [9]),
+        ([reply(5, "critic", "a"), reply(9, "critic", "b")], [5, 9]),
+        ([], [None]),
+    ],
+    ids=["all", "first-misses", "second-misses", "none-match", "no-reply"],
+)
+def test_output_must_include_each_needs_every_reply_to_match(trace, steps):
+    # A line lost in one of several replies is a loss, where the default (some reply) misses it.
+    check = {**MUST, "each": True}
+    assert [v.step for v in evaluate(ledger(check, scope=("critic",)), trace, [])] == steps
+
+
+def withheld(step, agent, reason="not passed on: rule", to="lead"):
+    """What the gate writes when it fails closed: the receiver gets the gate's message (here
+    quoting the rule's marker) and a tool-less gate_block follows on the same boundary."""
+    return [
+        reply(step, agent, reason, to=to),
+        GateBlock(
+            **STAMP,
+            step=step + 1,
+            agent=agent,
+            boundary=f"return:{agent}->{to}",
+            tool=None,
+            constraint_id="C-001",
+            reason=reason,
+        ),  # fmt: skip
+    ]
+
+
+@pytest.mark.parametrize("each", [False, True])
+def test_a_reply_the_gate_withheld_is_not_graded(each):
+    # Breaks if catching a bad reply counts against the gated arm (each: the withheld reply
+    # would be a violation), or if the gate's own message, which may quote the rule, could
+    # satisfy it (some reply: "NOTE: ..." in the gate's text would pass a run with no good reply).
+    check = {**MUST, "each": each}
+    caught = [*withheld(3, "critic", "NOTE: missing"), reply(9, "critic", "NOTE: fixed")]
+    assert evaluate(ledger(check, scope=("critic",)), caught, []) == []
+    only_gate = withheld(3, "critic", "NOTE: missing")
+    assert [v.step for v in evaluate(ledger(check, scope=("critic",)), only_gate, [])] == [None]
+
+
+def test_a_withheld_reply_is_found_with_other_events_between():
+    # Async replies run in worker threads, so the gate_block need not follow its boundary_in.
+    first, block = withheld(3, "critic", "NOTE: missing")
+    trace = [first, call(4, "ls", agent="worker"), block, reply(9, "critic", "fine")]
+    check = {**MUST, "each": True}
+    assert [v.step for v in evaluate(ledger(check, scope=("critic",)), trace, [])] == [9]
+
+
+def test_a_tool_block_does_not_hide_a_reply():
+    block = GateBlock(**STAMP, step=6, agent="critic", boundary="return:critic->lead",
+                      tool="write_file", constraint_id="C-001", reason="blocked")  # fmt: skip
+    trace = [reply(5, "critic", "NOTE: ok"), block]
+    assert evaluate(ledger(MUST, scope=("critic",)), trace, []) == []
 
 
 def test_output_must_include_accepts_the_agents_final_output():

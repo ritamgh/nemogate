@@ -396,3 +396,30 @@ def test_ledger_rebuilt_from_version_and_constraints_still_validates():
     full = Ledger.model_validate({**ledger_dict(entry), "app": {"approval_tool": "ask"}})
     rebuilt = Ledger(version=full.version, constraints=full.constraints)
     assert rebuilt.app.approval_tool is None
+
+
+def test_output_must_include_each_defaults_off_and_stays_out_of_dumps():
+    # Breaks if `each: false` appears in a dump: every ledger's ledger_hash would change and
+    # runs made before the field existed could no longer be compared with runs after it.
+    from schemas.ledger import OutputMustInclude
+
+    plain = OutputMustInclude(regex="^X", agent="critic")
+    assert plain.each is False
+    assert plain.model_dump(mode="json") == {"type": "output_must_include", "regex": "^X",
+                                             "agent": "critic"}  # fmt: skip
+    each = OutputMustInclude(regex="^X", agent="critic", each=True)
+    assert each.model_dump(mode="json")["each"] is True
+    assert OutputMustInclude.model_validate(each.model_dump(mode="json")) == each
+
+
+def test_the_reference_ledger_dumps_no_each_key():
+    # The property behind an unchanged ledger_hash: a ledger that never sets `each` dumps
+    # exactly as it did before the field existed (no key at all, not `each: false`).
+    import json
+    from pathlib import Path
+
+    from ledger import load_ledger
+
+    root = Path(__file__).resolve().parents[2]
+    dumped = json.dumps(load_ledger(root / "nemogate.yaml").ledger.model_dump(mode="json"))
+    assert '"each"' not in dumped

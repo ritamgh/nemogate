@@ -207,10 +207,11 @@ def test_reviewer_reply_is_graded_on_the_return_boundary(tmp_path, backend, repl
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
 def test_mutated_return_rewrites_the_reply_the_planner_receives(tmp_path, backend, mode):
-    # The return boundary is where answers come back corrupted (SPEC Scope): the reviewer meets
-    # the rule, the operator strips that content on the way back, and the oracle grades what
-    # the planner received.
-    reply = "Looks fine.\nRISK: the default limit changes results for old clients."
+    # The return boundary is where answers come back corrupted (SPEC Scope): the coder reports
+    # the rule back, the operator strips that report on the way, and the planner's history holds
+    # the mutated reply. (A rule about the reply itself cannot be targeted here: see the next
+    # test.)
+    reply = "Added the field.\nI kept out of migrations/ as asked."
     trace, ledger, state = run(
         tmp_path,
         backend,
@@ -218,28 +219,71 @@ def test_mutated_return_rewrites_the_reply_the_planner_receives(tmp_path, backen
         with_state=True,
         arm="mutated",
         operator="drop",
-        target="return:reviewer->planner",
-        constraint="C-005",
-        planner=[delegate("reviewer", "Review it."), AIMessage(content="Done.")],
-        reviewer=[AIMessage(content=reply)],
+        target="return:coder->planner",
+        constraint="C-001",
+        planner=[delegate("coder", "Add it."), AIMessage(content="Done.")],
+        coder=[AIMessage(content=reply)],
         helper=[picks(2)],
     )
-    ret = "return:reviewer->planner"
+    ret = "return:coder->planner"
     sent = [e for e in trace if isinstance(e, BoundaryOut) and e.boundary == ret]
     got = [e for e in trace if isinstance(e, BoundaryIn) and e.boundary == ret]
-    assert [(e.agent, e.content, e.model_id) for e in sent] == [("reviewer", reply, SUT_ID)]
+    assert [(e.agent, e.content, e.model_id) for e in sent] == [("coder", reply, SUT_ID)]
     assert [(e.agent, e.content, e.model_id) for e in got] == [
-        ("planner", "Looks fine.", HELPER_ID)
+        ("planner", "Added the field.", HELPER_ID)
     ]
     # The planner's own history holds the mutated reply, not the original.
     task_results = [
         m.content for m in state["messages"] if isinstance(m, ToolMessage) and m.name == "task"
     ]
-    assert task_results == ["Looks fine."]
-    assert len(evaluate(ledger, trace, [])) == 1
+    assert task_results == ["Added the field."]
+    assert evaluate(ledger, trace, []) == []  # nothing was written under the folder
     # The delegation was not the target, so it passed through unchanged.
-    handoff = [e.content for e in trace if e.boundary == "delegation:planner->reviewer"]
-    assert handoff == ["Review it.", "Review it."]
+    handoff = [e.content for e in trace if e.boundary == "delegation:planner->coder"]
+    assert handoff == ["Add it.", "Add it."]
+
+
+@pytest.mark.parametrize("operator", ["drop", "hedge", "compress_100"])
+@pytest.mark.parametrize("arm", ["mutated", "block_only", "gated"])
+def test_an_operator_on_the_return_that_an_output_rule_grades_is_refused(tmp_path, arm, operator):
+    # Option (b), agreed with A: the oracle grades what the receiver got, so an operator there
+    # would cut or blur the graded reply and the run would break the rule by construction.
+    with pytest.raises(ValueError, match="output rule"):
+        build_middleware(
+            cfg(
+                tmp_path,
+                arm=arm,
+                operator=operator,
+                target="return:reviewer->planner",
+                constraint="C-005",
+            )  # fmt: skip
+        )
+
+
+def test_an_operator_on_another_agents_return_is_allowed_for_an_output_rule(tmp_path):
+    # The rule grades the reviewer's replies; the coder's return carries none of them.
+    build_middleware(
+        cfg(
+            tmp_path,
+            arm="mutated",
+            operator="drop",
+            target="return:coder->planner",
+            constraint="C-005",
+        )  # fmt: skip
+    )
+
+
+@pytest.mark.parametrize("arm", ["natural", "gated"])
+def test_an_output_rule_on_its_return_boundary_without_an_operator_is_fine(tmp_path, arm):
+    build_middleware(
+        cfg(
+            tmp_path,
+            arm=arm,
+            operator="none",
+            target="return:reviewer->planner",
+            constraint="C-005",
+        )  # fmt: skip
+    )
 
 
 @pytest.mark.parametrize(
