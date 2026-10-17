@@ -1160,3 +1160,35 @@ def test_labels_are_left_out_when_no_run_has_a_carriage_file_and_for_other_arms(
     )
     cells = mixed["constraints"]["C-001"]["boundaries"][B1]["cells"]
     assert [c["arm"] for c in cells if "labels" in c] == ["natural"]
+
+
+def test_block_only_and_gated_cells_without_an_operator_count_their_runs_by_label():
+    # Breaks if the labels stop at the natural arm: with operator none nothing sabotaged the
+    # handoff in the blocking arms either, so their labels say whether the rule was carried.
+    runs = [
+        make_run("b-1", arm="block_only", label="CARRIED_OBEYED"),
+        make_run("b-2", arm="block_only", label="DISOBEYED", violated=True),
+        make_run("g-1", arm="gated", label="CARRIED_OBEYED"),
+        make_run("g-2", arm="gated", label="CARRIED_OBEYED"),
+        make_run("g-3", arm="gated", label="UNKNOWN"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    cells = {c["arm"]: c for c in got["constraints"]["C-001"]["boundaries"][B1]["cells"]}
+
+    assert cells["block_only"]["labels"] == {"CARRIED_OBEYED": 1, "DISOBEYED": 1}
+    assert cells["gated"]["labels"] == {"CARRIED_OBEYED": 2, "UNKNOWN": 1}
+    # only the natural arm splits its violations by label
+    assert "violations_by_label" not in cells["gated"]
+
+
+def test_a_cell_with_an_operator_has_no_labels_even_when_its_runs_do():
+    # Breaks if a sabotaged cell reports labels: the operator changed what the receiver got, so
+    # "carried" or "dropped" would describe the sabotage, not the planner.
+    runs = [
+        make_run("m-1", arm="mutated", operator="drop", label="DROPPED"),
+        make_run("g-1", arm="gated", operator="drop", label="CARRIED_OBEYED"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    cells = got["constraints"]["C-001"]["boundaries"][B1]["cells"]
+
+    assert all("labels" not in c for c in cells)

@@ -816,7 +816,7 @@ PLACED = ("CARRIED_OBEYED", "DISOBEYED", "DROPPED_LUCKY", "DROPPED")
 
 
 def presence_grid(cell: dict[str, Any]) -> str:
-    """For a natural cell with `labels`: was the rule in the handoff, and did the agent keep it.
+    """For a cell with `labels` (operator none): was the rule in the handoff, and was it kept.
 
     The carriage label answers both at once: carried or dropped (present or lost) and kept or
     broken. Runs the classifier could not place (the rule never came up, no verdict, no
@@ -836,6 +836,8 @@ def presence_grid(cell: dict[str, Any]) -> str:
     )
     parts = [f"{k} {text}" for k, text in unplaced if k]
     foot = f'<span class="count">Not placed: {e(", ".join(parts))}.</span>' if parts else ""
+    if cell.get("arm") == "gated":  # the label describes what the receiver got, re-pin included
+        foot += "<span class=\"count\">Gated: 'in the handoff' includes the gate's re-pin.</span>"
     return (
         '<span class="presence" role="table" aria-label="Rule in the handoff against '
         'whether the agent kept it">'
@@ -870,11 +872,11 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> 
             "so these ranges are too narrow.</span>"
         )
     cvr = fraction_cell(cell["violations"], n, cell["cvr"])
-    if cell.get("arm") == "natural":
-        # `labels` counts every run, so it holds the numbers of both older notes
-        cvr += (
-            presence_grid(cell) if "labels" in cell else split_note(cell) + unexercised_note(cell)
-        )
+    if op == "none" and "labels" in cell:
+        # `labels` counts every run, so it holds the numbers of both older natural notes
+        cvr += presence_grid(cell)
+    elif cell.get("arm") == "natural":
+        cvr += split_note(cell) + unexercised_note(cell)
     success = fraction_cell(cell["successes"], n, cell["success"])
     return (
         f'<tr><th scope="row">{label}<td data-label="Runs">{n_text}{warn}</td>'

@@ -1073,3 +1073,36 @@ def test_the_grid_styles_ship_only_with_a_page_that_has_a_grid():
     }
     assert ".presence{" in site.render(one_constraint(boundary(LABELS)))
     assert ".presence{" not in site.render(one_constraint(boundary(None)))
+
+
+def operator_none_card(arm, labels):
+    cell = {**make_cell(arm, "none", 6, 1, 5), "labels": labels}
+    boundary = {"delegation:planner->coder": {"cells": [cell]}}
+    return text_of(article(site.render(one_constraint(boundary)), "C-900"))
+
+
+def test_a_block_only_cell_without_an_operator_gets_the_grid_and_no_note():
+    # Breaks if the grid is limited to the natural arm: block_only with operator none has
+    # meaningful labels too (#67).
+    text = operator_none_card("block_only", {"CARRIED_OBEYED": 3, "DISOBEYED": 1, "DROPPED": 2})
+
+    assert "Rule in the handoff 3 1 Rule lost in the handoff 0 2" in text
+    assert "re-pin" not in text
+
+
+def test_a_gated_cell_without_an_operator_gets_the_grid_and_says_the_re_pin_counts():
+    # Breaks if a gated grid reads as the planner's own handoff: the label describes what the
+    # receiver got, with the gate's re-pin included.
+    text = operator_none_card("gated", {"CARRIED_OBEYED": 5, "DISOBEYED": 1})
+
+    assert "Rule in the handoff 5 1 Rule lost in the handoff 0 0" in text
+    assert "Gated: 'in the handoff' includes the gate's re-pin." in text
+
+
+def test_a_cell_with_an_operator_gets_no_grid():
+    # Breaks if a sabotaged cell is given a grid from a stray `labels` field.
+    cell = {**make_cell("mutated", "drop", 6, 4, 2), "labels": {"DROPPED": 6}}
+    boundary = {"delegation:planner->coder": {"cells": [cell]}}
+    text = text_of(article(site.render(one_constraint(boundary)), "C-900"))
+
+    assert "Agent kept it" not in text

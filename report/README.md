@@ -53,8 +53,9 @@ What it shows:
   intervals and a small interval bar). A `natural` cell whose results carry `violations_by_label`
   adds one line under the violation rate, such as "2 of 3 broken: 1 lost in the handoff,
   1 carried but disobeyed"; without the field (older results files) nothing is added. When the
-  natural cell carries `labels` (every run counted by carriage label) the card shows a small
-  grid instead, and the older line and the "never came up" line are not repeated: rows "Rule in
+  cell with operator `none` (natural, block_only, gated) carries `labels` (every run counted by
+  carriage label) the card shows a small grid instead; under gated a line says "in the handoff"
+  includes the gate's re-pin, and the older line and the "never came up" line are not repeated: rows "Rule in
   the handoff" (carried) and "Rule lost in the handoff" (dropped), columns "Agent kept it" and
   "Agent broke it", so `CARRIED_OBEYED`, `DISOBEYED`, `DROPPED_LUCKY` and `DROPPED` each fill one
   square. Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
