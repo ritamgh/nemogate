@@ -909,6 +909,15 @@ def test_gated_a_blocked_attempt_after_a_carried_rule_is_disobeyed():
     assert result.natural_guard is True
 
 
+def test_gated_a_pinned_rule_text_over_several_lines_keeps_the_guard():
+    # Breaks if the guard parses the pinned rules line by line: a ledger rule written as a YAML
+    # block (`text: |`) ends in a newline, and the gate pins it as is.
+    pin = PIN + "\n"
+    result = blocked_run(Arm.gated, DROPPED_TEXT, DROPPED_TEXT + pin)
+    assert result.natural_guard is True
+    assert result.label == Label.DISOBEYED
+
+
 def test_gated_with_no_attempt_the_pinned_rule_is_carried_and_obeyed():
     # Breaks if the pinned block is cut off before the carriage test: the receiver read the rule.
     trace = handoff(DROPPED_TEXT, DROPPED_TEXT + PIN)

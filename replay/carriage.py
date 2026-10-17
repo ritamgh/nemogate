@@ -259,14 +259,11 @@ def _lost_at(
 
 
 def _as_sent(sent: str, received: str, *, pinned: bool) -> bool:
-    """True if `received` is `sent` unchanged or, when `pinned`, `sent` followed by exactly the
-    gate's pinned-rules block (its REPIN text, then one "- " line per rule)."""
-    if received == sent:
-        return True
-    if not pinned or not received.startswith(sent + _PIN_MARK):
-        return False
-    rules = received[len(sent) + len(_PIN_MARK) :].split("\n")
-    return all(line.startswith("- ") for line in rules)
+    """True if `received` is `sent` unchanged or, when `pinned`, `sent` followed by the gate's
+    pinned-rules block (its REPIN text, then the rules). The rules after the mark are not parsed:
+    a rule's text may span lines, and the gate pins after any operator has run, so only the
+    sent part can carry a rewrite."""
+    return received == sent or (pinned and received.startswith(sent + _PIN_MARK))
 
 
 def classify(
