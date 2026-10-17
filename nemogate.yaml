@@ -44,3 +44,11 @@ constraints:
     scope: [reviewer]
     origin: declared
     check: {type: output_must_include, regex: "(?m)^RISK:", agent: reviewer}
+  - id: C-006
+    text: "Don't modify app/serializers.py"
+    kind: constraint
+    source: user
+    authority: binding
+    scope: [coder]
+    origin: declared
+    check: {type: path_forbidden, glob: "app/serializers.py", ops: [write, delete]}

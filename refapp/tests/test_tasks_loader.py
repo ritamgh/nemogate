@@ -159,3 +159,45 @@ def test_load_tasks_default_root_is_the_tasks_folder():
     assert TASKS_DIR.parent.name == "refapp"
     # Whatever is committed there must load.
     assert all(isinstance(t, Task) for t in load_tasks())
+
+
+def test_a_task_runs_every_arm_and_operator_unless_it_says_otherwise(tmp_path):
+    task = load_task(write_task(tmp_path, "T1"))
+
+    assert (task.only_arms, task.only_operators) == (None, None)
+    assert task.refusal("gated", "drop") is None
+
+
+def test_a_restricted_task_refuses_any_other_cell_and_names_the_limit(tmp_path):
+    task = load_task(write_task(tmp_path, "T1", only_arms=["natural"], only_operators=["none"]))
+
+    assert (task.only_arms, task.only_operators) == (("natural",), ("none",))
+    assert task.refusal("natural", "none") is None
+    assert task.refusal("gated", "drop") == (
+        "task T1 only runs arms ['natural'] with operators ['none'], not gated with drop "
+        "(see its task.yaml)"
+    )
+
+
+def test_a_restriction_on_arms_alone_leaves_operators_free(tmp_path):
+    task = load_task(write_task(tmp_path, "T1", only_arms=["natural", "gated"]))
+
+    assert task.refusal("gated", "hedge") is None
+    assert task.refusal("block_only", "hedge") is not None
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"only_arms": ["nautral"]},
+        {"only_arms": "natural"},
+        {"only_arms": []},
+        {"only_operators": ["noop"]},
+        {"only_operators": [1]},
+    ],
+)
+def test_load_task_rejects_bad_restrictions(tmp_path, overrides):
+    task_dir = write_task(tmp_path, "T1", **overrides)
+
+    with pytest.raises(ValueError, match=r"only_\w+ must be a non-empty list of"):
+        load_task(task_dir)

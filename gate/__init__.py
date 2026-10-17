@@ -13,7 +13,7 @@ from langchain.agents.middleware import AgentMiddleware
 from common.env import REPO_ROOT
 from common.llm import get_model, safe_config_hash
 from gate.middleware import GateMiddleware
-from gate.operators import NothingToMutate, make_operator
+from gate.operators import EmptyMutation, MutationFailed, NothingToMutate, make_operator
 from gate.trace import TraceWriter
 from ledger import load_ledger, scope_to
 from schemas.config import load_config
@@ -28,11 +28,13 @@ PRIOR_EVENTS = "prefix.jsonl"
 
 
 def _check_arm(run_config: RunConfig) -> None:
-    # Same pairing as replay.app.pairs: natural only unmutated, every other arm only mutated.
+    # natural is the unmutated handoff and mutated the mutated one, so each takes only its own
+    # kind of operator. block_only and gated take either: unmutated, they measure the gate
+    # against rules the agents break on their own (the rule reached them and was disobeyed).
     if run_config.arm is Arm.natural and run_config.operator is not Operator.none:
         raise ValueError("the natural arm takes operator none")
-    if run_config.arm is not Arm.natural and run_config.operator is Operator.none:
-        raise ValueError(f"the {run_config.arm.value} arm needs an operator other than none")
+    if run_config.arm is Arm.mutated and run_config.operator is Operator.none:
+        raise ValueError("the mutated arm needs an operator other than none")
     if run_config.operator is not Operator.none and _boundary_kind(run_config) == "compaction":
         raise ValueError("operators apply to a delegation or return boundary, not compaction")
 
@@ -100,4 +102,11 @@ def make_middleware(run_config: RunConfig) -> list[AgentMiddleware]:
     return build_middleware(run_config)
 
 
-__all__ = ["PRIOR_EVENTS", "NothingToMutate", "build_middleware", "make_middleware"]
+__all__ = [
+    "PRIOR_EVENTS",
+    "EmptyMutation",
+    "MutationFailed",
+    "NothingToMutate",
+    "build_middleware",
+    "make_middleware",
+]

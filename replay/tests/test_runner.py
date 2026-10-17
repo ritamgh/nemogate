@@ -135,9 +135,17 @@ class FakeGraph:
             ],
         )
         yield SimpleNamespace(
-            metadata={"step": 3}, values={"_summarization_event": event, "messages": [delegation]}
+            config={"configurable": {"checkpoint_id": "ckpt-7"}},
+            parent_config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            metadata={"step": 3},
+            values={"_summarization_event": event, "messages": [delegation]},
         )
-        yield SimpleNamespace(metadata={"step": 0}, values={"messages": []})
+        yield SimpleNamespace(
+            config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            parent_config=None,
+            metadata={"step": 0},
+            values={"messages": []},
+        )
 
 
 def trace_events(rc: RunConfig, *, ledger_hash: str | None = None, bad=None, handoff=None) -> list:
@@ -615,6 +623,59 @@ def test_run_is_the_sync_wrapper_of_arun(tmp_path):
     assert len(out) == 1
 
 
+class RestrictedTask(FakeTask):
+    """A task that, like one with `only_arms` in its task.yaml, runs one cell only."""
+
+    def refusal(self, arm, operator):
+        if (arm, operator) == (Arm.natural, Operator.none):
+            return None
+        return f"task {self.id} only runs natural with none, not {arm} with {operator}"
+
+
+def restrict_x2(h: Harness) -> None:
+    h.app.tasks = lambda: [FakeTask("X1", "C-001"), RestrictedTask("X2", "C-002")]
+
+
+def test_a_sweep_with_a_refused_cell_is_refused_before_any_run_starts(tmp_path):
+    # Breaks if the refusal is checked per run: X1's runs would be paid for before X2's cell is
+    # refused, leaving a half sweep.
+    h = Harness(tmp_path)
+    restrict_x2(h)
+    calls: list = []
+    stub_run_one(h, calls)
+
+    with pytest.raises(
+        runner.CellRefused, match="task X2 only runs natural with none, not gated with drop"
+    ):
+        h.runner.run(["X1", "X2"], [Arm.natural, Arm.gated], [Operator.none, Operator.drop], 1)
+    assert calls == []
+
+
+def test_a_restricted_task_still_runs_its_allowed_cell(tmp_path):
+    # Breaks if the refusal blocks the restricted task's own cell, or tasks without `refusal`.
+    h = Harness(tmp_path)
+    restrict_x2(h)
+    calls: list = []
+    stub_run_one(h, calls)
+
+    h.runner.run(["X1", "X2"], [Arm.natural], [Operator.none], 1)
+
+    assert [c[:3] for c in calls] == [
+        ("X1", Arm.natural, Operator.none),
+        ("X2", Arm.natural, Operator.none),
+    ]
+
+
+def test_run_one_refuses_a_cell_the_task_does_not_allow_before_creating_a_run_folder(tmp_path):
+    # Breaks if only the sweep entry point checks: a direct run_one call would spend credit.
+    h = Harness(tmp_path)
+    task = RestrictedTask("X2", "C-002")
+
+    with pytest.raises(ValueError, match="only runs natural with none"):
+        asyncio.run(h.runner.run_one(task, Arm.gated, Operator.drop, seed=0, repo_ref="HEAD"))
+    assert not h.runs_dir.exists() or list(h.runs_dir.iterdir()) == []
+
+
 # ---- afork / fork ---------------------------------------------------------------------------
 
 
@@ -1061,6 +1122,22 @@ def test_cli_top_up_refuses_a_paired_sweep(monkeypatch, capsys):
     assert "--paired" in capsys.readouterr().err
 
 
+def test_cli_reports_a_refused_cell_as_a_refusal_not_a_traceback(monkeypatch, capsys):
+    # Breaks if main lets the ValueError escape: the user sees a traceback instead of the message.
+    monkeypatch.setattr(runner, "is_live", lambda: True)
+
+    class RefusingRunner:
+        errors: list = []
+
+        def run(self, *args, **kwargs):
+            raise runner.CellRefused("task X2 only runs natural with none, not gated with drop")
+
+    monkeypatch.setattr(runner, "default_runner", lambda runs_dir=None: RefusingRunner())
+
+    assert runner.main([*CLI_ARGS, "--yes"]) == 2
+    assert "refusing to run: task X2 only runs natural with none" in capsys.readouterr().err
+
+
 def git_repo_ignoring_runs(tmp_path: Path) -> Path:
     repo = tmp_path / "checkout"
     repo.mkdir()
@@ -1165,7 +1242,7 @@ def test_carriage_json_labels_a_natural_drop_and_records_the_knob(tmp_path, monk
         env={"NEMOGATE_COMPACT_TOKENS": "8000"},
     )
     assert carriage == {
-        "classifier_version": 3,
+        "classifier_version": 4,
         "label": "DROPPED",
         "reason": "anchor_mentioned=False carried=False violated=True",
         "anchors": ["rm"],
@@ -1181,6 +1258,7 @@ def test_carriage_json_labels_a_natural_drop_and_records_the_knob(tmp_path, monk
             "delegations_checked": 1,
             "delegations": ["Add the flag."],
             "carried_by": None,
+            "lost_at": None,
         },
         "compaction": None,
         "knobs": {"NEMOGATE_COMPACT_TOKENS": "8000", "NEMOGATE_COMPACT_KEEP": None},
@@ -1206,6 +1284,7 @@ def test_carriage_json_carries_the_compaction_evidence_of_the_planner(tmp_path, 
         "cutoff_index": 4,
         "anchor_in_summary": False,
         "before_delegation": True,
+        "delegations": [{"fired": True, "cutoff_index": 4, "anchor_in_summary": False}],
     }
     assert carriage["knobs"] == {"NEMOGATE_COMPACT_TOKENS": "8000", "NEMOGATE_COMPACT_KEEP": "2"}
 

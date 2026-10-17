@@ -169,9 +169,9 @@ def test_exemplars_come_only_from_runs_in_the_results_reproducibility_group(tmp_
 
 
 def test_an_inconclusive_run_is_not_the_comparison_the_statistics_never_counted(tmp_path):
-    # Breaks if exemplar selection filters only by reproducibility group: stats.aggregate leaves a
-    # NOT_EXERCISED run out of every cell, so presenting it as the run that "kept the rule" would
-    # contradict the numbers beside it. The natural run 000aaa is labelled NOT_EXERCISED here.
+    # Breaks if exemplar selection filters only by reproducibility group: a NOT_EXERCISED run is
+    # in the rates, but the rule never came up in it, so presenting it as the run that "kept the
+    # rule" would be false. The natural run 000aaa is labelled NOT_EXERCISED here.
     runs = runs_without(tmp_path, "ccc333", "0aa000", "ddd444", "eee555")
     (runs / "r-20260101T000000-000aaa" / "carriage.json").write_text('{"label": "NOT_EXERCISED"}')
 

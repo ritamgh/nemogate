@@ -250,6 +250,7 @@ class Runner:
         """One run. If it raises, the traceback goes to `error.txt`. A failure once the agents have
         started also gets an `error.json`, unless it is one that stops the sweep; a failure in
         setup never does. The exception is re-raised either way."""
+        _refuse_cell(task, arm, operator)
         run_id = record.new_run_id()
         run_dir = self.runs_dir / run_id
         phase = _Phase()
@@ -500,6 +501,9 @@ class Runner:
         """
         by_id = {t.id: t for t in self.app.tasks()}
         tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
+        for task in tasks:  # CellRefused before any run starts
+            for arm, operator in pairs(arms, operators):
+                _refuse_cell(task, arm, operator)
         records: list[RunRecord] = []
         self.records, self.errors = records, []
         for task in tasks:
@@ -623,6 +627,17 @@ class Runner:
         repo_ref: str = "main",
     ) -> list[RunRecord]:
         return asyncio.run(self.afork(source_run_id, arms, operators, n, repo_ref))
+
+
+class CellRefused(ValueError):
+    """A task limits itself to other (arm, operator) cells than the one asked for."""
+
+
+def _refuse_cell(task: AppTask, arm: Arm, operator: Operator) -> None:
+    """Raise CellRefused when the task limits itself to other cells (`task.refusal`, optional)."""
+    refusal = getattr(task, "refusal", None)
+    if refusal is not None and (why := refusal(arm, operator)) is not None:
+        raise CellRefused(why)
 
 
 def _write_error(
@@ -886,6 +901,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"stopped: {exc}", file=sys.stderr)
         _print_summary(sweep.records, sweep.errors, "before the stop")
         return 3
+    except CellRefused as exc:  # raised before the first run
+        print(f"refusing to run: {exc}", file=sys.stderr)
+        return 2
     for r in records:
         print(
             f"{r.run_id} task={r.task_id} arm={r.arm.value} operator={r.operator.value} "

@@ -7,6 +7,7 @@
             {
               "arm": "natural",
               "clustered": false,
+              "compaction": null,
               "cost_usd": 0.02,
               "cvr": {
                 "hi": 0.6576,
@@ -15,6 +16,7 @@
               },
               "n": 2,
               "n_sources": 2,
+              "not_exercised": 0,
               "operator": "none",
               "success": {
                 "hi": 1.0,
@@ -28,6 +30,7 @@
             {
               "arm": "mutated",
               "clustered": false,
+              "compaction": null,
               "cost_usd": 0.02,
               "cvr": {
                 "hi": 1.0,
@@ -48,6 +51,7 @@
             {
               "arm": "block_only",
               "clustered": false,
+              "compaction": null,
               "cost_usd": 0.01,
               "cvr": {
                 "hi": 0.7935,
@@ -68,6 +72,7 @@
             {
               "arm": "gated",
               "clustered": false,
+              "compaction": null,
               "cost_usd": 0.02,
               "cvr": {
                 "hi": 0.9055,
@@ -96,6 +101,7 @@
                 "arm": "natural",
                 "operator": "none"
               },
+              "compaction": null,
               "diff": 1.0,
               "hi": 1.0,
               "lo": 0.07,
@@ -112,6 +118,7 @@
                 "arm": "block_only",
                 "operator": "drop"
               },
+              "compaction": null,
               "diff": -0.5,
               "hi": 0.3911,
               "lo": -0.9055,
@@ -154,7 +161,6 @@
     "inconclusive": {
       "mutation_noop": 0,
       "not_comparable": 1,
-      "not_exercised": 0,
       "run_error": 0,
       "unreadable_record": 0
     },
