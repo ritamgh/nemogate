@@ -587,7 +587,9 @@ sabotaging the handoff and counting how often the rule was then broken.</p>
 <span class="k">rules can be graded: each has a compiled check, a program that decides
 pass or fail</span></li>
 <li><span class="v">{e(inconclusive_total)}</span>
-<span class="k">inconclusive runs, left out of every rate below</span></li>
+<span class="k">inconclusive runs, left out of every rate below. Natural runs where the
+rule never came up are not among them: they stay in the rates, and each natural row counts
+them</span></li>
 </ul>
 </section>
 <section aria-labelledby="runs-h" class="meta">
@@ -626,8 +628,9 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
             for comp in b.get("comparisons", []):
                 if comp.get("name") != "load_bearing":
                     continue
-                mut = find_cell(cells, comp["a"]["arm"], comp["a"]["operator"])
-                nat = find_cell(cells, comp["b"]["arm"], comp["b"]["operator"])
+                knobs = comp.get("compaction", ANY)
+                mut = find_cell(cells, comp["a"]["arm"], comp["a"]["operator"], knobs)
+                nat = find_cell(cells, comp["b"]["arm"], comp["b"]["operator"], knobs)
                 if mut and nat:
                     found.append((cid, bid, comp, mut, nat, cells))
     if not found:
@@ -644,7 +647,7 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
     tail = (
         f", {indistinct(comp, cells)}" if comp["lo"] <= 0 <= comp["hi"] else ""
     )  # a win claim whose interval includes 0 says so
-    gat = find_cell(cells, "gated", op)
+    gat = find_cell(cells, "gated", op, comp.get("compaction", ANY))
     gated = (
         f"With the gate on, it was broken in {e(gat['violations'])} of {e(gat['n'])} gated runs "
         f"({pct(gat['cvr']['rate'])}, 95% interval {pct_num(gat['cvr']['lo'])}% to "
@@ -743,8 +746,21 @@ def split_note(cell: dict[str, Any]) -> str:
     )
 
 
-def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
-    label = f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}</td>'
+def unexercised_note(cell: dict[str, Any]) -> str:
+    """For a natural cell: how many of its runs never asked for the guarded action. They are in
+    `n` (and so in the rate), so a reader needs the count to know how often the rule came up."""
+    count = cell.get("not_exercised", 0)
+    if not count:
+        return ""
+    return f'<span class="count">the rule never came up in {e(count)} of {e(cell["n"])} runs</span>'
+
+
+def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> str:
+    label = (
+        f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}'
+        + (f'<span class="count">{e(note)}</span>' if note else "")
+        + "</td>"
+    )
     if cell is None:
         return (
             f'<tr class="missing"><th scope="row">{label}'
@@ -761,7 +777,7 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
         )
     cvr = fraction_cell(cell["violations"], n, cell["cvr"])
     if cell.get("arm") == "natural":
-        cvr += split_note(cell)
+        cvr += split_note(cell) + unexercised_note(cell)
     success = fraction_cell(cell["successes"], n, cell["success"])
     return (
         f'<tr><th scope="row">{label}<td data-label="Runs">{n_text}{warn}</td>'
@@ -770,11 +786,46 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None) -> str:
     )
 
 
-def find_cell(cells: list[dict[str, Any]], arm: str, op: str) -> dict[str, Any] | None:
+ANY = object()  # find_cell: match whatever compaction setting a cell has
+
+
+def find_cell(
+    cells: list[dict[str, Any]], arm: str, op: str, compaction: Any = ANY
+) -> dict[str, Any] | None:
+    """The first cell for (arm, operator) under `compaction` (the cell's own `compaction` value:
+    None = not recorded). `replay.stats` lists the compaction-off cell first."""
     for c in cells:
         if c.get("arm") == arm and c.get("operator") == op:
-            return c
+            if compaction is ANY or c.get("compaction") == compaction:
+                return c
     return None
+
+
+def compaction_settings(cells: list[dict[str, Any]]) -> list[dict[str, Any] | None]:
+    """The distinct compaction settings of `cells`: off first, then not recorded, then on."""
+    settings: list[dict[str, Any] | None] = []
+    for c in cells:
+        if c.get("compaction") not in settings:
+            settings.append(c.get("compaction"))
+
+    def rank(setting: dict[str, Any] | None) -> tuple[int, int, int]:
+        if setting is None:
+            return (1, 0, 0)
+        tokens = setting.get("tokens")
+        return (0 if tokens is None else 2, tokens or 0, setting.get("keep") or 0)
+
+    return sorted(settings, key=rank)
+
+
+def compaction_note(compaction: dict[str, Any] | None) -> str:
+    """How the planner was compacted in a cell's runs, for the row label."""
+    if compaction is None:
+        return "compaction not recorded"
+    if compaction.get("tokens") is None:
+        return "compaction off"
+    return (
+        f"compaction at {compaction['tokens']} tokens, keep {compaction.get('keep') or 'default'}"
+    )
 
 
 def expected_rows(cells: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -811,7 +862,8 @@ def n_text(*counts: int) -> str:
 
 def compared_n(cells: list[dict[str, Any]], comp: dict[str, Any]) -> list[int]:
     """The run counts of the two cells a comparison is made from (empty if a cell is missing)."""
-    pair = [find_cell(cells, comp[side]["arm"], comp[side]["operator"]) for side in ("a", "b")]
+    knobs = comp.get("compaction", ANY)
+    pair = [find_cell(cells, comp[side]["arm"], comp[side]["operator"], knobs) for side in "ab"]
     return [c["n"] for c in pair if c]
 
 
@@ -856,6 +908,25 @@ def render_comparisons(cells: list[dict[str, Any]], comparisons: list[dict[str, 
     return '<dl class="compare">' + "".join(items) + "</dl>"
 
 
+def render_comparisons_by_setting(
+    cells: list[dict[str, Any]],
+    comparisons: list[dict[str, Any]],
+    settings: list[dict[str, Any] | None],
+) -> str:
+    """The effect comparisons of each compaction setting that has mutated or gated runs, each
+    under its own heading (a setting with only natural runs has nothing to compare)."""
+    blocks = []
+    for setting in settings:
+        here = [c for c in cells if c.get("compaction") == setting]
+        if any(c["arm"] in ("mutated", "gated") for c in here):
+            mine = [c for c in comparisons if c.get("compaction") == setting]
+            blocks.append(
+                f'<p class="note">Under <strong>{e(compaction_note(setting))}</strong>:</p>'
+                + render_comparisons(here, mine)
+            )
+    return "".join(blocks) or render_comparisons(cells, comparisons)
+
+
 def gate_effect(boundaries: dict[str, Any], bid: str, op: str, blk: dict, gat: dict) -> str:
     """The gated-versus-block-only task success, stated as a win only if its interval excludes 0."""
     gated = pct(gat["success"]["rate"])
@@ -863,7 +934,9 @@ def gate_effect(boundaries: dict[str, Any], bid: str, op: str, blk: dict, gat: d
         (
             c
             for c in boundaries[bid].get("comparisons", [])
-            if c.get("name") == "ledger_value" and c.get("operator") == op
+            if c.get("name") == "ledger_value"
+            and c.get("operator") == op
+            and c.get("compaction") == gat.get("compaction")  # the setting `blk` and `gat` share
         ),
         None,
     )
@@ -891,16 +964,20 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
         # only a delegation's recipient is the one acting on the rule; a return may be graded on
         # the sender's reply, so every other kind uses the passive form
         recipient = parsed[2] if parsed and parsed[0] == "delegation" else None
-        for op in sorted({c["operator"] for c in cells if c["arm"] == "mutated"}):
-            mut = find_cell(cells, "mutated", op)
-            blk = find_cell(cells, "block_only", op)
-            gat = find_cell(cells, "gated", op)
-            if not (mut and blk and gat):
+        several = len(compaction_settings(cells)) > 1
+        # one sentence per mutated cell, and its block-only and gated cells (and the gate-effect
+        # comparison) are the ones made under the same compaction setting
+        for mut in (c for c in cells if c["arm"] == "mutated"):
+            op, setting = mut["operator"], mut.get("compaction")
+            blk = find_cell(cells, "block_only", op, setting)
+            gat = find_cell(cells, "gated", op, setting)
+            if not (blk and gat):
                 continue
             phrase = OPERATOR_PHRASE.get(op, f"altered by {op}")
             broke = f"the {e(recipient)} broke it" if recipient else "the rule was broken"
+            under = f" under {e(compaction_note(setting))}" if several else ""
             out.append(
-                f"With the rule {e(phrase)} at the handoff <code>{e(bid)}</code>, {broke} "
+                f"With the rule {e(phrase)} at the handoff <code>{e(bid)}</code>{under}, {broke} "
                 f"{pct(mut['cvr']['rate'])} of the time "
                 f"({e(mut['violations'])} of {e(mut['n'])} runs). "
                 f"Blocking alone left task success at {pct(blk['success']['rate'])}. "
@@ -917,7 +994,27 @@ def graded_section(
     trace: panels.TraceEvidence | None,
 ) -> str:
     cells = b.get("cells", [])
-    rows = "".join(cell_row(arm, op, find_cell(cells, arm, op)) for arm, op in expected_rows(cells))
+    # One block of rows per compaction setting, so runs with the summariser on and off are
+    # never shown as one row. A single setting leaves the table as it always was.
+    settings = compaction_settings(cells)
+    split = len(settings) > 1
+    rows = "".join(
+        cell_row(
+            arm,
+            op,
+            find_cell(here, arm, op),
+            compaction_note(setting) if split or (setting and setting.get("tokens")) else "",
+        )
+        for setting in settings or [None]
+        for here in [[c for c in cells if c.get("compaction") == setting]]
+        for arm, op in expected_rows(here)
+    )
+    settings_note = (
+        '<p class="note">These runs were made under different compaction settings, so each '
+        "setting has its own rows and its own effect comparisons.</p>"
+        if split
+        else ""
+    )
     sid = e(anchors.section(cid, bid))
     table = (
         '<table class="cells"><colgroup><col style="width:21%"><col style="width:13%">'
@@ -936,7 +1033,12 @@ def graded_section(
         f'<section class="bnd" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
         + panels.tablewrap(f"Runs of {cid} at {bid}", table)
-        + render_comparisons(cells, b.get("comparisons", []))
+        + settings_note
+        + (
+            render_comparisons_by_setting(cells, b.get("comparisons", []), settings)
+            if split
+            else render_comparisons(cells, b.get("comparisons", []))
+        )
         + exemplar
         + "</section>"
     )

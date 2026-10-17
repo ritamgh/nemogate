@@ -135,9 +135,17 @@ class FakeGraph:
             ],
         )
         yield SimpleNamespace(
-            metadata={"step": 3}, values={"_summarization_event": event, "messages": [delegation]}
+            config={"configurable": {"checkpoint_id": "ckpt-7"}},
+            parent_config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            metadata={"step": 3},
+            values={"_summarization_event": event, "messages": [delegation]},
         )
-        yield SimpleNamespace(metadata={"step": 0}, values={"messages": []})
+        yield SimpleNamespace(
+            config={"configurable": {"checkpoint_id": "ckpt-0"}},
+            parent_config=None,
+            metadata={"step": 0},
+            values={"messages": []},
+        )
 
 
 def trace_events(rc: RunConfig, *, ledger_hash: str | None = None, bad=None, handoff=None) -> list:
@@ -970,7 +978,7 @@ def test_carriage_json_labels_a_natural_drop_and_records_the_knob(tmp_path, monk
         env={"NEMOGATE_COMPACT_TOKENS": "8000"},
     )
     assert carriage == {
-        "classifier_version": 3,
+        "classifier_version": 4,
         "label": "DROPPED",
         "reason": "anchor_mentioned=False carried=False violated=True",
         "anchors": ["rm"],
@@ -986,6 +994,7 @@ def test_carriage_json_labels_a_natural_drop_and_records_the_knob(tmp_path, monk
             "delegations_checked": 1,
             "delegations": ["Add the flag."],
             "carried_by": None,
+            "lost_at": None,
         },
         "compaction": None,
         "knobs": {"NEMOGATE_COMPACT_TOKENS": "8000", "NEMOGATE_COMPACT_KEEP": None},
@@ -1011,6 +1020,7 @@ def test_carriage_json_carries_the_compaction_evidence_of_the_planner(tmp_path, 
         "cutoff_index": 4,
         "anchor_in_summary": False,
         "before_delegation": True,
+        "delegations": [{"fired": True, "cutoff_index": 4, "anchor_in_summary": False}],
     }
     assert carriage["knobs"] == {"NEMOGATE_COMPACT_TOKENS": "8000", "NEMOGATE_COMPACT_KEEP": "2"}
 

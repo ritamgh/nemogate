@@ -140,6 +140,9 @@ def build_team(
                 backend=backend,
                 trigger=("tokens", trigger_tokens),
                 keep=("messages", keep_messages),
+                # The constructor's default (4000) shows the summariser only the tail of the
+                # history, cutting the user's rule off its head; create_deep_agent passes None.
+                trim_tokens_to_summarize=None,
             )
         )
     with _general_purpose_disabled(chosen["planner"]):
