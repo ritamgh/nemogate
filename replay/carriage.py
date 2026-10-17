@@ -331,6 +331,13 @@ def classify(
         )
     looked = [_look_in(d.content, heard) for d in received]
     counted = _counted(received, [*(v.step for v in violations), *blocked_steps])
+    if not counted:  # the rule broke before anything was delegated: no handoff to judge
+        return result(
+            Label.UNKNOWN,
+            f"the rule was broken before the first delegation at {boundary}",
+            in_planner=True,
+            guard=True,
+        )
     carried_by = next((i for i in counted if looked[i][1] is not None), None)
     mentioned_by = next((i for i, (seen, _, _) in enumerate(looked) if seen), None)
     lost_at = _lost_at(looked, counted)
