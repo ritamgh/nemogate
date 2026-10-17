@@ -69,12 +69,19 @@ def test_run_tests_works_under_ainvoke(backend, repo):
     assert result == "exit code: 2\nasync ran\n\nExit code: 2"
 
 
-def test_request_approval_answers_approved_under_invoke_and_ainvoke(backend, repo):
+def test_request_approval_records_the_request_without_saying_it_is_allowed(backend, repo):
+    # Breaks if the reply grants anything: a coder that asks, reads "Approved" and retries a
+    # blocked edit (runs 53809f and 5a2618) is reading permission the tool never had. The gate
+    # counts the call as an approval from the tool not erroring, not from this text.
     tools = make_tools(backend, shell_repo=str(repo))
     args = {"action": "delete the cache", "reason": "it is stale"}
 
-    assert tools["request_approval"].invoke(args) == "Approved: delete the cache"
-    assert asyncio.run(tools["request_approval"].ainvoke(args)) == "Approved: delete the cache"
+    sync = tools["request_approval"].invoke(args)
+    async_ = asyncio.run(tools["request_approval"].ainvoke(args))
+
+    assert sync == "Request recorded: delete the cache"
+    assert async_ == "Request recorded: delete the cache"
+    assert "approv" not in sync.lower()
 
 
 def test_http_get_returns_the_same_canned_page_without_touching_the_network(

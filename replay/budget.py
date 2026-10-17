@@ -28,6 +28,7 @@ class Plan:
     bucket_usd: float
     cost_per_run: float
     pairs: int  # number of (arm, operator) pairs per task
+    source_runs: int  # natural runs per task and repetition that only exist to be forked: 0 or 1
     n_tasks: int
     n: int  # runs per arm per task
     planned_usd: float
@@ -58,16 +59,25 @@ def plan(
     n_tasks: int,
     config: AppConfig,
     spent_usd: float,
+    paired: bool = False,
 ) -> Plan:
     if bucket not in SHARES:
         raise ValueError(f"unknown bucket {bucket!r}; choose from {', '.join(SHARES)}")
-    n_pairs = len(pairs(arms, operators))
+    run_pairs = pairs(arms, operators)
+    n_pairs = len(run_pairs)
     if n_pairs == 0:
         raise ValueError("no (arm, operator) pair to run: natural pairs only with none")
+    # `python -m replay.runner --paired` forks every non-natural pair from a natural source run.
+    # A natural pair in the plan is already that source; otherwise it is extra.
+    forks = any(a is not Arm.natural for a, _ in run_pairs)
+    source_runs = int(forks and paired and (Arm.natural, Operator.none) not in run_pairs)
     bucket_usd = SHARES[bucket] * config.budget.total_usd
-    n = runs_per_cell(bucket_usd, cost_per_run, n_pairs, n_tasks)
+    n = runs_per_cell(bucket_usd, cost_per_run, n_pairs + source_runs, n_tasks)
     stop_usd = config.budget.stop_at_fraction * config.budget.total_usd
-    unit = cost_per_run * n_pairs * n_tasks
+    # Every run is priced at `cost_per_run`, which must be the cost of a full run (--from-runs
+    # leaves fork records out for that reason): a fork replays only the part after the boundary,
+    # so a paired sweep is over-counted a little, never under-counted.
+    unit = cost_per_run * (n_pairs + source_runs) * n_tasks
     n_fit = _floor((stop_usd - spent_usd) / unit)
     capped = n_fit < n
     n = min(n, n_fit)
@@ -76,6 +86,7 @@ def plan(
         bucket_usd=bucket_usd,
         cost_per_run=cost_per_run,
         pairs=n_pairs,
+        source_runs=source_runs,
         n_tasks=n_tasks,
         n=n,
         planned_usd=n * unit,
@@ -107,9 +118,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--operators", required=True, nargs="+", type=Operator, choices=list(Operator)
     )
     parser.add_argument("--tasks", required=True, nargs="+", help="task ids; only counted")
+    parser.add_argument(
+        "--paired",
+        action="store_true",
+        help="count runs as `python -m replay.runner --paired` makes them: the arms other than "
+        "natural are forks of a natural source run, and that run is paid for",
+    )
     cost = parser.add_mutually_exclusive_group(required=True)
     cost.add_argument("--cost-per-run", type=_positive, help="USD per run")
-    cost.add_argument("--from-runs", type=Path, help="dir whose */record.json give the mean cost")
+    cost.add_argument(
+        "--from-runs",
+        type=Path,
+        help="dir whose */record.json give the mean cost; fork records (a fork.json beside them) "
+        "are left out, as they cost only the part after the boundary",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -117,6 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             records = [
                 RunRecord.model_validate_json(p.read_text(encoding="utf-8"))
                 for p in sorted(args.from_runs.glob("*/record.json"))
+                if not (p.parent / "fork.json").exists()
             ]
             cost_per_run = mean_cost(records)
         else:
@@ -131,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             n_tasks=len(args.tasks),
             config=load_config(_CONFIG_PATH),
             spent_usd=total_spent(),
+            paired=args.paired,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -139,6 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"bucket usd: {p.bucket_usd:.2f}")
     print(f"cost per run usd: {p.cost_per_run:.4f}")
     print(f"pairs: {p.pairs}")
+    print(f"extra natural source runs per repetition: {p.source_runs}")
     print(f"tasks: {p.n_tasks}")
     print(f"spent usd: {p.spent_usd:.2f}")
     print(f"stop line usd: {p.stop_usd:.2f}")

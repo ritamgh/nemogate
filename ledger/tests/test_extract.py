@@ -119,14 +119,25 @@ def test_compile_rule_returns_a_closed_list_check_or_none(reply, expected):
     spy = Spy([structured("CompiledCheck", reply)])
     assert compile_rule(spy, "a rule", AGENTS, TOOLS) == expected
     assert spy.prompts == [
-        COMPILE_PROMPT.format(rule="a rule", agents="lead, worker", tools="write_file, fetch, ask")
+        COMPILE_PROMPT.format(
+            rule="a rule", agents="lead, worker", tools="write_file, fetch, ask", text="a rule"
+        )
     ]
 
 
 def test_prompts_name_no_task_or_repo():
     # Generality (AGENTS.md rule 5): agents and tools come in as arguments.
     for prompt in (EXTRACT_PROMPT, COMPILE_PROMPT):
-        for word in ("migrations", "RISK", "planner", "coder", "reviewer", "http_get"):
+        for word in (
+            "migrations",
+            "RISK",
+            "planner",
+            "coder",
+            "reviewer",
+            "http_get",
+            "requirements",
+            "dependenc",
+        ):
             assert word not in prompt
 
 
