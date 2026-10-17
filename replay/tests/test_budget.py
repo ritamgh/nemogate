@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from replay.app import pairs
 from replay.budget import SHARES, Plan, main, mean_cost, plan, runs_per_cell
 from schemas.config import BudgetConfig, load_config
 from schemas.enums import Arm, Operator, Role
@@ -157,7 +158,7 @@ def test_plan_does_not_pay_twice_for_a_natural_arm_that_is_the_source():
     p = plan(
         bucket="kill_gate",
         cost_per_run=0.05,
-        arms=[Arm.natural, Arm.gated],
+        arms=[Arm.natural, Arm.mutated],
         operators=[Operator.none, Operator.drop],
         n_tasks=1,
         config=CONFIG,
@@ -283,3 +284,33 @@ def test_cli_from_runs_with_only_fork_records_has_nothing_to_average(spend_log, 
     (runs / "r-fork" / "fork.json").write_text("{}")
     with pytest.raises(SystemExit):
         main([*KILL_GATE, "--tasks", "A", "--from-runs", str(runs)])
+
+
+def test_plan_accepts_the_blocking_arms_with_operator_none():
+    # Breaks if gated or block_only x none is refused: the budget check would print "no pair
+    # to run" for the sweep that measures the gate on natural loss. 2 pairs, 6.0 / (0.05 * 2) = 60
+    # (independent runs, no source run).
+    p = plan(
+        bucket="kill_gate",
+        cost_per_run=0.05,
+        arms=[Arm.block_only, Arm.gated],
+        operators=[Operator.none],
+        n_tasks=1,
+        config=CONFIG,
+        spent_usd=0.0,
+    )
+    assert (p.pairs, p.n) == (2, 60)
+
+
+def test_pairs_keeps_natural_unmutated_and_mutated_mutated():
+    # Breaks if opening gated x none also lets natural run an operator or mutated run without
+    # one (mutated x none is just the natural arm under another name).
+    arms = [Arm.natural, Arm.mutated, Arm.block_only, Arm.gated]
+    assert pairs(arms, [Operator.none, Operator.drop]) == [
+        (Arm.natural, Operator.none),
+        (Arm.mutated, Operator.drop),
+        (Arm.block_only, Operator.none),
+        (Arm.block_only, Operator.drop),
+        (Arm.gated, Operator.none),
+        (Arm.gated, Operator.drop),
+    ]
