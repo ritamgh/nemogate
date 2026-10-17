@@ -1,0 +1,7 @@
+# Allow-list for every docker build run from the repo root: only what report/Dockerfile copies
+# enters the context, so .env, runs/ and the rest of the repo never do. (A root file, because the
+# classic builder ignores a per-Dockerfile ignore file.)
+*
+!report/__init__.py
+!report/serve.py
+!results/site/
