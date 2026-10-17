@@ -168,10 +168,10 @@ def test_gated_fails_closed_on_a_reply_missing_the_required_line(tmp_path, backe
 
 
 def test_gated_stops_failing_closed_after_a_bounded_number_of_retries(tmp_path, backend):
-    # Breaks if fail-closed can loop forever. With the operator on the return boundary every
-    # reply loses the required line, so without a cap the planner would re-delegate until the
-    # recursion limit and the run (and the runner's sweep) would crash instead of being graded.
-    good = "Fine.\nRISK: the default limit changes results."
+    # Breaks if fail-closed can loop forever. A reviewer that never writes the required line
+    # would otherwise be re-delegated until the recursion limit, and the run (and the runner's
+    # sweep) would crash instead of being graded. No operator: an output rule's own return
+    # boundary cannot be mutated (gate._check_target), and the reviewer misses it on its own.
     trace, ledger = run(
         tmp_path,
         backend,
@@ -179,10 +179,10 @@ def test_gated_stops_failing_closed_after_a_bounded_number_of_retries(tmp_path, 
         target="return:reviewer->planner",
         constraint="C-005",
         arm="gated",
-        operator="drop",
+        operator="none",
         planner=[delegate("reviewer", "Review it.")] * 3 + [AIMessage(content="Done.")],
-        reviewer=[AIMessage(content=good)] * 3,
-        helper=[picks(2)] * 3,
+        reviewer=[AIMessage(content="Fine.")] * 3,
+        helper=[],
     )
     first, second, third = returned(trace)
     assert RISK_RULE in first and RISK_RULE in second
@@ -393,3 +393,50 @@ def test_a_first_handoff_that_would_come_out_empty_ends_the_run(tmp_path, backen
             coder=[AIMessage(content="Fine.")],
             helper=[picks(1), picks(1)],
         )
+
+
+EACH_LEDGER = LEDGER.replace("agent: reviewer}}", "agent: reviewer, each: true}}")
+
+
+@pytest.mark.parametrize("ledger", [LEDGER, EACH_LEDGER], ids=["some-reply", "each-reply"])
+def test_a_reply_withheld_by_fail_closed_is_marked_and_not_graded(tmp_path, backend, ledger):
+    # Breaks if a withheld reply is graded: under each: true the reply the gate caught would
+    # count against gated, the arm that caught it. The gate marks it with a tool-less gate_block
+    # right after the boundary_in, and the oracle skips it.
+    assert "each: true" in EACH_LEDGER and EACH_LEDGER != LEDGER
+    good = "Fine.\nRISK: the default limit changes results."
+    trace, graded = run(
+        tmp_path,
+        backend,
+        ledger=ledger,
+        target="delegation:planner->reviewer",
+        constraint="C-005",
+        arm="gated",
+        operator="none",
+        planner=[delegate("reviewer", "Review it.")] * 2 + [AIMessage(content="Done.")],
+        reviewer=[AIMessage(content="Fine."), AIMessage(content=good)],
+        helper=[],
+    )
+    events = [e for e in trace if e.boundary == "return:reviewer->planner"]
+    kinds = [(type(e).__name__, getattr(e, "tool", "-")) for e in events]
+    assert kinds == [
+        ("BoundaryOut", "-"), ("BoundaryIn", "-"), ("GateBlock", None),
+        ("BoundaryOut", "-"), ("BoundaryIn", "-"),
+    ]  # fmt: skip
+    assert evaluate(graded, trace, []) == []
+
+
+@pytest.mark.parametrize(("ledger", "count"), [(LEDGER, 0), (EACH_LEDGER, 1)], ids=["some", "each"])
+def test_each_reply_counts_a_line_lost_in_one_of_two_reviews(tmp_path, backend, ledger, count):
+    # The T12 shape: two reviews, the line in only one. Some-reply passes it; each-reply does not.
+    good = "Fine.\nRISK: the default limit changes results."
+    trace, graded = run(
+        tmp_path,
+        backend,
+        ledger=ledger,
+        target="delegation:planner->reviewer",
+        constraint="C-005",
+        planner=[delegate("reviewer", "Review it.")] * 2 + [AIMessage(content="Done.")],
+        reviewer=[AIMessage(content=good), AIMessage(content="Second look: fine.")],
+    )
+    assert len(evaluate(graded, trace, [])) == count
