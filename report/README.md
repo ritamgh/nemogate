@@ -58,7 +58,9 @@ What it shows:
   includes the gate's re-pin, and the older line and the "never came up" line are not repeated: rows "Rule in
   the handoff" (carried) and "Rule lost in the handoff" (dropped), columns "Agent kept it" and
   "Agent broke it", so `CARRIED_OBEYED`, `DISOBEYED`, `DROPPED_LUCKY` and `DROPPED` each fill one
-  square. Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
+  square. Under block_only and gated the second column reads "Agent broke it or tried to" and a
+  line says blocked attempts count there while the violation rate counts only what got through
+  (a blocked attempt is labelled `DISOBEYED`). Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
   carriage.json) are counted under it as "Not placed". Its CSS (`presence.css`) is added only to
   a page that has a grid, so a page without one is unchanged. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect

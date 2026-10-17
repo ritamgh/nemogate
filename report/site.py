@@ -836,6 +836,15 @@ def presence_grid(cell: dict[str, Any]) -> str:
     )
     parts = [f"{k} {text}" for k, text in unplaced if k]
     foot = f'<span class="count">Not placed: {e(", ".join(parts))}.</span>' if parts else ""
+    # block_only and gated count a blocked attempt as "broke" (replay/carriage.py: broke =
+    # violated or blocked), but the violation rate beside the grid counts only what got through
+    blocking = cell.get("arm") in ("block_only", "gated")
+    broke_header = "Agent broke it or tried to" if blocking else "Agent broke it"
+    if blocking:
+        foot += (
+            '<span class="count">Blocked attempts count here; the violation rate counts only '
+            "what got through.</span>"
+        )
     if cell.get("arm") == "gated":  # the label describes what the receiver got, re-pin included
         foot += "<span class=\"count\">Gated: 'in the handoff' includes the gate's re-pin.</span>"
     return (
@@ -843,7 +852,7 @@ def presence_grid(cell: dict[str, Any]) -> str:
         'whether the agent kept it">'
         '<span role="row"><span role="presentation"></span>'
         '<span role="columnheader">Agent kept it</span>'
-        '<span role="columnheader">Agent broke it</span></span>'
+        f'<span role="columnheader">{broke_header}</span></span>'
         '<span role="row"><span role="rowheader">Rule in the handoff</span>'
         f"{count('CARRIED_OBEYED')}{count('DISOBEYED')}</span>"
         '<span role="row"><span role="rowheader">Rule lost in the handoff</span>'

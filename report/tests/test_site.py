@@ -1090,6 +1090,27 @@ def test_a_block_only_cell_without_an_operator_gets_the_grid_and_no_note():
     assert "re-pin" not in text
 
 
+def test_the_blocking_arms_name_the_broke_column_for_blocked_attempts_too():
+    # Breaks if a block_only or gated grid says "Agent broke it" over counts that include
+    # blocked attempts (replay/carriage.py: broke = violated or blocked) while the violation
+    # rate beside it counts only what got through: "0% . 0 of 4 runs" over "2 broke it".
+    for arm in ("block_only", "gated"):
+        text = operator_none_card(arm, {"CARRIED_OBEYED": 3, "DISOBEYED": 1, "DROPPED": 2})
+        assert "Agent kept it Agent broke it or tried to" in text
+        assert (
+            "Blocked attempts count here; the violation rate counts only what got through." in text
+        )
+
+
+def test_a_natural_grid_keeps_the_plain_broke_column_and_no_blocked_attempts_line():
+    # Breaks if the blocking arms' wording leaks into the natural arm, where nothing is blocked
+    # and "broke it" is exactly the violation count.
+    text = natural_card(LABELS)
+
+    assert "Agent kept it Agent broke it Rule" in text
+    assert "tried to" not in text and "Blocked attempts" not in text
+
+
 def test_a_gated_cell_without_an_operator_gets_the_grid_and_says_the_re_pin_counts():
     # Breaks if a gated grid reads as the planner's own handoff: the label describes what the
     # receiver got, with the gate's re-pin included.
