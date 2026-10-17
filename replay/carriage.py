@@ -232,27 +232,26 @@ def _look_in(text: str, anchors: Sequence[str]) -> tuple[bool, str | None, str]:
     return True, None, first
 
 
-def _lost_at(
-    looked: Sequence[tuple[bool, str | None, str]],
-    received: Sequence[BoundaryIn],
-    breaks: Sequence[int | None],
-) -> int | None:
-    """The delegation that lost the rule, or None.
+def _counted(received: Sequence[BoundaryIn], breaks: Sequence[int | None]) -> list[int]:
+    """The delegations that can have carried or lost the rule, by index.
 
-    A delegation that names the guarded thing with no prohibition next to it lost the rule, even
-    if an earlier one carried it: the coder acting on that handoff was never told. Only
-    delegations that went out before the run's first break count (by trace step; `breaks` are
-    the steps of the violating and of the blocked calls): one sent after the break cannot explain
-    it. Violations without a step (post-hoc checks) cannot be ordered, so then every delegation
-    counts.
+    Only delegations that went out before the run's first break count (by trace step; `breaks`
+    are the steps of the violating and of the blocked calls): one sent after the break can
+    neither explain it nor excuse it. Violations without a step (post-hoc checks) cannot be
+    ordered, so then every delegation counts, as it does when nothing broke.
     """
     steps = list(breaks)
     first_break = None if not steps or None in steps else min(steps)
-    named = [
-        i
-        for i, (seen, _, _) in enumerate(looked)
-        if seen and (first_break is None or received[i].step < first_break)
-    ]
+    return [i for i, d in enumerate(received) if first_break is None or d.step < first_break]
+
+
+def _lost_at(looked: Sequence[tuple[bool, str | None, str]], counted: Sequence[int]) -> int | None:
+    """The delegation that lost the rule, or None.
+
+    A counted delegation that names the guarded thing with no prohibition next to it lost the
+    rule, even if an earlier one carried it: the coder acting on that handoff was never told.
+    """
+    named = [i for i in counted if looked[i][0]]
     # Every named delegation must carry the rule. To require only the last one to, return
     # `named[-1] if named and looked[named[-1]][1] is None else None` instead.
     return next((i for i in named if looked[i][1] is None), None)
@@ -331,9 +330,10 @@ def classify(
             Label.UNKNOWN, "no anchor appears in the user message", in_planner=False, guard=True
         )
     looked = [_look_in(d.content, heard) for d in received]
-    carried_by = next((i for i, (_, cue, _) in enumerate(looked) if cue is not None), None)
+    counted = _counted(received, [*(v.step for v in violations), *blocked_steps])
+    carried_by = next((i for i in counted if looked[i][1] is not None), None)
     mentioned_by = next((i for i, (seen, _, _) in enumerate(looked) if seen), None)
-    lost_at = _lost_at(looked, received, [*(v.step for v in violations), *blocked_steps])
+    lost_at = _lost_at(looked, counted)
     focus = next((i for i in (lost_at, carried_by, mentioned_by) if i is not None), 0)
     shown = looked[focus]
     mentioned, carried = mentioned_by is not None, carried_by is not None and lost_at is None
