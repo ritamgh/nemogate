@@ -21,7 +21,9 @@ What it shows:
   gated runs did in the same case; when gated was never broken, the rule is one the gate blocks
   before the call (`blocked_before_call` in the results, from `gate.policy`) and some gated run
   was blocked, it adds that the 0 comes from blocking, which block-only gets by construction;
-  for any other rule it adds nothing of the kind; "No comparison has enough runs yet" when there
+  for any other rule it adds nothing of the kind; when that handoff was run under more than one
+  compaction setting, the sentence names the setting it quotes and says the others have their own
+  rows below; "No comparison has enough runs yet" when there
   is none), then a key defining the four arms and the operators in method words.
 - Under the key, "What each part fixes": four static lines. The gate blocks a tool call that
   breaks a rule checkable before the call (path, tool and approval rules), whatever the cause, and

@@ -947,3 +947,47 @@ def test_the_header_says_never_exercised_runs_are_not_left_out(rich):
     text = text_of(site.render(rich))
     assert "inconclusive runs, left out of every rate below" in text
     assert "Natural runs where the rule never came up are not among them" in text
+
+
+def load_bearing_comparison(setting, diff, lo, hi, op="drop"):
+    return {
+        "name": "load_bearing",
+        "operator": op,
+        "compaction": setting,
+        "a": {"arm": "mutated", "operator": op},
+        "b": {"arm": "natural", "operator": "none"},
+        "metric": "cvr",
+        "diff": diff,
+        "lo": lo,
+        "hi": hi,
+    }
+
+
+def verdict_boundary(settings):
+    """Natural runs broke the rule 2 of 10 times and mutated runs 8 of 10, under each setting."""
+    cells = [
+        with_setting(make_cell(arm, op, 10, broken, 8), setting)
+        for setting in settings
+        for arm, op, broken in (("natural", "none", 2), ("mutated", "drop", 8))
+    ]
+    comparisons = [load_bearing_comparison(setting, 0.6, 0.3, 0.8) for setting in settings]
+    return {"delegation:planner->coder": {"cells": cells, "comparisons": comparisons}}
+
+
+def test_the_verdict_names_the_compaction_setting_when_the_boundary_has_several():
+    # Breaks if the headline sentence quotes one setting's rates and effect with nothing to say
+    # that another setting exists on the same handoff and was not the one shown.
+    page = site.render(one_constraint(verdict_boundary([OFF, ON])))
+
+    text = verdict_text(page)
+    assert "At C-900 on delegation:planner->coder, under compaction off, with the rule" in text
+    assert text.endswith(
+        "Other compaction settings were run at this handoff; each has its own rows below."
+    )
+
+
+def test_the_verdict_of_a_single_compaction_setting_is_unchanged():
+    # Breaks if the headline gains a compaction clause when nothing was split.
+    page = site.render(one_constraint(verdict_boundary([OFF])))
+
+    assert "compaction" not in verdict_text(page)

@@ -705,14 +705,22 @@ def render_verdict(results: dict[str, Any], anchors: Anchors) -> str:
         else "There are no gated runs of this case yet."
     )
     phrase = OPERATOR_PHRASE.get(op, f"altered by {op}")
+    # The sentence quotes one compaction setting's cells: name it, and say others exist
+    several = len(compaction_settings(cells)) > 1
+    under = f", under {e(compaction_note(comp.get('compaction')))}" if several else ""
+    others = (
+        " Other compaction settings were run at this handoff; each has its own rows below."
+        if several
+        else ""
+    )
     return (
         '<p class="verdict-line"><strong>Largest effect found.</strong> '
         f'At <a href="#{e(anchors.section(cid, bid))}"><code>{e(cid)}</code> on '
-        f"<code>{e(bid)}</code></a>, with the rule {e(phrase)}, it was broken in "
+        f"<code>{e(bid)}</code></a>{under}, with the rule {e(phrase)}, it was broken in "
         f"{e(mut['violations'])} of {e(mut['n'])} runs ({pct(mut['cvr']['rate'])}) against "
         f"{e(nat['violations'])} of {e(nat['n'])} with no sabotage ({pct(nat['cvr']['rate'])}): "
         f"{e(pp(comp['diff']))} (95% interval {e(pp(comp['lo']))} to {e(pp(comp['hi']))}"
-        f"{e(tail)}). {gated}</p>"
+        f"{e(tail)}). {gated}{others}</p>"
     )
 
 
