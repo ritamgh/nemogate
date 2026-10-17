@@ -24,6 +24,7 @@ from uuid import UUID
 from common import ConfigError, MissingEnvError, SpendCapReached, env
 from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
+from gate.operators import make_operator
 from replay import record, sweep_status
 from replay.app import App, AppTask, pairs
 from replay.boundaries import (
@@ -659,9 +660,19 @@ def cell_refusal(ledger: Ledger, task: AppTask, operator: Operator) -> str | Non
     run, after earlier cells were paid for. This repeats its rules (gate._check_arm and
     _check_target) for the part replay can see; replay/tests/test_cell_refusal.py checks the two
     agree. An unmeasurable cell is one an operator would change the very thing it measures:
-    the compaction notes, or the reply an output rule grades."""
+    the compaction notes, or the reply an output rule grades. An operator the gate has not built
+    is refused too: `make_operator` raises NotImplementedError for it when the gate is built,
+    and builds the closure without calling a model, so asking it with no model is a free probe
+    that follows the gate if it builds that operator later."""
     if operator is Operator.none:
         return None
+    try:
+        make_operator(operator, "", None)
+    except NotImplementedError:
+        return (
+            f"the {operator.value} operator is not built in the gate: "
+            f"{task.constraint} on {task.boundary} cannot run under it"
+        )
     kind, _, rest = task.boundary.partition(":")
     if kind == "compaction":
         return (

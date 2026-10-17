@@ -671,7 +671,14 @@ delegations to the same agent are not told apart; planner delegations here are s
   blur. Mutate the delegation to that agent instead; operator `none` is never refused. It repeats
   `gate._check_arm` / `_check_target` because `gate` exposes no public form of them;
   `replay/tests/test_cell_refusal.py` runs a grid of (rule type, boundary, operator) through both
-  and fails if they disagree.
+  and fails if they disagree. An operator the gate has not built (today `return_corrupt`, which
+  raises `NotImplementedError` in `gate.operators.make_operator`) is refused the same way, on
+  every cell, so `--operators drop return_corrupt` stops before the first drop run is paid for.
+  "Not built" is not a name in replay: `cell_refusal` calls `make_operator(operator, "", None)`,
+  which builds its closure without calling a model, so building the operator in `gate` lifts the
+  refusal with no change here. `pairs()` still lists the operator: it only plans the arm by
+  operator grid and does not know the gate, and dropping the cell silently would hide the typo or
+  the stretch operator the caller asked for.
 - `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--top-up] [--yes]`
   refuses with exit code 2 unless `NEMOGATE_LIVE=1`; it prints `planned runs: N` and, without
   `--yes`, exits 1 pointing at `python -m replay.budget`. With `--yes` it runs and prints one

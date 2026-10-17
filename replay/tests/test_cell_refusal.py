@@ -8,6 +8,7 @@ import pytest
 
 from common.llm import get_model
 from gate import build_middleware
+from gate.operators import make_operator
 from replay import runner
 from replay.tests.test_runner import Harness, stub_run_one
 from schemas.enums import Arm, Operator
@@ -49,12 +50,7 @@ def cell(constraint: str, boundary: str):
     return SimpleNamespace(id="X1", constraint=constraint, boundary=boundary)
 
 
-# return_corrupt is a stretch operator the gate cannot build (NotImplementedError) on any cell, so
-# it says nothing about which cells are unmeasurable.
-OPERATORS = [o for o in Operator if o is not Operator.return_corrupt]
-
-
-@pytest.mark.parametrize("operator", OPERATORS, ids=lambda o: o.value)
+@pytest.mark.parametrize("operator", list(Operator), ids=lambda o: o.value)
 @pytest.mark.parametrize("boundary", BOUNDARIES)
 @pytest.mark.parametrize("rule", RULES)
 def test_replay_refuses_exactly_the_cells_the_gate_refuses(tmp_path, rule, boundary, operator):
@@ -77,7 +73,10 @@ def test_replay_refuses_exactly_the_cells_the_gate_refuses(tmp_path, rule, bound
     try:
         build_middleware(run_config, helper=get_model("helper", stub_responses=[]))
         gate_refuses = False
-    except ValueError:
+    except (
+        ValueError,
+        NotImplementedError,
+    ):  # an operator the gate has not built raises the latter
         gate_refuses = True
 
     why = runner.cell_refusal(LEDGER, cell(rule, boundary), operator)
@@ -85,6 +84,31 @@ def test_replay_refuses_exactly_the_cells_the_gate_refuses(tmp_path, rule, bound
     assert (why is not None) == gate_refuses
     if why is not None:
         assert boundary in why
+
+
+def test_an_operator_the_gate_cannot_build_is_refused_on_a_cell_the_gate_would_otherwise_accept():
+    # Breaks if replay accepts return_corrupt: the gate raises NotImplementedError when it builds
+    # the operator (gate/operators.py), after every earlier cell of the sweep was paid for.
+    why = runner.cell_refusal(
+        LEDGER, cell("C-004", "delegation:planner->coder"), Operator.return_corrupt
+    )
+    assert why == (
+        "the return_corrupt operator is not built in the gate: "
+        "C-004 on delegation:planner->coder cannot run under it"
+    )
+
+
+def test_the_unbuilt_check_follows_the_gate_so_a_built_operator_is_not_refused():
+    # Breaks if "unbuilt" is a hardcoded name: every operator the gate builds must pass, and the
+    # answer must come from make_operator itself, so building return_corrupt later lifts it.
+    for operator in Operator:
+        try:
+            make_operator(operator, "a rule", None)
+            built = True
+        except NotImplementedError:
+            built = False
+        why = runner.cell_refusal(LEDGER, cell("C-004", "delegation:planner->coder"), operator)
+        assert (why is None) == built
 
 
 def test_the_refusal_names_the_rule_the_boundary_and_the_way_out():
@@ -128,6 +152,18 @@ def test_a_sweep_with_an_unmeasurable_cell_is_refused_before_any_run_starts(tmp_
 
     with pytest.raises(runner.CellRefused, match="C-005 is an output rule"):
         h.runner.run(["X1", "X2"], [Arm.mutated], [Operator.drop], 1)
+    assert calls == []
+
+
+def test_a_sweep_with_an_unbuilt_operator_is_refused_before_any_run_starts(tmp_path):
+    # Breaks if `--operators drop return_corrupt` pays for the drop seeds and stops only when
+    # the gate cannot build return_corrupt.
+    h = ledger_h(tmp_path)
+    calls: list = []
+    stub_run_one(h, calls)
+
+    with pytest.raises(runner.CellRefused, match="return_corrupt operator is not built"):
+        h.runner.run(["X1"], [Arm.mutated], [Operator.drop, Operator.return_corrupt], 1)
     assert calls == []
 
 
