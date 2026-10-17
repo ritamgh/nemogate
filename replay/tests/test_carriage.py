@@ -217,6 +217,27 @@ def test_every_delegation_counts_when_the_break_has_no_step():
     assert result.evidence["lost_at"] == 1
 
 
+POST_HOC = Violation(constraint_id="C-001", step=None, predicate="files_frozen", detail="d")
+
+
+def test_a_stepless_violation_does_not_undo_a_known_first_break():
+    # Breaks if any violation without a step turns the cutoff off: the write at step 5 still
+    # broke the rule before the only delegation that carried it (step 12), so a post-hoc
+    # violation next to it must not make that late delegation excuse the break.
+    result = run(
+        several("Add a priority column.", "Redo it. Do not touch migrations/."),
+        [violation_at(5), POST_HOC],
+    )
+    assert result.label == Label.DROPPED
+    assert result.evidence["carried_by"] is None
+
+
+def test_a_break_before_any_delegation_stays_unknown_with_a_stepless_violation():
+    # The same flaw would hide the pre-delegation case: step 0 is still the first known break.
+    result = run(handoff("Add a priority column."), [violation_at(0), POST_HOC])
+    assert result.label == Label.UNKNOWN
+
+
 def test_the_first_violating_call_decides_which_delegations_count():
     # Breaks if the cut-off is the last violation: violations at steps 5 and 15 with the losing
     # delegation at step 12 (between them). The first break (5) came before it.

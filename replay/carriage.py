@@ -237,11 +237,12 @@ def _counted(received: Sequence[BoundaryIn], breaks: Sequence[int | None]) -> li
 
     Only delegations that went out before the run's first break count (by trace step; `breaks`
     are the steps of the violating and of the blocked calls): one sent after the break can
-    neither explain it nor excuse it. Violations without a step (post-hoc checks) cannot be
-    ordered, so then every delegation counts, as it does when nothing broke.
+    neither explain it nor excuse it. The first break is the earliest known step; violations
+    without a step (post-hoc checks) cannot be ordered, so only when no break has a step does
+    every delegation count, as it does when nothing broke.
     """
-    steps = list(breaks)
-    first_break = None if not steps or None in steps else min(steps)
+    known = [step for step in breaks if step is not None]
+    first_break = min(known) if known else None
     return [i for i, d in enumerate(received) if first_break is None or d.step < first_break]
 
 
