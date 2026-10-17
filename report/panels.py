@@ -292,9 +292,15 @@ def violating_action(run: RunView) -> tuple[str, Event | None]:
         return "<p>This run's violations.json has no entry for the rule.</p>", None
     check = f"<code>{e(viol.predicate)}</code>: {e(viol.detail)}"
     if viol.step is None:
-        return kv(
-            [("check", check), ("action", "no single action: judged on the final files")]
-        ), None
+        # An output rule has no step only when the graded agent's reply never arrived: none was
+        # sent, or the gate withheld every one (oracle/evaluate.py, _must_include).
+        action = (
+            "no reply to grade: the agent's reply never arrived (none was sent, or the gate "
+            "withheld every one)"
+            if viol.predicate == "output_must_include"
+            else "no single action: judged on the final files"
+        )
+        return kv([("check", check), ("action", action)]), None
     ev = run.at_step(viol.step)
     if ev is None:
         return kv([("check", check), ("action", f"step {e(viol.step)} is not in the trace")]), None

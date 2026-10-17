@@ -348,20 +348,26 @@ SHARES = {"dev": 0.20, "kill_gate": 0.10, "main_sweep": 0.40, "repair": 0.15, "f
 def runs_per_cell(bucket_usd: float, cost_per_run: float, n_pairs: int, n_tasks: int) -> int
     # floor(bucket / (cost_per_run * n_pairs * n_tasks)); ValueError unless all inputs > 0
 def plan(*, bucket: str, cost_per_run: float, arms, operators, n_tasks: int, config: AppConfig,
-         spent_usd: float, paired: bool = False) -> Plan
-    # Plan(bucket, bucket_usd, cost_per_run, pairs, source_runs, n_tasks, n, planned_usd,
-    #      spent_usd, stop_usd, capped): n from runs_per_cell with
-    # n_pairs = len(app.pairs(...)) + source_runs; source_runs is 1 when the plan has a
-    # non-natural pair, `paired` is True and (natural, none) is not itself a pair (the
-    # natural source runs `apaired` makes only to fork from), else 0. Every run is priced at
-    # cost_per_run, which must be a full run's cost.
+         spent_usd: float, paired: bool = False, refused=()) -> Plan
+    # Plan(bucket, bucket_usd, cost_per_run, pairs, source_runs, n_tasks, runs, n, planned_usd,
+    #      spent_usd, stop_usd, capped): n = floor(bucket / (cost_per_run * runs)), where runs
+    # (per repetition) sums, over tasks, the app.pairs(...) cells not in `refused` (a set of
+    # (task index, arm, operator)) plus source_runs for a task with a non-natural cell left;
+    # source_runs is 1 when the plan has a non-natural pair, `paired` is True and
+    # (natural, none) is not itself a pair (the natural source runs `apaired` makes only to fork
+    # from), else 0. `pairs` counts the pairs left for at least one task. ValueError when every
+    # cell is refused. Every run is priced at cost_per_run, which must be a full run's cost.
     # stop_usd = stop_at_fraction * total_usd; if spent + planned would pass stop_usd, n is
     # lowered to the largest value that fits and capped=True.
 def mean_cost(records: Iterable[RunRecord]) -> float     # ValueError on none
 main(): `python -m replay.budget --bucket kill_gate --arms natural mutated --operators none drop
         --tasks <id> <id> (--cost-per-run X | --from-runs runs/)` prints the plan, one fact per
         line, ending with `N per arm per task: <n>`. Exit 1 when n < 1. spent_usd from
-        common.spend.total_spent(). No model calls, no Contree.
+        common.spend.total_spent(). No model calls, no Contree. Task ids are the default app's
+        (an unknown one exits 2): the cells the runner would refuse for them
+        (`runner.default_refusals`, the runner's own check) come first as
+        `refused: <task> <arm> <operator>: <reason>` and are left out of the count, so its N is
+        the N of the sweep that can run once those cells are dropped.
 ```
 
 ## stats.py
@@ -430,7 +436,10 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   `keep` 6 when it was unset, both null = off (an empty `NEMOGATE_COMPACT_TOKENS` is off too), or
   null for a run that does not say (no `carriage.json`, or one from before the knobs). A
   `carriage.json` whose knobs the app would have refused makes the run unreadable. Runs under different settings are never in one
-  cell, and a comparison pairs only cells with the same `compaction`. `n` counts every run, forks included; `n_sources`
+  cell, and a comparison pairs only cells with the same `compaction`. `n` counts every run, forks included; `n_forks`
+  counts the forks (runs with a `fork.json`) and is left out of a cell with none, because a fork's
+  `cost_usd`, tokens and wall time cover only the part after the fork point (the report labels them);
+  `n_sources`
   counts distinct sources (a fork under `fork.json`'s `source_run_id`, any other run under its
   own id); `clustered` is `n_sources < n`. Nothing is deduplicated: a fork is not an
   independent sample, so the report flags the cell and the intervals are not corrected.
@@ -443,7 +452,16 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   other arms do not have the field. It is optional: a reader must treat a missing field as
   "no split known". A natural cell also has `not_exercised`: how many
   of its runs are labelled `NOT_EXERCISED` (the guarded thing never came up). They are in `n`;
-  subtract them to see the rate over the runs where the rule came up.
+  subtract them to see the rate over the runs where the rule came up. A cell with operator `none` (natural,
+  block_only, gated: nothing sabotaged the handoff) also has
+  `labels`: EVERY run counted by its carriage label (`CARRIED_OBEYED`, `DISOBEYED`,
+  `DROPPED_LUCKY`, `DROPPED`, `NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, and `"unlabelled"` for
+  a run with no `carriage.json`), zero counts absent, so the values sum to `n`. Carried or
+  dropped says whether the rule was in the handoff and kept or broken whether the agent obeyed it;
+  `violations_by_label` (natural cells only) has just the broken half. Under gated the label
+  describes what the receiver got, the gate's re-pin included. Left out of the cell when no run in it has a
+  `carriage.json`, and a reader must treat a missing field as "not known". No `format_version`
+  change.
 - **One classifier version per cell.** A label's meaning changes between carriage classifier
   versions (`classifier_version` in `carriage.json`), so `aggregate` refuses a cell whose
   labelled runs carry more than one version, and the CLI exits 2 naming the cell and the
@@ -520,9 +538,13 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
  "honesty": {"constraints_total", "constraints_with_check", "check_share", "extraction_recall", "inconclusive_total"},
  "constraints": {<constraint id>: {"text", "kind", "has_check", "blocked_before_call", "task_ids": [sorted],
    "boundaries": {<boundary id>: {
-     "cells": [{"arm", "operator", "compaction": {"tokens", "keep"} | null, "n", "n_sources", "clustered", "violations",
+     "cells": [{"arm", "operator", "compaction": {"tokens", "keep"} | null, "n", "n_sources", "clustered",
+                "n_forks": count,  # only when the cell holds forks
+                "violations",
                 "cvr": {"rate", "lo", "hi"}, "successes", "success": {"rate", "lo", "hi"}, "cost_usd",
                 "violations_by_label": {<carriage label | "unlabelled">: count},  # natural cells only
+                "labels": {<carriage label | "unlabelled">: count},  # operator-none cells: ALL runs by label;
+                                                                      # left out when no run has a carriage.json
                 "not_exercised": count,  # natural cells only
                 "arm_metrics": {"cost": MEAN, "wall_seconds": MEAN + {"unknown"},
                                 "attempt_rate": RATE | null,
@@ -649,10 +671,36 @@ delegations to the same agent are not told apart; planner delegations here are s
   without wasting a run. It likewise checks every task against every (arm, operator) pair: a task
   with an optional `refusal(arm, operator) -> str | None` (see `AppTask`) that returns a reason
   makes the whole sweep raise `CellRefused` before the first run; `run_one` and `fork_one` refuse
-  the same way, and the CLI prints `refusing to run: <reason>` and exits 2.
+  the same way, and the CLI prints `refusing to run: <reason>` and exits 2. `apaired` checks the
+  natural source cell and every fork cell up front too, so a paired sweep does not pay for a
+  source whose first fork would be refused.
+- The same up-front refusal covers the cells the real gate would refuse when it is built
+  (`cell_refusal(ledger, task, operator)`): an operator on a compaction boundary, and an operator
+  on the `return:<agent>-><receiver>` boundary of an output rule (`output_must_include` /
+  `output_must_not_include`) graded on that `<agent>`'s replies, which the operator would cut or
+  blur. Mutate the delegation to that agent instead; operator `none` is refused only by the app
+  check below. It repeats `gate._check_arm` / `_check_target` / `_check_app` because `gate` exposes no public form of them;
+  `replay/tests/test_cell_refusal.py` runs a grid of (rule type, boundary, operator) through both
+  and fails if they disagree. An operator the gate has not built (today `return_corrupt`, which
+  raises `NotImplementedError` in `gate.operators.make_operator`) is refused the same way, on
+  every cell, so `--operators drop return_corrupt` stops before the first drop run is paid for.
+  "Not built" is not a name in replay: `cell_refusal` calls `make_operator(operator, "", None)`,
+  which builds its closure without calling a model, so building the operator in `gate` lifts the
+  refusal with no change here. The app check (`gate._check_app`) depends on the ledger and the task's
+  rule, not the arm or operator, so it is mirrored for every cell, `none` included: a `path_forbidden`
+  rule needs `app.repo_root` and an `approval_before` rule needs `app.approval_tool`.
+  `pairs()` still lists the unbuilt operator: it only plans the arm by operator grid and does not
+  know the gate, and dropping the cell silently would hide the stretch operator the caller asked
+  for.
 - `python -m replay.runner --tasks .. --arms .. --operators .. --n N [--repo-ref REF] [--top-up] [--yes]`
   refuses with exit code 2 unless `NEMOGATE_LIVE=1`; it prints `planned runs: N` and, without
-  `--yes`, exits 1 pointing at `python -m replay.budget`. With `--yes` it runs and prints one
+  `--yes`, exits 1 pointing at `python -m replay.budget`. N leaves out the cells the sweep would
+  refuse (`refusals(app, ledger, ...)`, the same check `arun` and `apaired` make up front), and
+  under `--paired` the natural source of a task whose forks are all refused unless natural x
+  none is itself among the cells, as `budget.plan` prices it; each refused cell
+  is listed as `refused: <task> <arm> <operator>: <reason>`, and if there is one the CLI exits 2
+  before `--yes` (`refusing to run: K cells are refused ...`), since such a sweep runs nothing.
+  An unknown task id exits 2 the same way. With `--yes` it runs and prints one
   line per record (`<run_id> task=.. arm=.. operator=.. violations=C-1,C-2|- task_success=..
   cost_usd=0.0000`), then `runs: X ok, Y errored` and, for each errored run,
   `errored <run_id> task=.. arm=.. operator=.. error_type=..`. Exit code 1 if any run errored,

@@ -2,6 +2,7 @@
 coverage panel. Synthetic run folders and repair output in fixtures/; no model, no network."""
 
 import copy
+import dataclasses
 import html
 import json
 import re
@@ -17,6 +18,7 @@ from repair.plan import FixChoice
 from replay import stats
 from report import panels, site
 from schemas.ledger import load_ledger_yaml
+from schemas.run import Violation
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RUN_FOLDERS = FIXTURES / "run_folders"
@@ -673,3 +675,39 @@ def test_the_page_is_identical_on_two_renders(rich):
     )
 
     assert a == b
+
+
+def run_with_violation(predicate: str, step: int | None, detail: str) -> panels.RunView:
+    run = panels.load_run(RUN_FOLDERS / "r-20260101T000001-aaa111")
+    violation = Violation(
+        constraint_id=run.record.constraint_id, step=step, predicate=predicate, detail=detail
+    )
+    return dataclasses.replace(run, violations=(violation,))
+
+
+def test_a_stepless_output_rule_violation_says_the_reply_never_arrived():
+    # Breaks if "judged on the final files" is shown for an output rule: its step is None only
+    # when the graded agent's reply never arrived (none sent, or every one withheld by the gate),
+    # and files have nothing to do with it.
+    html_out, ev = panels.violating_action(
+        run_with_violation("output_must_include", None, "no reply from reviewer")
+    )
+
+    assert ev is None
+    assert "judged on the final files" not in html_out
+    assert (
+        "no reply to grade: the agent's reply never arrived (none was sent, or the gate "
+        "withheld every one)" in html_out
+    )
+    assert "no reply from reviewer" in html_out
+
+
+def test_a_stepless_file_rule_violation_still_says_it_is_judged_on_the_final_files():
+    # Breaks if the new output-rule wording replaces the file-rule one: a files_frozen
+    # violation really is judged on the final files.
+    html_out, ev = panels.violating_action(
+        run_with_violation("files_frozen", None, "frozen/models.py changed")
+    )
+
+    assert ev is None
+    assert "no single action: judged on the final files" in html_out

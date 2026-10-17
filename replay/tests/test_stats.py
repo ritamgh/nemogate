@@ -154,6 +154,7 @@ def cell(
     by_label=None,
     not_exercised=0,
     compaction=None,
+    n_forks=0,
 ):
     out = {
         "arm": arm,
@@ -169,6 +170,8 @@ def cell(
         "cost_usd": cost,
         "arm_metrics": plain_metrics(n, mean),
     }
+    if n_forks:  # left out of a cell with no fork
+        out["n_forks"] = n_forks
     if by_label is not None:  # natural cells only
         out["violations_by_label"] = by_label
         out["not_exercised"] = not_exercised
@@ -251,6 +254,7 @@ EXPECTED = {
                             0.4,
                             0.1,
                             by_label={"unlabelled": 2},  # nat-1 and fork-1 have no carriage.json
+                            n_forks=2,  # fork-1 and fork-2
                         ),
                         cell(
                             "mutated",
@@ -1093,6 +1097,46 @@ def test_a_carriage_json_with_a_malformed_knob_is_an_unreadable_run(tmp_path):
     assert (got.runs, got.unreadable) == ([], 1)
 
 
+def test_aggregate_counts_the_forks_of_a_cell_and_leaves_the_key_out_when_there_are_none():
+    # Breaks if the report cannot tell which cells hold fork records (cost and tokens after the
+    # fork point only), or if every cell of a sweep without forks gains a key.
+    runs = [
+        make_run("src"),
+        make_run("f-1", fork_source="src"),
+        make_run("f-2", fork_source="src"),
+        make_run("solo", violated=True, arm="mutated", operator="drop"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    cells = got["constraints"]["C-001"]["boundaries"][B1]["cells"]
+    by_arm = {c["arm"]: c for c in cells}
+
+    assert by_arm["natural"]["n"] == 3 and by_arm["natural"]["n_forks"] == 2
+    assert "n_forks" not in by_arm["mutated"]
+
+
+def test_natural_cell_counts_every_run_by_carriage_label_in_sorted_order():
+    # Breaks if only the violating runs are counted by label: the 2x2 of present/lost against
+    # obeyed/broke needs the runs that kept the rule too (CARRIED_OBEYED, DROPPED_LUCKY).
+    runs = [
+        make_run("n-1", violated=True, label="DISOBEYED"),
+        make_run("n-2", label="CARRIED_OBEYED"),
+        make_run("n-3", label="CARRIED_OBEYED"),
+        make_run("n-4", violated=True, label="DROPPED"),
+        make_run("n-5", label="DROPPED_LUCKY"),
+        make_run("n-6", label="NOT_EXERCISED"),
+        make_run("n-7"),  # no carriage.json
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    assert natural_cell(got)["labels"] == {
+        "CARRIED_OBEYED": 2,
+        "DISOBEYED": 1,
+        "DROPPED": 1,
+        "DROPPED_LUCKY": 1,
+        "NOT_EXERCISED": 1,
+        "unlabelled": 1,
+    }
+
+
 # ---------------------------------------------------------------- carriage classifier versions
 
 
@@ -1147,6 +1191,63 @@ def test_one_classifier_version_per_cell_pools_and_unlabelled_runs_do_not_count(
         "DROPPED": 1,
         "unlabelled": 1,
     }
+
+
+def test_labels_are_left_out_when_no_run_has_a_carriage_file_and_for_cells_with_an_operator():
+    # Breaks if every cell of a sweep gains a `labels` key: runs without carriage.json (older
+    # folders) must give the same results file as before, and only a cell with operator none
+    # says whether the handoff carried the rule: an operator changed what the receiver got.
+    plain = aggregate(
+        [make_run("n-1"), make_run("n-2", violated=True)],
+        unreadable=0,
+        ledger=LEDGER,
+        extraction_recall=None,
+    )
+    assert "labels" not in natural_cell(plain)
+
+    mixed = aggregate(
+        [
+            make_run("n-1", label="CARRIED_OBEYED"),
+            make_run("m-1", arm="mutated", operator="drop", label="DROPPED"),
+        ],
+        unreadable=0,
+        ledger=LEDGER,
+        extraction_recall=None,
+    )
+    cells = mixed["constraints"]["C-001"]["boundaries"][B1]["cells"]
+    assert [c["arm"] for c in cells if "labels" in c] == ["natural"]
+
+
+def test_block_only_and_gated_cells_without_an_operator_count_their_runs_by_label():
+    # Breaks if the labels stop at the natural arm: with operator none nothing sabotaged the
+    # handoff in the blocking arms either, so their labels say whether the rule was carried.
+    runs = [
+        make_run("b-1", arm="block_only", label="CARRIED_OBEYED"),
+        make_run("b-2", arm="block_only", label="DISOBEYED", violated=True),
+        make_run("g-1", arm="gated", label="CARRIED_OBEYED"),
+        make_run("g-2", arm="gated", label="CARRIED_OBEYED"),
+        make_run("g-3", arm="gated", label="UNKNOWN"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    cells = {c["arm"]: c for c in got["constraints"]["C-001"]["boundaries"][B1]["cells"]}
+
+    assert cells["block_only"]["labels"] == {"CARRIED_OBEYED": 1, "DISOBEYED": 1}
+    assert cells["gated"]["labels"] == {"CARRIED_OBEYED": 2, "UNKNOWN": 1}
+    # only the natural arm splits its violations by label
+    assert "violations_by_label" not in cells["gated"]
+
+
+def test_a_cell_with_an_operator_has_no_labels_even_when_its_runs_do():
+    # Breaks if a sabotaged cell reports labels: the operator changed what the receiver got, so
+    # "carried" or "dropped" would describe the sabotage, not the planner.
+    runs = [
+        make_run("m-1", arm="mutated", operator="drop", label="DROPPED"),
+        make_run("g-1", arm="gated", operator="drop", label="CARRIED_OBEYED"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    cells = got["constraints"]["C-001"]["boundaries"][B1]["cells"]
+
+    assert all("labels" not in c for c in cells)
 
 
 def natural_cell_among(results: dict) -> dict:

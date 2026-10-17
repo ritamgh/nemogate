@@ -21,7 +21,9 @@ What it shows:
   gated runs did in the same case; when gated was never broken, the rule is one the gate blocks
   before the call (`blocked_before_call` in the results, from `gate.policy`) and some gated run
   was blocked, it adds that the 0 comes from blocking, which block-only gets by construction;
-  for any other rule it adds nothing of the kind; "No comparison has enough runs yet" when there
+  for any other rule it adds nothing of the kind; when that handoff was run under more than one
+  compaction setting, the sentence names the setting it quotes and says the others have their own
+  rows below; "No comparison has enough runs yet" when there
   is none), then a key defining the four arms and the operators in method words.
 - Under the key, "What each part fixes": four static lines. The gate blocks a tool call that
   breaks a rule checkable before the call (path, tool and approval rules), whatever the cause, and
@@ -50,7 +52,17 @@ What it shows:
   table of cells (arm, operator, runs, violation rate and task success with their 95% Wilson
   intervals and a small interval bar). A `natural` cell whose results carry `violations_by_label`
   adds one line under the violation rate, such as "2 of 3 broken: 1 lost in the handoff,
-  1 carried but disobeyed"; without the field (older results files) nothing is added. A cell that was not run prints "not run", not 0. A cell with
+  1 carried but disobeyed"; without the field (older results files) nothing is added. When the
+  cell with operator `none` (natural, block_only, gated) carries `labels` (every run counted by
+  carriage label) the card shows a small grid instead; under gated a line says "in the handoff"
+  includes the gate's re-pin, and the older line and the "never came up" line are not repeated: rows "Rule in
+  the handoff" (carried) and "Rule lost in the handoff" (dropped), columns "Agent kept it" and
+  "Agent broke it", so `CARRIED_OBEYED`, `DISOBEYED`, `DROPPED_LUCKY` and `DROPPED` each fill one
+  square. Under block_only and gated the second column reads "Agent broke it or tried to" and a
+  line says blocked attempts count there while the violation rate counts only what got through
+  (a blocked attempt is labelled `DISOBEYED`). Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
+  carriage.json) are counted under it as "Not placed". Its CSS (`presence.css`) is added only to
+  a page that has a grid, so a page without one is unchanged. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
   (`load_bearing`) and gate effect on task success (`ledger_value`) are shown with their interval,
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
@@ -63,7 +75,10 @@ What it shows:
   the block_only and gated arms what happened after a block (blocked calls and repeats per run,
   carry-over, re-plans, runs stuck, recovery steps with the cost and time shares marked as
   estimates; a line says how many runs carry-over and re-plans leave out because several task
-  calls ran at once). A cell without `arm_metrics` (older file) shows "not in this results file", and a
+  calls ran at once). A cell holding fork records (`n_forks` in the cell) says under its cost,
+  time and recovery shares that they are "after the fork point only" ("all forks", or "k of n
+  runs are forks"): a fork's cost and time cover only what ran after the fork point, so they are
+  not whole-run numbers. A cell without `arm_metrics` (older file) shows "not in this results file", and a
   page with none prints no table. The header's run block adds "Money in no rate": what errored
   runs cost, in all and per arm.
 - A one-sentence summary per (boundary, operator), only when the mutated violation rate, the
@@ -96,6 +111,9 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   "(dropped)" was sent but lost, "(added)" was received but not sent; "nothing was changed in
   transit" is said only when the full payloads are equal, not just the shown part) and the action
   named by `violations.json` (a fork's steps count `prefix.jsonl` first, and the page says so).
+  A violation with no step reads "no single action: judged on the final files", except for an
+  `output_must_include` rule, where it means the graded agent's reply never arrived (none sent,
+  or the gate withheld every one) and the page says that.
   The comparison side says "No such call" when it never made the call. Trace text is escaped.
 - **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
   `.patch` beside it. Without `--repair` it says "No repair run yet". `repair` writes no

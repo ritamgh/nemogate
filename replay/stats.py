@@ -302,6 +302,17 @@ def _cell(
         "success": _rate(successes, n),
         "cost_usd": _round(math.fsum(run.record.cost_usd for run in runs)),
     }
+    if n_forks := sum(run.fork_source is not None for run in runs):
+        # A fork's cost, tokens and time cover the part after the fork point only, so the report
+        # must not read this cell's means as whole runs. Left out when there are none.
+        out["n_forks"] = n_forks
+    if operator == "none" and any(run.label for run in runs):
+        # Every run by its label, not only the violating ones: whether the rule was in the
+        # handoff (carried or dropped) against whether the agent broke it. Only where nothing
+        # sabotaged the handoff, so the arms that block (block_only, gated) count too. Left out
+        # when no run has a carriage.json, so older run folders give the file they always did.
+        counts = Counter(run.label or UNLABELLED for run in runs)
+        out["labels"] = dict(sorted(counts.items()))
     if arm == Arm.natural:
         # Only without sabotage can the label say why a rule broke: lost in the handoff
         # (DROPPED) or carried and broken anyway (DISOBEYED).
