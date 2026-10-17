@@ -420,6 +420,51 @@ def test_fork_one_replays_only_the_part_after_the_boundary_under_the_new_arm(tmp
     assert fork.checkpoint_id != source.checkpoint_id
 
 
+class Sequenced(App):
+    """One app for a whole paired sweep: each build takes the next (planner, coder) scripts, as
+    the source run and every fork are separate graphs with their own stub models."""
+
+    def __init__(self, scripts: list[tuple[list, list]]):
+        super().__init__(*scripts[0])
+        self.scripts = list(scripts)
+
+    def build(self, backend, **kw):
+        self.planner, self.coder = self.scripts.pop(0)
+        return super().build(backend, **kw)
+
+
+def test_apaired_forks_each_arm_from_the_one_natural_recording_with_its_seed(tmp_path):
+    """Catches arms that come from separate recordings (the Oct 16 failure): every fork must name
+    the same source and seed, and start from the very same prefix."""
+    world = World(tmp_path)
+    fork_scripts = (["Done after the fork."], [write("w2", "/repo/locked/b.txt", "two"), "Ok."])
+    app = Sequenced(
+        [
+            (recorded_app().planner, recorded_app().coder),
+            fork_scripts,
+            fork_scripts,
+        ]
+    )
+    records = asyncio.run(
+        world.runner(app).apaired(["X1"], [Arm.block_only, Arm.mutated], [Operator.drop], 1, "HEAD")
+    )
+
+    source, first, second = records
+    assert (source.arm, first.arm, second.arm) == (Arm.natural, Arm.block_only, Arm.mutated)
+    assert len(world.run_ids()) == 3
+    origins = [
+        json.loads((world.runs_dir / r.run_id / "fork.json").read_text()) for r in (first, second)
+    ]
+    assert [o["source_run_id"] for o in origins] == [source.run_id, source.run_id]
+    seeds = [
+        json.loads((world.runs_dir / r.run_id / "run_config.json").read_text())["seed"]
+        for r in (source, first, second)
+    ]
+    assert seeds == [0, 0, 0]
+    prefixes = [(world.runs_dir / r.run_id / "prefix.jsonl").read_bytes() for r in (first, second)]
+    assert prefixes[0] == prefixes[1] != b""
+
+
 FORK_IN_NEW_PROCESS = """
 import sys
 from pathlib import Path

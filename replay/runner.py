@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import traceback
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,10 @@ def _default_client() -> Any:
     env.load_dotenv()
     env.require_env("NEBIUS_API_KEY", "NEBIUS_PROJECT_ID")
     return Contree()
+
+
+class NoForkPoint(ValueError):
+    """The source run never crossed its target boundary, so there is nothing to fork before."""
 
 
 @dataclass(frozen=True)
@@ -127,6 +132,10 @@ class Runner:
         self.repo_dir = repo_dir
         self.records: list[RunRecord] = []  # what the latest `arun` finished
         self.errors: list[RunError] = []  # and the runs it caught raising
+        self.unforkable: list[str] = []  # natural sources the latest `apaired` could not fork
+        # forks the latest `apaired` never made, per (arm, operator): an errored or unforkable
+        # source costs every compared arm one sample, and only this says so
+        self.not_forked: Counter[tuple[Arm, Operator]] = Counter()
 
     def _default_backend(self, session: Any) -> Any:
         # Imported here so tests never need the SDK.
@@ -199,7 +208,7 @@ class Runner:
         )
         crossing = fork_point(recording, source.boundary)
         if crossing is None:
-            raise ValueError(
+            raise NoForkPoint(
                 f"cannot fork {source_run_id}: it never crossed {source.boundary}, so there is "
                 "nothing to fork before"
             )
@@ -524,6 +533,73 @@ class Runner:
     ) -> list[RunRecord]:
         return asyncio.run(self.arun(task_ids, arms, operators, n, repo_ref, seeds=seeds))
 
+    async def apaired(
+        self,
+        task_ids: Sequence[str],
+        arms: Sequence[Arm],
+        operators: Sequence[Operator],
+        n: int,
+        repo_ref: str = "main",
+    ) -> list[RunRecord]:
+        """Arms compared on the same handoffs. For each task and seed in `range(n)`: one natural
+        run (the source; it is the natural arm when that is among `arms`), then a fork of it for
+        every other (arm, operator) pair, with the same seed. Every compared arm therefore shares
+        the source's prefix up to the boundary, so a difference between them is not a difference
+        in what the planner happened to delegate.
+
+        Errors are handled as in `arun`. A source that errored gets no forks. A source that
+        never crossed its boundary (`NoForkPoint`) is listed in `self.unforkable` and gets no
+        forks; anything else a fork raises stops the sweep. `self.records` holds the sources too.
+        `self.not_forked` counts the forks that were never made, per (arm, operator).
+        """
+        by_id = {t.id: t for t in self.app.tasks()}
+        tasks = [by_id[task_id] for task_id in task_ids]  # KeyError before any run starts
+        fork_pairs = [(a, o) for a, o in pairs(arms, operators) if a is not Arm.natural]
+        records: list[RunRecord] = []
+        self.records, self.errors, self.unforkable = records, [], []
+        self.not_forked = Counter()
+        for task in tasks:
+            for seed in range(n):
+                try:
+                    source = await self.run_one(
+                        task, Arm.natural, Operator.none, seed=seed, repo_ref=repo_ref
+                    )
+                except Exception as exc:
+                    failure = getattr(exc, "nemogate_run_error", None)
+                    if failure is None:
+                        raise
+                    self.errors.append(failure)
+                    self.not_forked.update(fork_pairs)
+                    continue
+                records.append(source)
+                for i, (arm, operator) in enumerate(fork_pairs):
+                    try:
+                        records.append(
+                            await self.fork_one(
+                                source.run_id, arm, operator, seed=seed, repo_ref=repo_ref
+                            )
+                        )
+                    except NoForkPoint:
+                        self.unforkable.append(source.run_id)
+                        self.not_forked.update(fork_pairs[i:])
+                        break
+                    except Exception as exc:
+                        failure = getattr(exc, "nemogate_run_error", None)
+                        if failure is None:
+                            raise
+                        self.errors.append(failure)
+        return records
+
+    def paired(
+        self,
+        task_ids: Sequence[str],
+        arms: Sequence[Arm],
+        operators: Sequence[Operator],
+        n: int,
+        repo_ref: str = "main",
+    ) -> list[RunRecord]:
+        return asyncio.run(self.apaired(task_ids, arms, operators, n, repo_ref))
+
     async def afork(
         self,
         source_run_id: str,
@@ -746,6 +822,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "today's reproducibility fields (a record or an error counts as one), and run only the "
         "shortfall to --n",
     )
+    parser.add_argument(
+        "--paired",
+        action="store_true",
+        help="fork every arm other than natural from the same natural run (the source) with the "
+        "same seed, so the arms share one prefix up to the boundary; the sources are extra runs "
+        "unless natural is among --arms. Fork records cover only the part after the boundary "
+        "(cost, tokens). Without it, every arm is its own full run",
+    )
     parser.add_argument("--yes", action="store_true", help="confirm the run count and go")
     args = parser.parse_args(argv)
 
@@ -762,6 +846,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     sweep: Runner | None = None
     seeds: dict[sweep_status.Cell, range] | None = None
+    fork_pairs = [(a, o) for a, o in pairs(args.arms, args.operators) if a is not Arm.natural]
+    paired = bool(fork_pairs) and args.paired
+    if paired and args.top_up:
+        print(
+            "refusing to run: --top-up counts independent runs and leaves forks out, so it "
+            "cannot top up a paired sweep; drop --paired",
+            file=sys.stderr,
+        )
+        return 2
     if args.top_up:
         sweep = default_runner(args.runs_dir)
         try:
@@ -779,9 +872,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         seeds = {(c.task_id, c.arm, c.operator): c.seeds for c in cells}
         planned = sum(c.planned for c in cells)
+    elif paired:
+        n_sources = len(args.tasks) * args.n
+        n_forks = n_sources * len(fork_pairs)
+        planned = n_sources + n_forks
     else:
         planned = len(args.tasks) * len(pairs(args.arms, args.operators)) * args.n
     print(f"planned runs: {planned}")
+    if paired and not args.top_up:
+        print(f"paired: {n_sources} natural sources, {n_forks} forks")
     if not args.yes:
         print(
             "not started: run `python -m replay.budget` to check this count against the budget "
@@ -792,7 +891,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     sweep = sweep or default_runner(args.runs_dir)
     extra = {} if seeds is None else {"seeds": seeds}
     try:
-        records = sweep.run(args.tasks, args.arms, args.operators, args.n, args.repo_ref, **extra)
+        if paired:
+            records = sweep.paired(args.tasks, args.arms, args.operators, args.n, args.repo_ref)
+        else:
+            records = sweep.run(
+                args.tasks, args.arms, args.operators, args.n, args.repo_ref, **extra
+            )
     except SpendCapReached as exc:
         print(f"stopped: {exc}", file=sys.stderr)
         _print_summary(sweep.records, sweep.errors, "before the stop")
@@ -807,7 +911,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"cost_usd={r.cost_usd:.4f}"
         )
     _print_summary(records, sweep.errors)
-    return 1 if sweep.errors else 0
+    unforkable = sweep.unforkable if paired else []
+    for run_id in unforkable:
+        print(f"no fork point, not forked: {run_id}")
+    missing = sweep.not_forked if paired else {}
+    if missing:
+        print(
+            "forks not made: "
+            + ", ".join(f"{a.value} {o.value} {k}" for (a, o), k in sorted(missing.items()))
+        )
+    return 1 if sweep.errors or unforkable else 0
 
 
 def _print_summary(
