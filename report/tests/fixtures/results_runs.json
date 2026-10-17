@@ -68,6 +68,10 @@
                 "lo": 0.0,
                 "rate": 0.0
               },
+              "labels": {
+                "CARRIED_OBEYED": 1,
+                "DROPPED_LUCKY": 1
+              },
               "n": 2,
               "n_sources": 2,
               "not_exercised": 0,

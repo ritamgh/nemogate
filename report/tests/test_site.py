@@ -991,3 +991,85 @@ def test_the_verdict_of_a_single_compaction_setting_is_unchanged():
     page = site.render(one_constraint(verdict_boundary([OFF])))
 
     assert "compaction" not in verdict_text(page)
+
+
+# --- presence against behaviour, from the carriage labels --------------------------------------
+
+LABELS = {
+    "CARRIED_OBEYED": 4,
+    "DISOBEYED": 2,
+    "DROPPED": 1,
+    "DROPPED_LUCKY": 1,
+    "NOT_EXERCISED": 1,
+    "UNKNOWN": 1,
+    "unlabelled": 2,
+}
+
+
+def natural_with_labels(labels):
+    cell = {
+        **make_cell("natural", "none", 12, 3, 9),
+        "violations_by_label": {"DISOBEYED": 2, "DROPPED": 1},
+        "not_exercised": 1,
+    }
+    if labels is not None:
+        cell["labels"] = labels
+    return cell
+
+
+def natural_card(labels):
+    boundary = {"delegation:planner->coder": {"cells": [natural_with_labels(labels)]}}
+    return text_of(article(site.render(one_constraint(boundary)), "C-900"))
+
+
+def test_a_natural_cell_shows_whether_the_rule_was_in_the_handoff_against_whether_it_was_kept():
+    # Breaks if the card cannot say, per run, the two separate things: was the rule present in
+    # the handoff, and did the agent obey it. Hand-checked from LABELS: carried and kept 4,
+    # carried and broken 2, lost and kept 1, lost and broken 1; 1 + 1 + 2 not placed (12 runs).
+    text = natural_card(LABELS)
+
+    assert (
+        "Rule in the handoff 4 2 Rule lost in the handoff 1 1" in text
+        and "Agent kept it Agent broke it" in text
+    )
+    assert (
+        "Not placed: 1 where the rule never came up, 1 the classifier could not place, "
+        "2 with no carriage record." in text
+    )
+
+
+def test_the_two_by_two_replaces_the_older_notes_so_no_number_is_shown_twice():
+    # Breaks if the same runs are counted both in the 2x2 and in the older "k of n broken" and
+    # "never came up" lines under the violation rate.
+    text = natural_card(LABELS)
+
+    assert "broken:" not in text
+    assert "never came up in" not in text
+
+
+def test_a_cell_without_labels_keeps_its_older_notes_and_has_no_two_by_two():
+    # Breaks if a results file from before `labels` loses the split under the violation rate or
+    # gains an empty 2x2.
+    text = natural_card(None)
+
+    assert "3 of 12 broken: 1 lost in the handoff, 2 carried but disobeyed" in text
+    assert "the rule never came up in 1 of 12 runs" in text
+    assert "Agent kept it" not in text
+
+
+def test_the_two_by_two_leaves_out_the_footnote_when_every_run_is_placed():
+    # Breaks if a complete 2x2 is followed by "Not placed: ." or a zero count.
+    text = natural_card({"CARRIED_OBEYED": 1, "DISOBEYED": 1})
+
+    assert "Rule in the handoff 1 1 Rule lost in the handoff 0 0" in text
+    assert "Not placed" not in text
+
+
+def test_the_grid_styles_ship_only_with_a_page_that_has_a_grid():
+    # Breaks if every page carries the grid's CSS, so a results file from before `labels` no
+    # longer renders to the bytes it always did.
+    boundary = lambda labels: {  # noqa: E731
+        "delegation:planner->coder": {"cells": [natural_with_labels(labels)]}
+    }
+    assert ".presence{" in site.render(one_constraint(boundary(LABELS)))
+    assert ".presence{" not in site.render(one_constraint(boundary(None)))

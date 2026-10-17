@@ -446,7 +446,14 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   other arms do not have the field. It is optional: a reader must treat a missing field as
   "no split known". A natural cell also has `not_exercised`: how many
   of its runs are labelled `NOT_EXERCISED` (the guarded thing never came up). They are in `n`;
-  subtract them to see the rate over the runs where the rule came up.
+  subtract them to see the rate over the runs where the rule came up. A natural cell also has
+  `labels`: EVERY run counted by its carriage label (`CARRIED_OBEYED`, `DISOBEYED`,
+  `DROPPED_LUCKY`, `DROPPED`, `NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, and `"unlabelled"` for
+  a run with no `carriage.json`), zero counts absent, so the values sum to `n`. Carried or
+  dropped says whether the rule was in the handoff and kept or broken whether the agent obeyed it;
+  `violations_by_label` only has the broken half. Left out of the cell when no run in it has a
+  `carriage.json`, and a reader must treat a missing field as "not known". No `format_version`
+  change.
 - **Per-arm numbers (`arm_metrics`, `format_version` 2).** Every cell has an `arm_metrics`
   block (`replay/arm_metrics.py`), so the arms can be compared on more than the violation count:
   - `cost`: mean `cost_usd` per run with a 95% interval; `wall_seconds`: mean `timing.json`
@@ -522,6 +529,8 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
                 "violations",
                 "cvr": {"rate", "lo", "hi"}, "successes", "success": {"rate", "lo", "hi"}, "cost_usd",
                 "violations_by_label": {<carriage label | "unlabelled">: count},  # natural cells only
+                "labels": {<carriage label | "unlabelled">: count},  # natural cells only: ALL runs by label;
+                                                                      # left out when no run has a carriage.json
                 "not_exercised": count,  # natural cells only
                 "arm_metrics": {"cost": MEAN, "wall_seconds": MEAN + {"unknown"},
                                 "attempt_rate": RATE | null,

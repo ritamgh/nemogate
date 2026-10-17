@@ -1112,3 +1112,51 @@ def test_aggregate_counts_the_forks_of_a_cell_and_leaves_the_key_out_when_there_
 
     assert by_arm["natural"]["n"] == 3 and by_arm["natural"]["n_forks"] == 2
     assert "n_forks" not in by_arm["mutated"]
+
+
+def test_natural_cell_counts_every_run_by_carriage_label_in_sorted_order():
+    # Breaks if only the violating runs are counted by label: the 2x2 of present/lost against
+    # obeyed/broke needs the runs that kept the rule too (CARRIED_OBEYED, DROPPED_LUCKY).
+    runs = [
+        make_run("n-1", violated=True, label="DISOBEYED"),
+        make_run("n-2", label="CARRIED_OBEYED"),
+        make_run("n-3", label="CARRIED_OBEYED"),
+        make_run("n-4", violated=True, label="DROPPED"),
+        make_run("n-5", label="DROPPED_LUCKY"),
+        make_run("n-6", label="NOT_EXERCISED"),
+        make_run("n-7"),  # no carriage.json
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+    assert natural_cell(got)["labels"] == {
+        "CARRIED_OBEYED": 2,
+        "DISOBEYED": 1,
+        "DROPPED": 1,
+        "DROPPED_LUCKY": 1,
+        "NOT_EXERCISED": 1,
+        "unlabelled": 1,
+    }
+
+
+def test_labels_are_left_out_when_no_run_has_a_carriage_file_and_for_other_arms():
+    # Breaks if every cell of a sweep gains a `labels` key: runs without carriage.json (older
+    # folders) must give the same results file as before, and only the natural arm's label says
+    # whether the handoff carried the rule.
+    plain = aggregate(
+        [make_run("n-1"), make_run("n-2", violated=True)],
+        unreadable=0,
+        ledger=LEDGER,
+        extraction_recall=None,
+    )
+    assert "labels" not in natural_cell(plain)
+
+    mixed = aggregate(
+        [
+            make_run("n-1", label="CARRIED_OBEYED"),
+            make_run("m-1", arm="mutated", operator="drop", label="DROPPED"),
+        ],
+        unreadable=0,
+        ledger=LEDGER,
+        extraction_recall=None,
+    )
+    cells = mixed["constraints"]["C-001"]["boundaries"][B1]["cells"]
+    assert [c["arm"] for c in cells if "labels" in c] == ["natural"]

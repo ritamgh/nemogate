@@ -52,7 +52,14 @@ What it shows:
   table of cells (arm, operator, runs, violation rate and task success with their 95% Wilson
   intervals and a small interval bar). A `natural` cell whose results carry `violations_by_label`
   adds one line under the violation rate, such as "2 of 3 broken: 1 lost in the handoff,
-  1 carried but disobeyed"; without the field (older results files) nothing is added. A cell that was not run prints "not run", not 0. A cell with
+  1 carried but disobeyed"; without the field (older results files) nothing is added. When the
+  natural cell carries `labels` (every run counted by carriage label) the card shows a small
+  grid instead, and the older line and the "never came up" line are not repeated: rows "Rule in
+  the handoff" (carried) and "Rule lost in the handoff" (dropped), columns "Agent kept it" and
+  "Agent broke it", so `CARRIED_OBEYED`, `DISOBEYED`, `DROPPED_LUCKY` and `DROPPED` each fill one
+  square. Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
+  carriage.json) are counted under it as "Not placed". Its CSS (`presence.css`) is added only to
+  a page that has a grid, so a page without one is unchanged. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
   (`load_bearing`) and gate effect on task success (`ledger_value`) are shown with their interval,
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with

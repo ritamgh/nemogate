@@ -812,6 +812,43 @@ def unexercised_note(cell: dict[str, Any]) -> str:
     return f'<span class="count">the rule never came up in {e(count)} of {e(cell["n"])} runs</span>'
 
 
+PLACED = ("CARRIED_OBEYED", "DISOBEYED", "DROPPED_LUCKY", "DROPPED")
+
+
+def presence_grid(cell: dict[str, Any]) -> str:
+    """For a natural cell with `labels`: was the rule in the handoff, and did the agent keep it.
+
+    The carriage label answers both at once: carried or dropped (present or lost) and kept or
+    broken. Runs the classifier could not place (the rule never came up, no verdict, no
+    carriage.json) are counted below the grid, so the grid and the note add up to the cell's n.
+    Empty when the field is absent (older results files); `cell_row` then keeps its older notes.
+    """
+    labels = cell["labels"]
+
+    def count(name: str) -> str:
+        return f'<span role="cell">{e(labels.get(name, 0))}</span>'
+
+    unclear = sum(v for k, v in labels.items() if k not in (*PLACED, "NOT_EXERCISED", "unlabelled"))
+    unplaced = (
+        (labels.get("NOT_EXERCISED", 0), "where the rule never came up"),
+        (unclear, "the classifier could not place"),
+        (labels.get("unlabelled", 0), "with no carriage record"),
+    )
+    parts = [f"{k} {text}" for k, text in unplaced if k]
+    foot = f'<span class="count">Not placed: {e(", ".join(parts))}.</span>' if parts else ""
+    return (
+        '<span class="presence" role="table" aria-label="Rule in the handoff against '
+        'whether the agent kept it">'
+        '<span role="row"><span role="presentation"></span>'
+        '<span role="columnheader">Agent kept it</span>'
+        '<span role="columnheader">Agent broke it</span></span>'
+        '<span role="row"><span role="rowheader">Rule in the handoff</span>'
+        f"{count('CARRIED_OBEYED')}{count('DISOBEYED')}</span>"
+        '<span role="row"><span role="rowheader">Rule lost in the handoff</span>'
+        f"{count('DROPPED_LUCKY')}{count('DROPPED')}</span></span>" + foot
+    )
+
+
 def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> str:
     label = (
         f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}'
@@ -834,7 +871,10 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> 
         )
     cvr = fraction_cell(cell["violations"], n, cell["cvr"])
     if cell.get("arm") == "natural":
-        cvr += split_note(cell) + unexercised_note(cell)
+        # `labels` counts every run, so it holds the numbers of both older notes
+        cvr += (
+            presence_grid(cell) if "labels" in cell else split_note(cell) + unexercised_note(cell)
+        )
     success = fraction_cell(cell["successes"], n, cell["success"])
     return (
         f'<tr><th scope="row">{label}<td data-label="Runs">{n_text}{warn}</td>'
@@ -1402,6 +1442,8 @@ def render_method(results: dict[str, Any]) -> str:
 # --- page -------------------------------------------------------------------------------------
 
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8")
+# Only for a page that has a presence grid, so a page without one is the page it always was.
+PRESENCE_CSS = (Path(__file__).parent / "presence.css").read_text(encoding="utf-8")
 
 
 def render(
@@ -1439,16 +1481,18 @@ def render(
             '<div class="empty"><strong>No runs were counted.</strong> There is nothing to chart '
             "yet: no boundary, no constraint and no rate. Nothing here is a zero.</div>"
         )
+    body = (
+        f"{render_header(results, render_verdict(results, anchors))}"
+        f"{panels.render_coverage(results, ledger)}{graph_section}"
+        f"{panels.render_patch_panel(repairs)}{render_method(results)}"
+    )
+    css = CSS + PRESENCE_CSS if 'class="presence"' in body else CSS
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta name="color-scheme" content="light dark">'
         "<title>NemoGate: rule survival across handoffs</title>"
-        f"<style>{CSS}</style></head><body><main>"
-        f"{render_header(results, render_verdict(results, anchors))}"
-        f"{panels.render_coverage(results, ledger)}{graph_section}"
-        f"{panels.render_patch_panel(repairs)}{render_method(results)}"
-        "</main></body></html>\n"
+        f"<style>{css}</style></head><body><main>{body}</main></body></html>\n"
     )
 
 
