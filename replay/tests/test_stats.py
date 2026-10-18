@@ -1493,3 +1493,60 @@ def test_the_cli_rejects_a_malformed_repo_sha_pin(tmp_path, capsys, pin):
 
     assert "--repo-sha" in capsys.readouterr().err
     assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    ("other_runs", "winner"),
+    [
+        (2, "aaa"),  # a tie of 2 v 2: the smaller sha wins, not the pin
+        (3, "aaa"),  # 3 v 2: the larger side wins, not the pin
+    ],
+)
+def test_a_pin_that_loses_to_another_task_of_the_same_rule_is_refused(other_runs, winner):
+    # T1 and T6 test C-001. Pinning T1 to bbb leaves T1@bbb x2 against T6@aaa x{other_runs}, and
+    # the pooling picks aaa. Breaks if the pin is accepted although every pinned run is then
+    # set aside (the CLI exited 0 with T1 missing from the page), or if the error does not name
+    # the task, the pinned commit, the rule and the commit actually pooled.
+    runs = [
+        *[make_run(f"a-{i}", task="T1", repo_sha="bbb") for i in (1, 2)],
+        make_run("a-3", task="T1", repo_sha="aaa"),
+        *[make_run(f"b-{i}", task="T6", repo_sha="aaa") for i in range(1, other_runs + 1)],
+    ]
+    with pytest.raises(ValueError) as caught:
+        aggregate(
+            runs, unreadable=0, ledger=LEDGER, extraction_recall=None, repo_sha_pins={"T1": "bbb"}
+        )
+
+    message = str(caught.value)
+    assert "T1" in message and "bbb" in message and "C-001" in message and winner in message
+
+
+def test_a_pin_that_leaves_a_rule_of_the_task_with_no_runs_is_refused():
+    # T has C-001 runs only at X and C-002 runs only at Y; pin T=xxx. Breaks if C-002 vanishes
+    # from the page (it had no entry, only a share of the global not_comparable total) instead
+    # of the pin being refused with the rule and "nothing" (no commit) in the message.
+    runs = [
+        make_run("a-1", task="T1", constraint="C-001", repo_sha="xxx"),
+        make_run("b-1", task="T1", constraint="C-002", repo_sha="yyy"),
+    ]
+    with pytest.raises(ValueError) as caught:
+        aggregate(
+            runs, unreadable=0, ledger=LEDGER, extraction_recall=None, repo_sha_pins={"T1": "xxx"}
+        )
+
+    message = str(caught.value)
+    assert "T1" in message and "xxx" in message and "C-002" in message and "nothing" in message
+
+
+def test_the_cli_exits_with_an_error_for_a_pin_that_cannot_take_effect(tmp_path, capsys):
+    # Breaks if the CLI writes a page (exit 0) when the pinned task's runs were all set aside.
+    parent = tmp_path / "runs"
+    write_run(parent, make_run("a-1", task="T1", repo_sha="bbb"))
+    write_run(parent, make_run("b-1", task="T6", repo_sha="aaa"))
+    write_run(parent, make_run("b-2", task="T6", repo_sha="aaa"))
+    out = tmp_path / "results.json"
+
+    assert run_cli(tmp_path, [str(parent)], "--repo-sha", "T1=bbb", "--out", str(out)) == 2
+
+    assert "T1" in capsys.readouterr().err
+    assert not out.exists()

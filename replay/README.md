@@ -431,7 +431,11 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   that test the same rule must share a group, or the smaller one is set aside.
   `--repo-sha TASK=COMMIT` (repeatable; `repo_sha_pins` in `aggregate`) pools that task's runs at
   COMMIT (the recorded `repo_sha` or a prefix of it) instead of at its largest group; its runs at
-  other commits are `not_comparable`. A pin that matches no run of the task is an error.
+  other commits are `not_comparable`. A pin that cannot take effect is an error, never ignored: one
+  that matches no run of the task, or one where a rule the task has runs of is pooled without any
+  of them (another task of the rule has the larger group at another commit, or the task's runs of
+  that rule are all at other commits). The message names the task, the pin, the rule and the
+  commit it was pooled at (or "nothing"); pin the other tasks of the rule to the same commit.
   A `NOT_EXERCISED` carriage label does not leave a run out. The label is given only to runs
   that did not break the rule, so dropping them would raise the violation rate (2 of 7 reported
   where 2 of 10 is true). They stay in `n`, and the natural cell reports them as their own

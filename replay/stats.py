@@ -280,7 +280,8 @@ def _reproducibility(record: RunRecord) -> dict[str, Any]:
 def _pin_filter(runs: Sequence[LoadedRun], pins: Mapping[str, str]) -> Callable[[LoadedRun], bool]:
     """Whether a run may be pooled given `pins` (task id -> repo_sha or a prefix of it): a run
     of a pinned task must be at that commit, every other run is unaffected. ValueError if a pin
-    matches no run of its task, so a mistyped pin never silently pools something else."""
+    matches no run of its task, so a mistyped pin never silently pools something else (that the
+    pinned runs survive the pooling is checked by `_pins_took_effect`)."""
     for task, sha in pins.items():
         if not any(r.record.task_id == task and r.record.repo_sha.startswith(sha) for r in runs):
             raise ValueError(f"--repo-sha {task}={sha}: no run of task {task} is at that commit")
@@ -290,6 +291,28 @@ def _pin_filter(runs: Sequence[LoadedRun], pins: Mapping[str, str]) -> Callable[
         return sha is None or run.record.repo_sha.startswith(sha)
 
     return allowed
+
+
+def _pins_took_effect(
+    by_rule: Mapping[str, Sequence[LoadedRun]],
+    groups: Mapping[str, Sequence[LoadedRun]],
+    pins: Mapping[str, str],
+) -> None:
+    """ValueError if a pinned task has runs of a rule and none of them is in the rule's pooled
+    group: the rule was pooled at another commit (a larger or tie-winning group of another task of
+    the rule) or at nothing (the task's runs of it are at other commits only). A pin either takes
+    effect or fails loudly, so a task never disappears from a rule behind an exit code of 0."""
+    for cid, rule_runs in by_rule.items():
+        pooled_tasks = {r.record.task_id for r in groups[cid]}
+        for task, sha in pins.items():
+            if any(r.record.task_id == task for r in rule_runs) and task not in pooled_tasks:
+                where = groups[cid][0].record.repo_sha if groups[cid] else None
+                pooled = "nothing" if where is None else f"commit {where}"
+                raise ValueError(
+                    f"--repo-sha {task}={sha}: rule {cid} was pooled at {pooled}, so none of "
+                    f"task {task}'s runs of it are pooled; pin the other tasks of the rule to "
+                    f"the same commit, or drop the pin"
+                )
 
 
 def _compaction(knobs: tuple[int | None, int | None] | None) -> dict[str, int | None] | None:
@@ -501,6 +524,7 @@ def aggregate(
     # NOT_EXERCISED runs stay: the label is given only to runs that did not break the rule, so
     # dropping them would inflate the violation rate (see the natural cell's `not_exercised`).
     groups = {cid: _pooled_group([r for r in rs if allowed(r)]) for cid, rs in by_rule.items()}
+    _pins_took_effect(by_rule, groups, repo_sha_pins or {})
     set_aside = {cid: len(by_rule[cid]) - len(group) for cid, group in groups.items()}
     pooled = sorted((r for group in groups.values() for r in group), key=lambda r: r.record.run_id)
     inconclusive = {
