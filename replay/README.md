@@ -377,7 +377,7 @@ def wilson(k, n, z=1.96) -> (lo, hi)                  # Wilson score interval, c
 def newcombe_diff(k1, n1, k2, n2) -> (diff, lo, hi)   # p1 - p2, Newcombe method 10 (hybrid score) from two Wilson intervals
 @dataclass LoadedRun(record: RunRecord, label: str | None, fork_source: str | None)
 def load_runs(paths, spend_log=None) -> LoadedRuns(runs, unreadable, errored, noop, errored_runs)   # reads files only; use the names
-def aggregate(runs, *, unreadable, errored=0, noop=0, ledger, extraction_recall, errored_runs=()) -> dict   # pure: no file, no clock
+def aggregate(runs, *, unreadable, errored=0, noop=0, ledger, extraction_recall, errored_runs=(), repo_sha_pins=None) -> dict   # pure: no file, no clock
 ```
 
 `LoadedRun` also carries `trace` (the parsed `trace.jsonl`, `None` if unreadable) and
@@ -420,10 +420,18 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   to record the operator's text first).
   A run with no readable `trace.jsonl`, or no handoff at the target, is not judged and stays a
   sample.
-- **Pooling.** Runs are grouped with `schemas.run.is_comparable` (the five reproducibility
-  fields). The group with the most runs is pooled; ties go to the smaller `repo_sha` (and, if
-  still tied, the smaller model ids and hashes in field order). Every other run is
-  `not_comparable`.
+- **Pooling.** Runs are pooled per rule (`constraint_id`), because a cell and its comparisons
+  belong to a rule: a sweep may run one task at another commit than the rest, and one commit for
+  the whole run set would drop it. Within a rule, runs are grouped with
+  `schemas.run.is_comparable` (the five reproducibility fields). The group with the most runs
+  is pooled; ties go to the smaller `repo_sha` (and, if still tied, the smaller model ids and
+  hashes in field order). Every other run of the rule is `not_comparable`, so nothing is compared
+  across commits. Each rule's entry carries the `reproducibility` of its group and its own
+  `not_comparable` count; the top-level `reproducibility` is the largest group of all. Two tasks
+  that test the same rule must share a group, or the smaller one is set aside.
+  `--repo-sha TASK=COMMIT` (repeatable; `repo_sha_pins` in `aggregate`) pools that task's runs at
+  COMMIT (the recorded `repo_sha` or a prefix of it) instead of at its largest group; its runs at
+  other commits are `not_comparable`. A pin that matches no run of the task is an error.
   A `NOT_EXERCISED` carriage label does not leave a run out. The label is given only to runs
   that did not break the rule, so dropping them would raise the violation rate (2 of 7 reported
   where 2 of 10 is true). They stay in `n`, and the natural cell reports them as their own
@@ -553,6 +561,8 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   ledger (`null` for an empty ledger); `extraction_recall` is the `recall` in the
   `--extraction-recall` JSON file (`{"recall": 0.83}`, in [0, 1]), `null` when not measured;
   `inconclusive_total` sums the four reasons. With no pooled run `reproducibility` is `null`.
+  (Rule-level `reproducibility` and `not_comparable` are optional for readers: files written
+  before runs were pooled per rule do not have them, and the page then shows the top-level group.)
 - **Output.** Sorted keys, two-space indent, floats rounded to 4 decimals, trailing newline; no
   paths or timestamps, so the same runs give a byte-identical file in any argument order.
 
@@ -565,6 +575,7 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
            "errored_cost": {"count", "cost_usd", "cost_unknown", "by_arm": {<arm>: {"count", "cost_usd", "cost_unknown"}}}},
  "honesty": {"constraints_total", "constraints_with_check", "check_share", "extraction_recall", "inconclusive_total"},
  "constraints": {<constraint id>: {"text", "kind", "has_check", "blocked_before_call", "task_ids": [sorted],
+   "reproducibility": {...the rule's group, as above}, "not_comparable": runs of this rule set aside,
    "boundaries": {<boundary id>: {
      "cells": [{"arm", "operator", "compaction": {"tokens", "keep"} | null, "n", "n_sources", "clustered",
                 "n_forks": count,  # only when the cell holds forks
