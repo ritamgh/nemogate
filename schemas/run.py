@@ -22,6 +22,16 @@ class FsChange(BaseModel):
     model_config = STRICT
     path: NonEmptyStr
     op: FsOp
+    # The file still exists but holds only whitespace at the end of the run (a delete done by
+    # emptying it). Set by the runner's diff; left out of dumps when false, so diffs written
+    # before the field existed read and hash as before.
+    emptied: bool = Field(default=False, exclude_if=lambda emptied: emptied is False)
+
+    @model_validator(mode="after")
+    def _emptied_file_exists(self) -> "FsChange":
+        if self.emptied and self.op is FsOp.deleted:
+            raise ValueError("a deleted path cannot also be emptied")
+        return self
 
 
 FS_DIFF = TypeAdapter(list[FsChange])

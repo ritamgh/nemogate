@@ -70,11 +70,20 @@ def _tool_forbidden(c: Constraint, check: ToolForbidden, trace, diff) -> list[Vi
 
 def _approval_before(c: Constraint, check: ApprovalBefore, trace, diff) -> list[Violation]:
     approvals = [e.step for e in trace if isinstance(e, Approval) and e.approved]
-    return [
+    out = [
         _v(c, e.step, f"{e.agent} called {e.tool} with no earlier approval")
         for e in _executed(trace)
         if e.tool == check.tool and not any(step < e.step for step in approvals)
     ]
+    if check.also_empty and not approvals:
+        # The diff has no steps, so an emptied file counts as approved only if some approval was
+        # granted in the run (the same scope as a delete's approval: not tied to a path).
+        out += [
+            _v(c, None, f"emptied {repo_relative(change.path, None)} with no approval")
+            for change in diff
+            if change.emptied
+        ]
+    return out
 
 
 def _replies(trace: list[Event], agent: str) -> list[tuple[int, str]]:
