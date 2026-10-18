@@ -346,7 +346,19 @@ def _cell(
 def _comparison(
     name: str, metric: str, key: str, a: Mapping[str, Any], b: Mapping[str, Any]
 ) -> dict[str, Any]:
-    diff, lo, hi = newcombe_diff(a[key], a["n"], b[key], b["n"])
+    return _difference(name, metric, a, b, (a[key], a["n"]), (b[key], b["n"]))
+
+
+def _difference(
+    name: str,
+    metric: str,
+    a: Mapping[str, Any],
+    b: Mapping[str, Any],
+    counts_a: tuple[int, int],
+    counts_b: tuple[int, int],
+) -> dict[str, Any]:
+    """a's rate minus b's with a Newcombe interval, from (k, n) of each."""
+    diff, lo, hi = newcombe_diff(*counts_a, *counts_b)
     return {
         "name": name,
         "operator": a["operator"],
@@ -370,7 +382,8 @@ def _comparison_order(cell: Mapping[str, Any]) -> tuple[Any, ...]:
 
 
 def _comparisons(cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """load_bearing (mutated vs natural) then ledger_value (gated vs block_only), by operator."""
+    """load_bearing (mutated vs natural), then ledger_value and attempt_reduction (gated vs
+    block_only), by operator."""
     # A comparison pairs cells with the same compaction knobs: runs with the summariser on and
     # off are not the same condition.
     by_key = {(c["arm"], c["operator"], _knob_key(c)): c for c in cells}
@@ -383,7 +396,32 @@ def _comparisons(cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         partner = by_key.get(("block_only", cell["operator"], _knob_key(cell)))
         if partner is not None:
             out.append(_comparison("ledger_value", "success", "successes", cell, partner))
+    for cell in sorted((c for c in cells if c["arm"] == "gated"), key=_comparison_order):
+        partner = by_key.get(("block_only", cell["operator"], _knob_key(cell)))
+        if partner is not None and (change := _attempt_reduction(cell, partner)) is not None:
+            out.append(change)
     return out
+
+
+def _attempt_reduction(
+    gated: Mapping[str, Any], block_only: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    """Gated minus block_only attempt rate (`arm_metrics.attempt_rate`), or None if either cell
+    has no rate: no readable trace, or a rule that is not about a tool or path. The counts are
+    those of the traced runs, which can be fewer than a cell's runs, so they are kept as
+    `n_a` and `n_b`. Negative = the gated coder reached for the forbidden action less often."""
+    rate_a, rate_b = gated["arm_metrics"]["attempt_rate"], block_only["arm_metrics"]["attempt_rate"]
+    if rate_a is None or rate_b is None:
+        return None
+    out = _difference(
+        "attempt_reduction",
+        "attempt_rate",
+        gated,
+        block_only,
+        (rate_a["k"], rate_a["n"]),
+        (rate_b["k"], rate_b["n"]),
+    )
+    return {**out, "n_a": rate_a["n"], "n_b": rate_b["n"]}
 
 
 def _facts(run: LoadedRun, constraint: Any, repo_root: str | None) -> RunFacts:
