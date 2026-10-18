@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>NemoGate: rule survival across handoffs</title><style>:root{color-scheme:light dark;
+--bg:#f6f4ee;--surface:#fffdf8;--ink:#1d1c19;--muted:#585349;--rule:#dcd6c8;--rule-strong:#a79f8c;
+--accent:#0b5c8a;--b0:#0072b2;--b1:#b87800;--b2:#c2410c;--b3:#a21665;--nd:#6c675b;
+--warn-bg:#fdf0d4;--warn-ink:#6b4200;--good-bg:#e1efe4;--good-ink:#1c4a2a;
+--serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+--sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+--mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{
+--bg:#14161a;--surface:#1b1e24;--ink:#e9e6df;--muted:#aaa598;--rule:#2d3139;--rule-strong:#5a5f6b;
+--accent:#6cb6e6;--b0:#56b4e9;--b1:#e8a317;--b2:#ee7a3c;--b3:#e07ab0;--nd:#8a8a82;
+--warn-bg:#3a2f12;--warn-ink:#f1d79a;--good-bg:#1d3324;--good-ink:#b7e0c1}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 var(--sans)}
+main{max-width:1080px;margin:0 auto;padding:40px 16px 72px}
+@media (min-width:720px){main{padding:56px 32px 96px}}
+::selection{background:var(--accent);color:var(--bg)}
+a{color:var(--accent);text-underline-offset:.18em;text-decoration-thickness:1px}
+a:focus-visible,.edge:focus-visible{outline:3px solid var(--accent);outline-offset:3px;border-radius:3px}
+code{font-family:var(--mono);font-size:.9em;overflow-wrap:anywhere}
+h1,h2,h3,h4{font-family:var(--serif);font-weight:600;line-height:1.2;margin:0;text-wrap:balance}
+h1{font-size:clamp(2.2rem,5vw,3.4rem);letter-spacing:-.02em}
+h2{font-size:1.45rem;margin:0 0 .6rem}
+h3{font-size:1.15rem}
+h4{font-size:1rem;font-family:var(--sans);font-weight:600}
+.lead{max-width:60ch;color:var(--muted);font-size:1.1rem;margin:.9rem 0 0}
+.verdict-line{max-width:68ch;margin:1.1rem 0 0;font-size:1.12rem;line-height:1.5}
+.key{margin-top:32px}
+.keycols{display:grid;gap:20px 40px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.key h3{margin:0 0 .4rem;font-family:var(--sans);font-size:.95rem;color:var(--muted)}
+.kv.stack>div{flex-direction:column;gap:0}
+.kv.stack dd{text-align:left}
+.tag{color:var(--muted);font-family:var(--sans);font-size:.78rem}
+.scrollhint{display:none}
+details.method{margin-top:12px}
+details.method>summary{cursor:pointer;font-weight:600}
+.note{color:var(--muted);font-size:.9rem;max-width:72ch;margin:.5rem 0}
+section{margin-top:56px}
+.strip{margin-top:40px;padding:20px 0;border-block:1px solid var(--rule-strong)}
+.honesty{list-style:none;margin:0;padding:0;display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.honesty li{display:flex;flex-direction:column;gap:2px}
+.honesty .v{font-family:var(--serif);font-size:1.5rem;font-variant-numeric:tabular-nums}
+.honesty .k{color:var(--muted);font-size:.9rem;max-width:34ch}
+.meta{display:grid;gap:32px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:32px}
+.meta h3{margin:1.2rem 0 .4rem;font-family:var(--sans);font-size:.95rem;color:var(--muted)}
+.kv{margin:0;display:grid;gap:4px 0}
+.kv>div{display:flex;justify-content:space-between;gap:16px;border-bottom:1px dotted var(--rule);padding:3px 0}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;font-variant-numeric:tabular-nums;text-align:right}
+.graphwrap{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:8px}
+.graph{display:block;width:100%;min-width:600px;height:auto;font-family:var(--sans)}
+.node rect{fill:var(--bg);stroke:var(--rule-strong);stroke-width:1.5}
+.nodename{font:600 15px var(--mono);fill:var(--ink)}
+.marktext{font:12px var(--sans);fill:var(--ink)}
+.line{fill:none;stroke-linecap:round}
+.hit{fill:none;stroke:transparent;stroke-width:22}
+.pill{fill:var(--surface);stroke-width:2}
+.pilltext{font:600 13px var(--sans);fill:var(--ink);font-variant-numeric:tabular-nums}
+.edge{cursor:pointer}
+.edge:hover .pill{fill:var(--bg)}
+.dash{stroke-dasharray:7 6}
+.stroke-b0{stroke:var(--b0)}.stroke-b1{stroke:var(--b1)}.stroke-b2{stroke:var(--b2)}.stroke-b3{stroke:var(--b3)}.stroke-nd{stroke:var(--nd)}
+.fill-b0{fill:var(--b0)}.fill-b1{fill:var(--b1)}.fill-b2{fill:var(--b2)}.fill-b3{fill:var(--b3)}.fill-nd{fill:var(--nd)}
+.legend{list-style:none;margin:16px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px 22px;font-size:.9rem}
+.legend li{display:flex;align-items:center;gap:8px}
+.legend svg{width:38px;height:12px}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+caption{text-align:left;color:var(--muted);font-size:.9rem;padding:16px 0 6px}
+th,td{text-align:left;vertical-align:top;padding:10px 12px 10px 0;border-bottom:1px solid var(--rule)}
+thead th{font-size:.82rem;font-weight:600;color:var(--muted);border-bottom:1px solid var(--rule-strong)}
+tbody th{font-weight:600}
+.num{text-align:right}
+table.cells{table-layout:fixed;min-width:640px}
+td.num{text-align:left}
+.rate{font-weight:700;font-size:1.05rem}
+.ci{color:var(--muted)}
+.count{display:block;color:var(--muted);font-size:.82rem}
+.notrun{color:var(--muted);font-style:italic}
+tr.missing th{color:var(--muted);font-weight:500}
+.warn{display:block;margin-top:6px;padding:6px 8px;border-radius:6px;background:var(--warn-bg);color:var(--warn-ink);font-size:.8rem;line-height:1.35;max-width:26ch}
+.ibar{display:block;width:100%;max-width:150px;height:10px;margin-top:6px}
+.ibar .track{fill:var(--rule)}.ibar .span{fill:var(--accent);opacity:.45}.ibar .tick{fill:var(--ink)}
+.ibar .zero{stroke:var(--ink);stroke-width:1.2;vector-effect:non-scaling-stroke;stroke-dasharray:2 2}
+.constraint{margin-top:28px;padding:24px 20px;background:var(--surface);border:1px solid var(--rule);border-radius:12px}
+@media (min-width:720px){.constraint{padding:32px 36px}}
+.constraint>header{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.badge{font-size:.78rem;padding:2px 10px;border:1px solid var(--rule-strong);border-radius:99px;color:var(--muted)}
+.badge.yes{background:var(--good-bg);color:var(--good-ink);border-color:transparent}
+.badge.no{background:var(--warn-bg);color:var(--warn-ink);border-color:transparent}
+.rule{font-family:var(--serif);font-size:1.3rem;line-height:1.35;margin:.8rem 0 .4rem;max-width:56ch;text-wrap:pretty}
+.summary{margin:.9rem 0;max-width:68ch;font-size:1.02rem}
+.bnd{margin-top:28px;padding-top:18px;border-top:1px solid var(--rule-strong);scroll-margin-top:16px}
+.bnd:target{outline:2px solid var(--accent);outline-offset:6px;border-radius:4px}
+.compare{margin:18px 0 0;display:grid;gap:14px}
+.compare>div{display:grid;gap:4px}
+.compare dt{font-weight:600}
+.compare small{display:block;font-weight:400;color:var(--muted);font-size:.82rem}
+.compare dd{margin:0}
+.verdict{display:block;margin-top:2px}
+.verdict.zero{color:var(--muted);font-style:italic}
+details.trace{margin-top:24px}
+details.trace>summary{cursor:pointer;font-weight:600}
+.pair{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));margin-top:12px}
+.side{min-width:0;padding:14px 16px;background:var(--bg);border:1px solid var(--rule);border-radius:8px}
+.side h5{margin:0;font:600 .95rem var(--sans)}
+.side ul{margin:.3rem 0;padding-left:1.2rem}
+.diff{font:.85rem/1.5 var(--mono);margin:6px 0}
+.diff p{margin:0;padding:1px 8px;overflow-wrap:anywhere}
+.diff p{display:flex;gap:8px;align-items:baseline}
+.diff del,.diff ins{display:block;flex:1;min-width:0;text-decoration:none}
+.diff .tag{flex:none}
+.diff del{background:var(--warn-bg);color:var(--warn-ink)}
+.diff ins{background:var(--good-bg);color:var(--good-ink)}
+.diff del::before{content:"\2212  "}
+.diff ins::before{content:"+  "}
+.side .kv>div{flex-direction:column;gap:0}
+.side .kv dd{text-align:left}
+#coverage-h~h3{margin-top:1.4rem}
+.rules{margin:.4rem 0;padding-left:1.2rem;max-width:72ch}
+.repair{margin-top:20px}
+.rawresult{margin:6px 0 0;padding:8px 12px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--rule);border-radius:8px;font:.82rem/1.5 var(--mono)}
+.patch{margin:12px 0 0;padding:10px 0;overflow-x:auto;background:var(--bg);border:1px solid var(--rule);border-radius:8px;font:.82rem/1.5 var(--mono)}
+.patch span{display:block;padding:0 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.patch .add{background:var(--good-bg);color:var(--good-ink)}
+.patch .del{background:var(--warn-bg);color:var(--warn-ink)}
+.patch .hunk,.patch .file{color:var(--muted)}
+.empty{margin-top:40px;padding:28px;border:1px dashed var(--rule-strong);border-radius:10px;color:var(--muted)}
+footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--rule)}
+@media print{body{background:#fff}.graphwrap{overflow:visible}}
+@media (max-width:639px){
+.scrollhint{display:block}
+table.cells{table-layout:auto;min-width:0}
+table.cells colgroup{display:none}
+table.cells thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+table.cells,table.cells tbody{display:block}
+table.cells tr{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;padding:12px 0;border-bottom:1px solid var(--rule)}
+table.cells th,table.cells td{border:0;padding:0;min-width:0}
+table.cells th{grid-column:1/-1}
+table.cells td::before{content:attr(data-label);display:block;color:var(--muted);font-size:.78rem}
+table.cells td.notrun{grid-column:1/-1}
+table.cells td.notrun::before{content:none}
+.warn{max-width:none}
+}
+.graphwrap:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+</style></head><body><main><header class="top">
+<h1>NemoGate results</h1>
+<p class="lead">Do the rules survive the handoffs between agents? Each boundary below was tested by
+sabotaging the handoff and counting how often the rule was then broken.</p>
+<p class="verdict-line"><strong>No comparison has enough runs yet.</strong> A rule effect needs a rule with a compiled check and runs both with and without the sabotage at the same handoff.</p>
+</header>
+<section aria-labelledby="key-h" class="key"><h2 id="key-h">Key</h2><div class="keycols"><div><h3>Arms (how a run was set up)</h3><dl class="kv stack"><div><dt>Natural</dt><dd>no sabotage: the agents hand the rule on, or lose it, by themselves.</dd></div><div><dt>Mutated</dt><dd>the handoff is sabotaged by an operator and nothing guards the rule.</dd></div><div><dt>Block-only</dt><dd>sabotaged handoff, and the gate refuses an action that breaks the rule, without sending the rule again.</dd></div><div><dt>Gated</dt><dd>sabotaged handoff, and the gate both refuses a rule-breaking action and puts the rule back into the handoff.</dd></div></dl></div><div><h3>Operators (how the handoff is sabotaged)</h3><dl class="kv stack"><div><dt><code>drop</code></dt><dd>the sentence that states the rule is removed from the handoff.</dd></div><div><dt><code>hedge</code></dt><dd>the rule is reworded as vague advice.</dd></div><div><dt><code>compress_100</code></dt><dd>the handoff is summarised to 100 words.</dd></div></dl></div></div></section><section aria-labelledby="fixes-h" class="key"><h2 id="fixes-h">What each part fixes</h2><dl class="kv stack"><div><dt>The gate (block-only and gated arms)</dt><dd>blocks a tool call that breaks a rule it can check before the call (path, tool and approval rules), whatever the cause, so it also stops a rule that arrived but was ignored. Gated also holds back a reply that misses an output rule.</dd></div><div><dt>Reading a 0 in the blocking arms</dt><dd>For a path, tool or approval rule, a 0 broken in the block-only and gated arms comes from blocking: the gate refuses the action with the same check that grades the run, so both arms get it by construction. Other rules are not refused before the call (frozen files and output rules are graded after the run), so a 0 there is a measured result, not a construction. Whether carrying the rule adds anything over blocking, such as finishing the task where blocking leaves the agent stuck, is the hypothesis being measured, not a result.</dd></div><div><dt>Repair</dt><dd>Repair targets rules lost in the handoff. Its fixes are instructions that make sure the rule reaches the agent.</dd></div><div><dt>Checked after the run</dt><dd>Rules checked on the files an agent changed, such as frozen files, are graded after the run. The gate does not block them.</dd></div></dl></section>
+<section aria-labelledby="honesty-h" class="strip">
+<h2 id="honesty-h">What these numbers can and cannot tell you</h2>
+<ul class="honesty">
+<li><span class="v">not measured</span>
+<span class="k">extraction recall: how many of the seeded rules the extractor found</span></li>
+<li><span class="v">4 of 5</span>
+<span class="k">rules can be graded: each has a compiled check, a program that decides
+pass or fail</span></li>
+<li><span class="v">16</span>
+<span class="k">inconclusive runs, left out of every rate below. Natural runs where the
+rule never came up are not among them: they stay in the rates, and each natural row counts
+them</span></li>
+</ul>
+</section>
+<section aria-labelledby="runs-h" class="meta">
+<div>
+<h2 id="runs-h">Runs</h2>
+<dl class="kv"><div><dt>found</dt><dd>16</dd></div>
+<div><dt>counted in the rates</dt><dd>0</dd></div></dl>
+<h3>Left out, by reason</h3>
+<dl class="kv"><div><dt>not comparable</dt><dd>9</dd></div><div><dt>rule never came up</dt><dd>7</dd></div><div><dt>unreadable record</dt><dd>0</dd></div></dl>
+</div>
+<div>
+<h2>Models</h2>
+<p class="note">No runs were counted, so there is no shared set of conditions.</p>
+<dl class="kv"><div><dt>models</dt><dd>none recorded</dd></div></dl>
+</div>
+<div>
+<h2>Same conditions</h2>
+<dl class="kv"><div><dt>safe config</dt><dd>none recorded</dd></div><div><dt>ledger</dt><dd>none recorded</dd></div><div><dt>repo commit</dt><dd>none recorded</dd></div><div><dt>lockfile</dt><dd>none recorded</dd></div></dl>
+</div>
+</section><section aria-labelledby="coverage-h"><h2 id="coverage-h">Coverage</h2><p class="note">How much of the ledger these numbers speak for. A constraint without a compiled check cannot be graded; one that never came up in a run has no rate.</p><div class="tablewrap" tabindex="0" role="region" aria-label="Coverage of the ledger"><table class="plain"><tbody><tr><th scope="row">Declared in the ledger</th><td class="num">5</td></tr><tr><th scope="row">With a compiled check</th><td class="num">4 of 5</td></tr><tr><th scope="row">Exercised: at least one counted run</th><td class="num">0 of 5</td></tr><tr><th scope="row">Exercised and checked: the only ones with a verdict</th><td class="num">0 of 5</td></tr><tr><th scope="row">Extraction recall</th><td class="num">not measured</td></tr></tbody></table></div><h3>Without a compiled check (cannot be graded)</h3><p class="note">None.</p><p class="note">5 declared constraints were never exercised, and constraints that never ran are missing from the list above. Pass <code>--ledger</code> to list them.</p></section><div class="empty"><strong>No runs were counted.</strong> There is nothing to chart yet: no boundary, no constraint and no rate. Nothing here is a zero.</div><section aria-labelledby="patch-h"><h2 id="patch-h">The repair patch</h2><div class="empty"><strong>No repair run yet.</strong> Pass <code>--repair DIR</code>, the folder <code>python -m repair</code> wrote, to show the proposed patch and the verdict.</div></section><footer><p class="note">Ranges show how uncertain each number is: the fewer runs behind it, the wider the range. Whether a rule was obeyed comes from deterministic checks, never from a model.</p><details class="method"><summary>Method</summary><dl class="kv stack"><div><dt>Intervals</dt><dd>Every rate comes with a 95% Wilson score interval.</dd></div><div><dt>Differences</dt><dd>A difference between two rates uses the Newcombe hybrid-score interval. When it includes 0 the page says the difference is not distinguishable from 0.</dd></div><div><dt>Pooled</dt><dd>Runs are pooled into a cell (arm, operator, rule, handoff) only within one reproducibility group: runs that share model ids, safe-config hash, ledger hash, repo commit and lockfile hash. Other runs are counted as not comparable.</dd></div><div><dt>Clustered</dt><dd>Forked runs share a source run. They are counted, not deduplicated, so a cell that contains forks is marked clustered and its intervals are too narrow.</dd></div><div><dt>Ungraded rules</dt><dd>A rule with no compiled check is never rated; its runs are only counted.</dd></div></dl><p class="note">Format version 2.</p></details></footer></main></body></html>
