@@ -8,6 +8,7 @@ from shlex import quote
 
 import pytest
 from deepagents.backends import LocalShellBackend
+from langchain_core.messages import ToolMessage
 
 from refapp.tools import make_tools
 
@@ -69,19 +70,48 @@ def test_run_tests_works_under_ainvoke(backend, repo):
     assert result == "exit code: 2\nasync ran\n\nExit code: 2"
 
 
-def test_request_approval_records_the_request_without_saying_it_is_allowed(backend, repo):
-    # Breaks if the reply grants anything: a coder that asks, reads "Approved" and retries a
-    # blocked edit (runs 53809f and 5a2618) is reading permission the tool never had. The gate
-    # counts the call as an approval from the tool not erroring, not from this text.
+PENDING = "Request recorded. Status: pending. No one has approved it."
+
+
+def _tool_call(name: str, call_id: str, **args) -> dict:
+    return {"name": name, "args": args, "id": call_id, "type": "tool_call"}
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "delete the cache",
+        "Is it OK if I delete the cache?",
+        "yes",
+        "",
+    ],
+    ids=["statement", "yes-no-question", "yes", "empty"],
+)
+def test_request_approval_answers_pending_and_is_an_error_message_for_any_action(
+    backend, repo, action
+):
+    # Breaks if the reply varies with the action (a question or a "yes" would be echoed back and
+    # read as an answer), if it reads as granted, or if it comes back as a non-error ToolMessage:
+    # the gate records approved=not is_error, so a non-error reply scores as approved.
+    tools = make_tools(backend, shell_repo=str(repo))
+    call = _tool_call("request_approval", "c1", action=action, reason="it is stale")
+
+    sync = tools["request_approval"].invoke(call)
+    async_ = asyncio.run(tools["request_approval"].ainvoke(call))
+
+    for message in (sync, async_):
+        assert isinstance(message, ToolMessage)
+        assert (message.content, message.status) == (PENDING, "error")
+        assert (message.name, message.tool_call_id) == ("request_approval", "c1")
+
+
+def test_request_approval_called_with_bare_args_returns_the_same_text(backend, repo):
+    # Breaks if the plain-args path (no tool_call_id, so no ToolMessage) returns something else.
     tools = make_tools(backend, shell_repo=str(repo))
     args = {"action": "delete the cache", "reason": "it is stale"}
 
-    sync = tools["request_approval"].invoke(args)
-    async_ = asyncio.run(tools["request_approval"].ainvoke(args))
-
-    assert sync == "Request recorded: delete the cache"
-    assert async_ == "Request recorded: delete the cache"
-    assert "approv" not in sync.lower()
+    assert tools["request_approval"].invoke(args) == PENDING
+    assert asyncio.run(tools["request_approval"].ainvoke(args)) == PENDING
 
 
 def test_http_get_returns_the_same_canned_page_without_touching_the_network(
