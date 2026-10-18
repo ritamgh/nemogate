@@ -883,7 +883,9 @@ def outcomes_split(cell: dict[str, Any]) -> str:
     )
 
 
-def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> str:
+def cell_row(
+    arm: str, op: str, cell: dict[str, Any] | None, note: str = "", attempts: bool = False
+) -> str:
     label = (
         f'{e(ARM_LABEL.get(arm, arm))}</th><td data-label="Operator">{e(op)}'
         + (f'<span class="count">{e(note)}</span>' if note else "")
@@ -892,7 +894,7 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> 
     if cell is None:
         return (
             f'<tr class="missing"><th scope="row">{label}'
-            '<td colspan="3" class="notrun">not run</td></tr>'
+            f'<td colspan="{4 if attempts else 3}" class="notrun">not run</td></tr>'
         )
     n = cell["n"]
     n_text = f"{e(n)}"
@@ -910,10 +912,15 @@ def cell_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = "") -> 
     elif cell.get("arm") == "natural":
         cvr += split_note(cell) + unexercised_note(cell)
     success = fraction_cell(cell["successes"], n, cell["success"]) + outcomes_split(cell)
+    tried = (
+        f'<td data-label="{e(ATTEMPT_HEAD)}">{attempt_td(cell.get("arm_metrics"))}</td>'
+        if attempts
+        else ""
+    )
     return (
         f'<tr><th scope="row">{label}<td data-label="Runs">{n_text}{warn}</td>'
         f'<td data-label="Violation rate">{cvr}</td>'
-        f'<td data-label="Task success">{success}</td></tr>'
+        f'<td data-label="Task success">{success}</td>{tried}</tr>'
     )
 
 
@@ -983,7 +990,15 @@ COMPARISONS = (
         "task success with the rule carried (gated) minus task success with blocking alone",
         "gated",
     ),
+    (
+        "attempt_reduction",
+        "Gate effect on attempts",
+        "attempt rate with the rule carried (gated) minus attempt rate with blocking alone; "
+        "below 0 means the coder tried the forbidden action less often",
+        "gated",
+    ),
 )
+OPTIONAL_COMPARISONS = ("attempt_reduction",)  # left out, not shown "not run", when absent
 
 
 def n_text(*counts: int) -> str:
@@ -993,6 +1008,8 @@ def n_text(*counts: int) -> str:
 
 def compared_n(cells: list[dict[str, Any]], comp: dict[str, Any]) -> list[int]:
     """The run counts of the two cells a comparison is made from (empty if a cell is missing)."""
+    if "n_a" in comp:  # an attempt comparison counts the runs that have a trace
+        return [comp["n_a"], comp["n_b"]]
     knobs = comp.get("compaction", ANY)
     pair = [find_cell(cells, comp[side]["arm"], comp[side]["operator"], knobs) for side in "ab"]
     return [c["n"] for c in pair if c]
@@ -1018,6 +1035,8 @@ def render_comparisons(cells: list[dict[str, Any]], comparisons: list[dict[str, 
                 (c for c in comparisons if c.get("name") == name and c.get("operator") == op), None
             )
             head = f"{e(title)}" + (f" ({e(op)})" if op else "")
+            if comp is None and name in OPTIONAL_COMPARISONS:
+                continue  # an older results file, or a cell with nothing to count from
             if comp is None:
                 body = '<span class="notrun">not run</span>'
             else:
@@ -1120,6 +1139,12 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
 # --- cost, time and blocking per arm ---------------------------------------------------------
 
 ATTEMPT_HEAD = "Attempted the rule's action"
+ATTEMPT_NOTE = (
+    "Attempted the rule's action: runs with at least one call at the forbidden action, whether "
+    "or not the gate let it through. The violation rate counts only what got through, so where "
+    "the gate blocks the action a blocking arm can show no violations while the coder still "
+    "tried; this column is what tells block_only and gated apart."
+)
 BLOCKING_ARMS = ("block_only", "gated")  # the arms whose gate refuses actions
 
 
@@ -1201,7 +1226,9 @@ def wall_td(cell: dict[str, Any]) -> str:
     return mean_text(wall, whole, " s") + line(note) + fork_note(cell, "time")
 
 
-def attempt_td(m: dict[str, Any]) -> str:
+def attempt_td(m: dict[str, Any] | None) -> str:
+    if not m:
+        return '<span class="notrun">not in this results file</span>'
     att = m.get("attempt_rate")
     if att is None:
         why = "not about a tool or path" if m.get("blocks") else "no trace to count from"
@@ -1268,18 +1295,17 @@ def arm_metrics_row(arm: str, op: str, cell: dict[str, Any] | None, note: str = 
     if cell is None:
         return (
             f'<tr class="missing"><th scope="row">{head}'
-            '<td colspan="4" class="notrun">not run</td></tr>'
+            '<td colspan="3" class="notrun">not run</td></tr>'
         )
     m = cell.get("arm_metrics")
     if not m:
         return (
             f'<tr><th scope="row">{head}'
-            '<td colspan="4" class="notrun">not in this results file</td></tr>'
+            '<td colspan="3" class="notrun">not in this results file</td></tr>'
         )
     return (
         f'<tr><th scope="row">{head}<td data-label="Cost per run">{cost_td(cell)}</td>'
         f'<td data-label="Wall time per run">{wall_td(cell)}</td>'
-        f'<td data-label="{e(ATTEMPT_HEAD)}">{attempt_td(m)}</td>'
         f'<td data-label="After a block">{after_block_td(arm, cell)}</td></tr>'
     )
 
@@ -1305,11 +1331,10 @@ def render_arm_metrics(cid: str, bid: str, cells: list[dict[str, Any]]) -> str:
     )
     table = (
         '<table class="cells arms"><colgroup><col style="width:14%"><col style="width:10%">'
-        '<col style="width:18%"><col style="width:16%"><col style="width:16%">'
-        '<col style="width:26%"></colgroup><thead><tr>'
+        '<col style="width:22%"><col style="width:20%">'
+        '<col style="width:34%"></colgroup><thead><tr>'
         '<th scope="col">Arm</th><th scope="col">Operator</th>'
         '<th scope="col">Cost per run</th><th scope="col">Wall time per run</th>'
-        f'<th scope="col">{e(ATTEMPT_HEAD)}</th>'
         '<th scope="col">After a block</th></tr></thead>'
         f"<tbody>{rows}</tbody></table>"
     )
@@ -1317,9 +1342,7 @@ def render_arm_metrics(cid: str, bid: str, cells: list[dict[str, Any]]) -> str:
         '<p class="note">Cost and time per run, with a 95% bootstrap interval from five runs and '
         "the lowest to highest value (a range, not an interval) from fewer. Means cover graded "
         "runs only; the money spent on errored runs, per arm, is not in them and is listed "
-        "under Money in no rate at the top. Attempted counts calls at the forbidden action "
-        "whether or not the gate let them through, so a blocked call is an attempt that failed, "
-        "not one that never happened.</p>"
+        "under Money in no rate at the top.</p>"
         + panels.tablewrap(f"Cost, time and blocking of {cid} at {bid}", table)
     )
 
@@ -1336,12 +1359,15 @@ def graded_section(
     # never shown as one row. A single setting leaves the table as it always was.
     settings = compaction_settings(cells)
     split = len(settings) > 1
+    # the attempt column comes with `arm_metrics`: a results file from before it has neither
+    any_attempts = any(c.get("arm_metrics") for c in cells)
     rows = "".join(
         cell_row(
             arm,
             op,
             find_cell(here, arm, op),
             compaction_note(setting) if split or (setting and setting.get("tokens")) else "",
+            any_attempts,
         )
         for setting in settings or [None]
         for here in [[c for c in cells if c.get("compaction") == setting]]
@@ -1355,12 +1381,19 @@ def graded_section(
     )
     any_outcomes = any(c.get("outcomes") for c in cells)
     sid = e(anchors.section(cid, bid))
+    if any_attempts:
+        widths = (17, 11, 12, 20, 20, 20)
+        extra_head = f'<th scope="col">{e(ATTEMPT_HEAD)}</th>'
+    else:
+        widths = (21, 13, 18, 24, 24)
+        extra_head = ""
+    cols = "".join(f'<col style="width:{w}%">' for w in widths)
     table = (
-        '<table class="cells"><colgroup><col style="width:21%"><col style="width:13%">'
-        '<col style="width:18%"><col style="width:24%"><col style="width:24%"></colgroup>'
+        f'<table class="cells"><colgroup>{cols}</colgroup>'
         "<thead><tr>"
         '<th scope="col">Arm</th><th scope="col">Operator</th><th scope="col">Runs</th>'
-        '<th scope="col">Violation rate</th><th scope="col">Task success</th></tr></thead>'
+        '<th scope="col">Violation rate</th><th scope="col">Task success</th>'
+        f"{extra_head}</tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
     exemplar = (
@@ -1373,6 +1406,7 @@ def graded_section(
         f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
         + panels.tablewrap(f"Runs of {cid} at {bid}", table)
         + (f'<p class="note outcomes-note">{e(OUTCOMES_NOTE)}</p>' if any_outcomes else "")
+        + (f'<p class="note attempts-note">{e(ATTEMPT_NOTE)}</p>' if any_attempts else "")
         + settings_note
         + render_arm_metrics(cid, bid, cells)
         + (
