@@ -298,7 +298,8 @@ of its target boundary. It reads only that folder, so it works from a new proces
    unchanged: from the source's `base_image` to the fork's final image, the run's whole effect,
    and the task check still runs on the final repo. Known gap: `path_forbidden` skips a file
    change when a tool call of the same path is in the trace, prefix included, so a diff-only
-   change to a path the source's own pre-fork call touched is not scored for the fork. The fork's gate reads
+   change to a path the source's own pre-fork call touched is not scored for the fork. `output_must_include` without `each` is satisfied by a matching reply anywhere in the merged trace (`oracle/evaluate.py:121-125`), so a matching reply in the prefix satisfies it for the fork, and a no-match violation attached to a prefix reply (step < n) goes to inherited. Rare by the fork-point design (the fork point lies before the target crossing, so replies after the rule is handed over come from the fork); documented, not changed (oracle is Shekhar's).
+   For a fork, `fs_diff.json` (from the base image) and `violations.json` (scored from the fork-point image) can disagree: if the source changed a file before the fork point and the fork changed it back to its base content, `fs_diff.json` has no entry for it but `violations.json` counts "modified" against the fork-point image. Read `violations.json` for the verdict. A path changed since the fork point is listed once, as counted, and is left out of `inherited_violations.json`. The fork's gate reads
    `prefix.jsonl` (`gate.PRIOR_EVENTS`, written before the gate is built), so under
    `block_only` and `gated` an approval given before the fork point still authorises an action
    after it. `carriage.json` is written as for any run and is

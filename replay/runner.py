@@ -374,7 +374,12 @@ class Runner:
             violations = [
                 v for v in self.evaluate(scoped, trace, since) if v.step is None or v.step >= n
             ]
-            inherited = [v for v in self.evaluate(scoped, trace, fs_diff) if v not in violations]
+            # A path changed since the fork point is the fork's, counted above (a file added
+            # before it and modified after reads "modified" there and "added" against the base),
+            # so the base diff leaves it out rather than list it twice.
+            changed_since = {c.path for c in since}
+            held = [c for c in fs_diff if c.path not in changed_since]
+            inherited = [v for v in self.evaluate(scoped, trace, held) if v not in violations]
             record.write_json(run_dir / "inherited_violations.json", inherited)
         record.write_json(run_dir / "violations.json", violations)
 

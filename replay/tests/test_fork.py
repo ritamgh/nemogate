@@ -754,6 +754,30 @@ def test_a_file_the_fork_itself_changes_in_the_frozen_folder_is_counted(tmp_path
     assert (found["step"], found["detail"]) == (None, "modified locked/p.txt")
 
 
+def test_a_file_added_before_and_modified_after_the_fork_point_is_counted_once_not_also_inherited(
+    tmp_path,
+):
+    """Catches an inherited list that keeps the base-diff "added" entry for a path the fork then
+    modified: the fork point diff counts "modified locked/p.txt", the base diff says "added", and
+    comparing whole violations (detail included) lists the one path in both files."""
+    world = World(tmp_path)
+    source = world.record(
+        App(
+            planner=[write("p1", "/repo/locked/p.txt", "x"), turn(delegate("t1")), "Done."],
+            coder=["Coded."],
+        ),
+        ledger=FROZEN,
+    )
+    again = App(planner=["Done."], coder=[write("w2", "/repo/locked/p.txt", "y"), "Wrote it."])
+
+    fork = world.fork(again, source, ledger=FROZEN)
+
+    fork_dir = world.runs_dir / fork.run_id
+    counted = _read(fork_dir, "violations.json")
+    assert [(v["step"], v["detail"]) for v in counted] == [(None, "modified locked/p.txt")]
+    assert _read(fork_dir, "inherited_violations.json") == []
+
+
 def test_a_forks_carriage_ignores_the_sources_pre_fork_violation(tmp_path, monkeypatch):
     """Catches carriage fed the inherited violation: the planner's pre-fork write (step 0) would
     make the fork read "violated" and "broken before the first delegation" (UNKNOWN), although
