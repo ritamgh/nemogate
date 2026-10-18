@@ -306,6 +306,48 @@ def test_results_pair_with_calls_by_agent_and_tool_in_order():
     assert [v.step for v in evaluate(ledger(PATH), trace, [])] == [2, 5]
 
 
+def source(event):
+    """The same event as a source run's, before a fork point: kept verbatim with its run id."""
+    return event.model_copy(update={"run_id": "r-source"})
+
+
+def test_a_source_call_before_the_fork_point_does_not_hide_the_forks_change():
+    # Gap from #75 (A): a planner call on the path in the source's prefix put the path in `seen`,
+    # so the fork's own change to it in the diff (from the fork point) was skipped; the prefix
+    # call's violation is then dropped by the runner (step < n), and the fork's change was lost.
+    trace = [source(call(0, "edit_file", file_path="vendor/a.py")), reply(5, "critic", "ok")]
+    diff = [FsChange(path="vendor/a.py", op="modified")]
+    assert [v.step for v in evaluate(ledger(PATH), trace, diff)] == [0, None]
+
+
+def test_the_forks_own_call_still_covers_its_change_once():
+    trace = [source(call(0, "ls", path="vendor")), call(6, "write_file", file_path="vendor/a.py")]
+    diff = [FsChange(path="vendor/a.py", op="modified")]
+    assert [v.step for v in evaluate(ledger(PATH), trace, diff)] == [6]
+
+
+@pytest.mark.parametrize(
+    ("trace", "steps"),
+    [
+        ([source(reply(2, "critic", "NOTE: early")), reply(9, "critic", "no line")], [9]),
+        ([source(reply(2, "critic", "NOTE: early")), call(9, "ls", path=".")], [None]),
+        ([source(reply(2, "critic", "early")), reply(9, "critic", "NOTE: late")], []),
+    ],
+    ids=["fork-reply-misses", "fork-never-replied", "fork-reply-meets"],
+)
+def test_a_source_reply_before_the_fork_point_cannot_meet_the_rule_for_the_fork(trace, steps):
+    # Gap from #75 (A): without `each`, a matching reply in the prefix satisfied the rule even
+    # when the fork's own reply missed it.
+    assert [v.step for v in evaluate(ledger(MUST, scope=("critic",)), trace, [])] == steps
+
+
+def test_a_source_approval_before_the_fork_point_still_counts():
+    # Context stays context: an approval in the prefix still authorises the fork's delete.
+    check = {"type": "approval_before", "tool": "delete"}
+    trace = [source(approval(1)), call(6, "delete", file_path="old.py")]
+    assert evaluate(ledger(check), trace, []) == []
+
+
 def test_the_reference_c008_entry_flags_an_emptied_file_and_c003_does_not():
     # The real ledger entries, scoped as the runner scopes them: C-008 grades emptying as
     # deleting, C-003 (the same rule without also_empty) leaves every earlier run comparable.
