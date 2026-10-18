@@ -451,6 +451,51 @@ def test_run_one_starts_the_session_from_the_base_image_and_diffs_base_against_f
     assert h.app.success_calls == [(FINAL, "X1")]
 
 
+def test_run_one_writes_emptied_true_for_a_file_the_run_wiped_and_old_diffs_still_load(
+    tmp_path, monkeypatch
+):
+    # Break caught: the runner's diff not carrying `emptied` from the real in-image script to
+    # fs_diff.json, so an edit that wipes a file is invisible to the oracle's also_empty check.
+    from replay.fsdiff import SCRIPT
+    from schemas.run import FS_DIFF
+
+    def snap(root: Path, files: dict[str, bytes]) -> dict:
+        for name, data in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_bytes(data)
+        out = subprocess.run(
+            [sys.executable, "-c", SCRIPT, str(root)], capture_output=True, text=True, check=True
+        )
+        return json.loads(out.stdout)
+
+    (tmp_path / "base").mkdir()
+    (tmp_path / "final").mkdir()
+    base = snap(tmp_path / "base", {"app/old.py": b"x = 1\n", "keep.py": b"k\n", "e.py": b""})
+    final = snap(
+        tmp_path / "final",
+        {"app/old.py": b"\n", "keep.py": b"k2\n", "e.py": b"\n", "new_empty.py": b""},
+    )
+    monkeypatch.setitem(SNAPSHOTS, BASE, base)
+    monkeypatch.setitem(SNAPSHOTS, FINAL, final)
+
+    h = Harness(tmp_path / "h")
+    asyncio.run(h.run_one())
+
+    text = (h.run_dir() / "fs_diff.json").read_text()
+    assert json.loads(text) == [
+        {"path": "app/old.py", "op": "modified", "emptied": True},
+        {"path": "e.py", "op": "modified"},
+        {"path": "keep.py", "op": "modified"},
+        {"path": "new_empty.py", "op": "added"},
+    ]
+    ((_, _, scored),) = h.evaluated
+    assert [c.path for c in scored if c.emptied] == ["app/old.py"]
+    # a diff written before the field existed has no key and loads with emptied False
+    old = FS_DIFF.validate_json('[{"path": "a.py", "op": "modified"}]')
+    assert old == [FsChange(path="a.py", op=FsOp.modified)]
+    assert old[0].emptied is False
+
+
 def test_run_one_closes_the_checkpoint_database_after_the_run(tmp_path):
     h = Harness(tmp_path)
     asyncio.run(h.run_one())
