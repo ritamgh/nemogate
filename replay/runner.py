@@ -35,8 +35,9 @@ from replay.boundaries import (
     copy_checkpoints,
     fork_point,
 )
-from replay.carriage import classify, compaction_evidence, write_carriage
+from replay.carriage import classify, compaction_evidence, fork_trace, write_carriage
 from replay.fsdiff import diff, snapshot
+from replay.step_cap import StepCap
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
@@ -64,6 +65,10 @@ ERROR = "error.json"  # a run that raised: what `arun` writes before it carries 
 TRACEBACK_LINES = 20  # how much of the traceback error.json keeps
 # A failure that no later run can avoid, or that a human must hear about: it stops the sweep.
 STOPS_THE_SWEEP = (SpendCapReached, ConfigError, MissingEnvError)
+# Supersteps one agent graph may take (two per model call: 120 calls) before its run ends as an
+# error. The longest single delegation in the Oct 19 sweep's finished runs made 88 tool calls
+# (about 178 supersteps; none cost over $0.64); a runaway one made 246+ calls and ~$2.
+SUBAGENT_STEP_LIMIT = 240
 
 
 def _default_client() -> Any:
@@ -126,6 +131,7 @@ class Runner:
         backend_factory: Callable[[Any], Any] | None = None,
         ledger_hash_fn: Callable[[Ledger], str] = record.ledger_hash,
         recursion_limit: int = 60,
+        subagent_step_limit: int = SUBAGENT_STEP_LIMIT,
         allow_dirty: bool = False,
         repo_dir: Path = ROOT,
     ) -> None:
@@ -139,6 +145,7 @@ class Runner:
         self.backend_factory = backend_factory or self._default_backend
         self.ledger_hash_fn = ledger_hash_fn
         self.recursion_limit = recursion_limit
+        self.subagent_step_limit = subagent_step_limit
         self.allow_dirty = allow_dirty
         self.repo_dir = repo_dir
         self.records: list[RunRecord] = []  # what the latest `arun` finished
@@ -349,10 +356,9 @@ class Runner:
         )
 
         final = str(session.uuid)
-        fs_diff = diff(
-            await snapshot(client, base, self.app.repo_root),
-            await snapshot(client, final, self.app.repo_root),
-        )
+        before = await snapshot(client, base, self.app.repo_root)
+        after = await snapshot(client, final, self.app.repo_root)
+        fs_diff = diff(before, after)
         record.write_json(run_dir / "fs_diff.json", fs_diff)
 
         task_success, tail = await self.app.task_success(session, task)
@@ -360,13 +366,28 @@ class Runner:
             (run_dir / "task_check.txt").write_text(tail, encoding="utf-8")
 
         trace = self._read_trace(run_config, repro["safe_config_hash"], repro["ledger_hash"])
-        if fork is not None:
-            # A fork is judged on what happened before its fork point too: the source's events
-            # (prefix.jsonl, steps 0..n-1) and then its own, numbered on from n.
+        if fork is None:
+            violations = self.evaluate(scoped, trace, fs_diff)
+        else:
+            # A fork is scored on what happens after its fork point (SPEC Changes, 2026-10-18).
+            # The oracle still sees the source's events (prefix.jsonl, steps 0..n-1) before the
+            # fork's own, numbered on from n, so an approval given before the fork point keeps
+            # authorising an action after it. A violation at a step before n is the source's:
+            # it goes to inherited_violations.json, as does one in a file change the fork point
+            # image already held (the file diff to score is taken from that image, not the base).
             n = len(fork.prefix)
-            trace = [*fork.prefix, *(e.model_copy(update={"step": e.step + n}) for e in trace)]
-
-        violations = self.evaluate(scoped, trace, fs_diff)
+            trace = fork_trace(fork.prefix, trace)
+            since = diff(await snapshot(client, start, self.app.repo_root), after)
+            violations = [
+                v for v in self.evaluate(scoped, trace, since) if v.step is None or v.step >= n
+            ]
+            # A path changed since the fork point is the fork's, counted above (a file added
+            # before it and modified after reads "modified" there and "added" against the base),
+            # so the base diff leaves it out rather than list it twice.
+            changed_since = {c.path for c in since}
+            held = [c for c in fs_diff if c.path not in changed_since]
+            inherited = [v for v in self.evaluate(scoped, trace, held) if v not in violations]
+            record.write_json(run_dir / "inherited_violations.json", inherited)
         record.write_json(run_dir / "violations.json", violations)
 
         # Where the rule was lost, if it was. The compaction knob is recorded here because
@@ -452,6 +473,9 @@ class Runner:
         config = {
             "configurable": {"thread_id": thread_id},
             "recursion_limit": self.recursion_limit,
+            # `recursion_limit` stops only the planner graph; Deep Agents gives each subagent
+            # graph a limit of its own. The callbacks reach the subagents too (replay/step_cap.py).
+            "callbacks": [StepCap(self.subagent_step_limit)],
         }
         recorder = BoundaryRecorder(session, run_config.target_boundary)
         # SpendHandler (common/llm.py:99) is a sync, non-inline callback handler. In async runs
