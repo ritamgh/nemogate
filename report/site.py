@@ -550,6 +550,17 @@ def errored_detail(row: dict[str, Any]) -> str:
     return f"{row['count']} {plural}" + (f", {unknown} with no recorded cost" if unknown else "")
 
 
+def rule_groups(results: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
+    """Each rule's own `reproducibility` block, None for a results file that has none (written
+    before runs were pooled per rule: its one group is the top-level block)."""
+    groups = {
+        cid: body["reproducibility"]
+        for cid, body in results.get("constraints", {}).items()
+        if body.get("reproducibility")
+    }
+    return groups or None
+
+
 def render_header(results: dict[str, Any], verdict: str) -> str:
     repro = results.get("reproducibility") or {}
     models = repro.get("model_ids") or {}
@@ -598,7 +609,15 @@ def render_header(results: dict[str, Any], verdict: str) -> str:
         honesty.get("constraints_with_check", 0),
     )
     inconclusive_total = honesty.get("inconclusive_total", 0)
-    if results["reproducibility"]:
+    rules = results.get("constraints", {}).values()
+    if results["reproducibility"] and any(
+        b.get("reproducibility") not in (None, results["reproducibility"]) for b in rules
+    ):
+        group_note = (
+            "Each rule was pooled under the conditions shown in its own section; these are the "
+            "conditions of the largest group."
+        )
+    elif results["reproducibility"]:
         group_note = "Only runs made under exactly these conditions were counted."
     else:
         group_note = "No runs were counted, so there is no shared set of conditions."
@@ -1457,6 +1476,20 @@ def render_constraint(
         if tasks
         else ""
     )
+    pooled = body.get("reproducibility")
+    if pooled:
+        set_aside = body.get("not_comparable", 0)
+        task_line += (
+            '<p class="note">Pooled at repo commit '
+            f"{short(pooled.get('repo_sha') or 'none recorded')}"
+            + (
+                f"; {e(set_aside)} runs of this rule under other conditions were set aside as "
+                "not comparable"
+                if set_aside
+                else ""
+            )
+            + ".</p>"
+        )
     boundaries = body.get("boundaries", {})
     sections = [
         graded_section(cid, bid, boundaries[bid], anchors, trace)
@@ -1595,7 +1628,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         results = json.loads(args.results.read_text(encoding="utf-8"))
         page = render(
             results,
-            trace=panels.load_trace_evidence(args.runs, results.get("reproducibility"))
+            trace=panels.load_trace_evidence(
+                args.runs, results.get("reproducibility"), rule_groups(results)
+            )
             if args.runs
             else None,
             repairs=panels.load_repairs(args.repair) if args.repair else None,
