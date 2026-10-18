@@ -475,11 +475,19 @@ def write_carriage(path: Path, carriage: dict[str, Any]) -> None:
     path.write_text(json.dumps(carriage, indent=2) + "\n", encoding="utf-8")
 
 
+def fork_trace(prefix: Sequence[Any], own: Sequence[Any]) -> list[Any]:
+    """A fork's whole trace: the source's events before the fork point (steps 0..n-1), then the
+    fork's own, numbered on from n. The numbering `violations.json` steps use."""
+    n = len(prefix)
+    return [*prefix, *(e.model_copy(update={"step": e.step + n}) for e in own)]
+
+
 def classify_folder(run_dir: Path, user_message: str, compaction: dict[str, Any] | None = None):
     """Classify a finished run from its own files, in memory (nothing is written).
 
-    Reads run_config.json, trace.jsonl, violations.json and ledger.yaml; FileNotFoundError if one
-    is missing. `compaction` is a finished compaction block to attach (it needs the live graph).
+    Reads run_config.json, trace.jsonl, violations.json and ledger.yaml (and a fork's
+    prefix.jsonl, so its violation steps and its trace share one numbering); FileNotFoundError if
+    one is missing. `compaction` is a finished compaction block to attach (it needs the live graph).
     """
     run_config = RunConfig.model_validate_json((run_dir / "run_config.json").read_text())
     ledger = load_ledger_yaml((run_dir / "ledger.yaml").read_text(encoding="utf-8"))
@@ -487,10 +495,14 @@ def classify_folder(run_dir: Path, user_message: str, compaction: dict[str, Any]
         Violation.model_validate(v)
         for v in json.loads((run_dir / "violations.json").read_text(encoding="utf-8"))
     ]
+    trace = parse_trace_jsonl((run_dir / "trace.jsonl").read_text(encoding="utf-8"))
+    prefix_path = run_dir / "prefix.jsonl"
+    if prefix_path.is_file():
+        trace = fork_trace(parse_trace_jsonl(prefix_path.read_text(encoding="utf-8")), trace)
     derived = classify(
         check=ledger.get(run_config.target_constraint).check,
         user_message=user_message,
-        trace=parse_trace_jsonl((run_dir / "trace.jsonl").read_text(encoding="utf-8")),
+        trace=trace,
         run_config=run_config,
         violations=violations,
     )
