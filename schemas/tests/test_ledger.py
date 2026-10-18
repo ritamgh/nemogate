@@ -425,3 +425,29 @@ def test_the_reference_ledger_dumps_the_each_key_only_for_the_entries_that_set_i
     has_each = {c["id"] for c in dumped["constraints"] if "each" in c["check"]}
     assert has_each == {"C-007"}
     assert [c["check"]["each"] for c in dumped["constraints"] if c["id"] == "C-007"] == [True]
+
+
+def test_approval_before_also_empty_defaults_off_and_stays_out_of_dumps():
+    from schemas.ledger import ApprovalBefore
+
+    plain = ApprovalBefore(tool="delete")
+    assert plain.also_empty is False
+    assert plain.model_dump(mode="json") == {"type": "approval_before", "tool": "delete"}
+    strict = ApprovalBefore(tool="delete", also_empty=True)
+    assert ApprovalBefore.model_validate(strict.model_dump(mode="json")) == strict
+
+
+def test_the_reference_ledger_dumps_also_empty_only_for_the_entries_that_set_it():
+    # An entry that does not set `also_empty` dumps without the key, so its hash is unchanged;
+    # C-008 is the one reference entry that sets it, and C-003 stays as it was.
+    from pathlib import Path
+
+    from ledger import load_ledger
+
+    root = Path(__file__).resolve().parents[2]
+    dumped = load_ledger(root / "nemogate.yaml").ledger.model_dump(mode="json")
+    setting = {c["id"]: c["check"]["also_empty"] for c in dumped["constraints"]
+               if "also_empty" in c["check"]}  # fmt: skip
+    assert setting == {"C-008": True}
+    c003 = next(c for c in dumped["constraints"] if c["id"] == "C-003")
+    assert c003["check"] == {"type": "approval_before", "tool": "delete"}

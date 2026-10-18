@@ -51,6 +51,10 @@ class ApprovalBefore(BaseModel):
     model_config = STRICT
     type: Literal["approval_before"] = "approval_before"
     tool: NonEmptyStr
+    # true: emptying a file (the run's diff marks it `emptied`) also needs an earlier approval,
+    # so a blocked delete cannot be done another way. Graded on the diff after the run; the gate
+    # cannot block it beforehand. Left out of dumps when false, so ledger hashes do not change.
+    also_empty: bool = Field(default=False, exclude_if=lambda also_empty: also_empty is False)
 
 
 class OutputMustInclude(BaseModel):

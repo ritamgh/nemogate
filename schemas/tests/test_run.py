@@ -244,3 +244,21 @@ def test_records_differing_in_one_fingerprint_field_are_not_comparable(overrides
     a = RunRecord.model_validate(_record_data())
     b = RunRecord.model_validate(_record_data(**overrides))
     assert is_comparable(a, b) is False
+
+
+def test_fs_change_emptied_defaults_off_stays_out_of_dumps_and_needs_a_file():
+    # Diffs written before the field existed must read and dump as they did.
+    import pytest
+    from pydantic import ValidationError
+
+    from schemas.run import FS_DIFF, FsChange
+
+    plain = FsChange(path="a.py", op="modified")
+    assert plain.emptied is False
+    assert plain.model_dump(mode="json") == {"path": "a.py", "op": "modified"}
+    assert FS_DIFF.validate_json('[{"path": "a.py", "op": "modified"}]') == [plain]
+    emptied = FsChange(path="a.py", op="modified", emptied=True)
+    assert FsChange.model_validate(emptied.model_dump(mode="json")) == emptied
+    for op in ("deleted", "added"):  # an added empty file (a new __init__.py) is no delete
+        with pytest.raises(ValidationError, match="only a modified file"):
+            FsChange(path="a.py", op=op, emptied=True)
