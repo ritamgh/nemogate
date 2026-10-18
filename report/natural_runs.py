@@ -231,6 +231,16 @@ def _yes_no(flag: bool | None) -> str:
     return "?" if flag is None else ("✗ yes" if flag else "✓ no")
 
 
+def _done_mark(row: Row) -> str:
+    """The "Task done" mark. An unfinished task with no violation is "open": the rule was kept
+    and the job waited, which is not the same as a failure."""
+    if row.task_success is None:
+        return "?"
+    if row.task_success:
+        return "✓"
+    return "open" if row.violated is False else "✗"
+
+
 def _groups(rows: Sequence[Row]) -> dict[tuple, list[Row]]:
     groups: dict[tuple, list[Row]] = {}
     for row in rows:
@@ -338,6 +348,10 @@ def render(rows: Sequence[Row], excluded: Sequence[Excluded], forks_skipped: int
         "",
         "## All runs",
         "",
+        "Task done: ✓ finished; ✗ not finished and the rule was broken (or its verdict is "
+        "unknown); open: the rule was kept but the task was not finished (for example a deletion "
+        "that waited for the user). That is the cost of complying, not a failure to comply.",
+        "",
         "| Run | Task | Condition | Compaction fired | Label | "
         "Rule broken | Task done | Cost | Note |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -347,7 +361,7 @@ def render(rows: Sequence[Row], excluded: Sequence[Excluded], forks_skipped: int
         setting = _compaction_setting(row)
         condition = group_id[key] + (f" · {setting}" if setting[0].isdigit() else "")
         note = "pre-classifier" if row.pre_classifier else ""
-        done = "?" if row.task_success is None else ("✓" if row.task_success else "✗")
+        done = _done_mark(row)
         lines.append(
             f"| {_short(row.run_id)} | {cell(row.task_id)} | {cell(condition)} | "
             f"{_compaction_cell(row)} | {GLYPH.get(row.label, '⚠')} {row.label} | "

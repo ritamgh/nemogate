@@ -1151,3 +1151,63 @@ def test_a_cell_with_an_operator_gets_no_grid():
     text = text_of(article(site.render(one_constraint(boundary)), "C-900"))
 
     assert "Agent kept it" not in text
+
+
+# --- the three outcomes: done, kept the rule but left open, broke the rule ----------------------
+
+FOOT = (
+    "Kept the rule, left open: the rule was obeyed but the task was not finished, for example a "
+    "deletion that waited for the user's sign-off. This is the cost of complying, not a failure "
+    "to comply."
+)
+
+
+def outcome_page(outcomes):
+    cell = make_cell("natural", "none", 10, 2, 5)
+    if outcomes is not None:
+        cell["outcomes"] = outcomes
+    boundary = {"delegation:planner->coder": {"cells": [cell], "comparisons": []}}
+    return site.render(one_constraint(boundary))
+
+
+def test_task_success_shows_the_three_way_split_and_the_foot_note():
+    # Breaks if a run that obeyed the rule but left the job open still reads as a plain failure:
+    # the row would say 5 of 10 succeeded and nothing about the 3 that complied and waited.
+    page = outcome_page({"done": 5, "kept_open": 3, "broke": 2})
+    text = text_of(article(page, "C-900"))
+
+    assert "5 of 10 runs done 5 · kept the rule, left open 3 · broke the rule 2" in text
+    assert FOOT in text
+    assert text.index("Task success") < text.index("kept the rule, left open 3")
+
+
+def test_the_existing_columns_are_kept_beside_the_split():
+    # Breaks if the split replaces the violation rate or the success rate it sits beside.
+    text = text_of(article(outcome_page({"done": 5, "kept_open": 3, "broke": 2}), "C-900"))
+
+    assert "20% (" in text and "2 of 10 runs" in text  # violation rate
+    assert "50% (" in text and "5 of 10 runs" in text  # task success
+
+
+def test_a_results_file_without_outcomes_renders_to_the_page_it_always_did():
+    # Breaks if old results files gain the split, the foot note or any other markup: removing
+    # exactly what outcomes adds must give back the page rendered without the field.
+    old = outcome_page(None)
+    new = outcome_page({"done": 5, "kept_open": 3, "broke": 2})
+
+    assert "left open" not in old
+    stripped = re.sub(r'<span class="count outcomes".*?</span>', "", new, flags=re.S)
+    stripped = re.sub(r'<p class="note outcomes-note">.*?</p>', "", stripped, flags=re.S)
+    assert stripped == old
+
+
+@pytest.mark.parametrize("name", ["results_rich", "results_empty"])
+def test_results_files_without_outcomes_render_to_the_bytes_main_rendered(name, tmp_path):
+    # Breaks if any shared markup, label, column or style changes for results files from before
+    # `outcomes` (say "Task success" renamed). The goldens are these fixtures rendered by
+    # report/site.py as it was on main before the outcomes change, not by the current renderer.
+    out = tmp_path / "index.html"
+
+    assert site.main(["--results", str(FIXTURES / f"{name}.json"), "--out", str(out)]) == 0
+
+    assert out.read_bytes() == (FIXTURES / f"golden_{name}.html").read_bytes()

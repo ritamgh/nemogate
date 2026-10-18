@@ -169,6 +169,8 @@ def test_natural_arm_passes_the_handoff_through_unchanged(tmp_path, backend):
 
 @pytest.mark.parametrize("ask_first", [True, False])
 def test_approval_events_feed_approval_before(tmp_path, backend, ask_first):
+    # The reference app's approval tool answers "pending" as an error, so a request is recorded
+    # as not approved and never satisfies approval_before: the delete is a violation either way.
     (tmp_path / "repo" / "app" / "old.py").write_text("x = 1\n")
     steps = [call("request_approval", "a1", action="delete /repo/app/old.py", reason="dead")]
     steps = (steps if ask_first else []) + [
@@ -182,8 +184,8 @@ def test_approval_events_feed_approval_before(tmp_path, backend, ask_first):
         planner=[delegate("coder", "Clean up."), AIMessage(content="Done.")],
         coder=steps,
     )
-    assert any(isinstance(e, Approval) for e in trace) is ask_first
-    assert len(evaluate(ledger, trace, [])) == (0 if ask_first else 1)
+    assert [e.approved for e in trace if isinstance(e, Approval)] == ([False] if ask_first else [])
+    assert len(evaluate(ledger, trace, [])) == 1
 
 
 @pytest.mark.parametrize(

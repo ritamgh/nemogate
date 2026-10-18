@@ -68,6 +68,12 @@ What it shows:
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
   `has_check: false` is tagged Not graded and shows no rate, comparison or trace (only a count of
   its runs); its cells are also left out of the boundary graph's pooled rates.
+- Task success also shows the three-way split when a cell has `outcomes`: "done N · kept the rule,
+  left open N · broke the rule N", and a foot note under the table says what "kept the rule, left
+  open" means: the rule was obeyed but the task was not finished (for example a deletion that
+  waited for the user), the cost of complying and not a failure to comply. A run that broke the
+  rule counts only as broke, even if the task finished. The existing columns stay; results files
+  without the field render to the same bytes as before.
 - Under each cell table, "Cost and time per run": per arm and operator, mean cost and wall time
   with a 95% bootstrap interval from five runs and the lowest to highest value, labelled
   "range", from fewer (unknown time is said, not shown as 0; the means cover graded runs only,
@@ -205,3 +211,7 @@ Tests: `uv run pytest report/tests/test_serve.py` (real sockets on 127.0.0.1, no
 
 `uv run python -m report.natural_runs --out results/natural-runs.md RUN_DIR_OR_PARENT...` writes a
 markdown page of every natural run with its carriage label. See the module docstring.
+In the all-runs table, "Task done" shows `open` (not a cross) for a run with no violation whose
+task was not finished: the rule was kept and the job waited, which is the cost of complying, not a
+failure. A legend line above the table says so. A cross still means not finished with a violation
+or an unknown verdict.
