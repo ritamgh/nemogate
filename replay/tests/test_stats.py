@@ -240,6 +240,8 @@ EXPECTED = {
             "kind": "constraint",
             "has_check": True,
             "blocked_before_call": True,
+            "reproducibility": GROUP,
+            "not_comparable": 1,  # nc-1, another repo_sha
             "task_ids": ["T1", "T2"],
             "boundaries": {
                 B1: {
@@ -352,6 +354,8 @@ EXPECTED = {
             "kind": "scope",
             "has_check": False,
             "blocked_before_call": False,
+            "reproducibility": GROUP,
+            "not_comparable": 0,
             "task_ids": ["T3"],
             "boundaries": {
                 B2: {
@@ -1308,3 +1312,241 @@ def test_a_run_that_broke_the_rule_and_finished_counts_as_broke_only():
     assert cell_["outcomes"] == {"done": 0, "kept_open": 2, "broke": 2}
     assert sum(cell_["outcomes"].values()) == cell_["n"] == 4
     assert cell_["successes"] == 1  # the existing count still counts the finished run
+
+
+# ---------------------------------------------------------------- pooling per rule
+
+
+def test_two_rules_run_at_different_commits_are_both_pooled_at_their_own_commit():
+    # Breaks if one repo_sha is chosen for the whole run set: the rule run at the other commit
+    # would vanish into not_comparable, as T10 did when the sweep ran it at its own commit.
+    runs = [
+        make_run("a-1", repo_sha="sha1"),
+        make_run("a-2", repo_sha="sha1"),
+        make_run("b-1", constraint="C-002", task="T3", repo_sha="sha2"),
+        make_run("b-2", constraint="C-002", task="T3", repo_sha="sha2"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    assert got["runs"]["pooled"] == 4
+    assert got["runs"]["inconclusive"]["not_comparable"] == 0
+    first, second = got["constraints"]["C-001"], got["constraints"]["C-002"]
+    assert (first["reproducibility"]["repo_sha"], first["not_comparable"]) == ("sha1", 0)
+    assert (second["reproducibility"]["repo_sha"], second["not_comparable"]) == ("sha2", 0)
+    (cell_,) = first["boundaries"][B1]["cells"]
+    assert cell_["n"] == 2
+    (cell_,) = second["boundaries"][B1]["cells"]
+    assert cell_["n"] == 2
+
+
+def test_within_one_rule_a_minority_commit_is_still_dropped_and_counted():
+    # Breaks if per-rule pooling keeps every commit of a rule (mixing them in one cell) or drops
+    # a minority run without counting it, so found != pooled + inconclusive.
+    runs = [
+        *[make_run(f"a-{i}", repo_sha="sha1") for i in (1, 2, 3)],
+        make_run("a-4", repo_sha="sha2"),
+        *[make_run(f"b-{i}", constraint="C-002", task="T3", repo_sha="sha2") for i in (1, 2)],
+        make_run("b-3", constraint="C-002", task="T3", repo_sha="sha1"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    first, second = got["constraints"]["C-001"], got["constraints"]["C-002"]
+    assert (first["reproducibility"]["repo_sha"], first["not_comparable"]) == ("sha1", 1)
+    assert (second["reproducibility"]["repo_sha"], second["not_comparable"]) == ("sha2", 1)
+    assert first["boundaries"][B1]["cells"][0]["n"] == 3
+    assert second["boundaries"][B1]["cells"][0]["n"] == 2
+    assert got["runs"]["found"] == 7
+    assert got["runs"]["pooled"] == 5
+    assert got["runs"]["inconclusive"]["not_comparable"] == 2
+    assert got["honesty"]["inconclusive_total"] == 2
+    # the headline group is the largest one: sha1 holds three pooled runs, sha2 two
+    assert got["reproducibility"]["repo_sha"] == "sha1"
+
+
+def test_a_comparison_is_made_from_one_commit_only():
+    # C-001 at sha1: natural 0/2 broke, mutated 2/2 broke (diff +1.0). Its sha2 run (natural,
+    # broke) must not reach the natural cell, or it would read 1/3. C-002 at sha2: natural 2/2
+    # and mutated 2/2 broke (diff 0.0): sha1's clean natural runs must not reach it either.
+    # Breaks if any cell or comparison pools runs of two commits.
+    runs = [
+        make_run("a-n1", repo_sha="sha1"),
+        make_run("a-n2", repo_sha="sha1"),
+        make_run("a-m1", arm="mutated", operator="drop", violated=True, repo_sha="sha1"),
+        make_run("a-m2", arm="mutated", operator="drop", violated=True, repo_sha="sha1"),
+        make_run("a-x", violated=True, repo_sha="sha2"),
+        make_run("b-n1", constraint="C-002", task="T3", violated=True, repo_sha="sha2"),
+        make_run("b-n2", constraint="C-002", task="T3", violated=True, repo_sha="sha2"),
+        make_run(
+            "b-m1",
+            constraint="C-002",
+            task="T3",
+            arm="mutated",
+            operator="drop",
+            violated=True,
+            repo_sha="sha2",
+        ),
+        make_run(
+            "b-m2",
+            constraint="C-002",
+            task="T3",
+            arm="mutated",
+            operator="drop",
+            violated=True,
+            repo_sha="sha2",
+        ),
+        make_run("b-x1", constraint="C-002", task="T3", repo_sha="sha1"),
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    for rule, expected_diff in (("C-001", 1.0), ("C-002", 0.0)):
+        boundary = got["constraints"][rule]["boundaries"][B1]
+        natural = next(c for c in boundary["cells"] if c["arm"] == "natural")
+        assert (natural["n"], natural["violations"]) == (2, 0 if rule == "C-001" else 2)
+        (change,) = boundary["comparisons"]
+        assert (change["name"], change["diff"]) == ("load_bearing", expected_diff)
+
+
+def test_two_tasks_of_one_rule_at_different_commits_are_not_pooled_together():
+    # A cell and its comparisons belong to a rule, and T1 and T6 both test it. Breaks if their
+    # runs at two commits fill one cell; the smaller commit's runs are counted, not mixed in.
+    runs = [
+        *[make_run(f"a-{i}", task="T1", repo_sha="sha1") for i in (1, 2, 3)],
+        *[make_run(f"b-{i}", task="T6", repo_sha="sha2") for i in (1, 2)],
+    ]
+    got = aggregate(runs, unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    body = got["constraints"]["C-001"]
+    assert body["task_ids"] == ["T1"]
+    assert (body["reproducibility"]["repo_sha"], body["not_comparable"]) == ("sha1", 2)
+    assert body["boundaries"][B1]["cells"][0]["n"] == 3
+
+
+def pin_runs():
+    """T1 (C-001): three runs at the commit 4d81a3d..., two at f06137e...; T3 (C-002): one run."""
+    return [
+        *[make_run(f"o-{i}", repo_sha="4d81a3dbbb") for i in (1, 2, 3)],
+        *[make_run(f"n-{i}", repo_sha="f06137eaaa") for i in (1, 2)],
+        make_run("t3-1", constraint="C-002", task="T3", repo_sha="4d81a3dbbb"),
+    ]
+
+
+def test_a_commit_pinned_for_a_task_replaces_the_largest_group_for_that_task_only():
+    # Breaks if the pin is ignored, applies to the other task, or the runs it sets aside are not
+    # counted as not_comparable (found != pooled + inconclusive).
+    got = aggregate(
+        pin_runs(),
+        unreadable=0,
+        ledger=LEDGER,
+        extraction_recall=None,
+        repo_sha_pins={"T1": "f06137e"},  # a prefix of the recorded sha
+    )
+
+    first, second = got["constraints"]["C-001"], got["constraints"]["C-002"]
+    assert first["reproducibility"]["repo_sha"] == "f06137eaaa"
+    assert first["boundaries"][B1]["cells"][0]["n"] == 2
+    assert first["not_comparable"] == 3
+    assert second["reproducibility"]["repo_sha"] == "4d81a3dbbb"
+    assert second["not_comparable"] == 0
+    assert got["runs"]["pooled"] == 3
+    assert got["runs"]["inconclusive"]["not_comparable"] == 3
+
+
+def test_without_a_pin_the_larger_commit_of_the_task_is_pooled():
+    # The default the pin overrides: 3 runs at 4d81a3d beat 2 at f06137e.
+    got = aggregate(pin_runs(), unreadable=0, ledger=LEDGER, extraction_recall=None)
+
+    assert got["constraints"]["C-001"]["reproducibility"]["repo_sha"] == "4d81a3dbbb"
+    assert got["constraints"]["C-001"]["not_comparable"] == 2
+
+
+@pytest.mark.parametrize("pins", [{"T1": "cafe"}, {"T9": "f06137e"}])
+def test_a_pin_that_matches_no_run_of_the_task_is_refused(pins):
+    # Breaks if a mistyped pin silently pools nothing for the task, or the default group instead.
+    with pytest.raises(ValueError, match="no run of task"):
+        aggregate(
+            pin_runs(), unreadable=0, ledger=LEDGER, extraction_recall=None, repo_sha_pins=pins
+        )
+
+
+def test_the_cli_pins_a_commit_with_repo_sha_task_equals_commit(tmp_path):
+    # Breaks if --repo-sha is not passed on to aggregate.
+    parent = tmp_path / "runs"
+    for run in pin_runs():
+        write_run(parent, run)
+    out = tmp_path / "results.json"
+
+    code = run_cli(tmp_path, [str(parent)], "--repo-sha", "T1=f06137e", "--out", str(out))
+
+    assert code == 0
+    body = json.loads(out.read_text())["constraints"]["C-001"]
+    assert body["reproducibility"]["repo_sha"] == "f06137eaaa"
+
+
+@pytest.mark.parametrize("pin", ["T1", "=abc", "T1=", "T1=abc,T2=abd"])
+def test_the_cli_rejects_a_malformed_repo_sha_pin(tmp_path, capsys, pin):
+    # Breaks if a malformed pin is read as something else (a task named "T1=abc,T2") or crashes.
+    parent = tmp_path / "runs"
+    write_run(parent, make_run("a-1"))
+    out = tmp_path / "results.json"
+
+    assert run_cli(tmp_path, [str(parent)], "--repo-sha", pin, "--out", str(out)) == 2
+
+    assert "--repo-sha" in capsys.readouterr().err
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    ("other_runs", "winner"),
+    [
+        (2, "aaa"),  # a tie of 2 v 2: the smaller sha wins, not the pin
+        (3, "aaa"),  # 3 v 2: the larger side wins, not the pin
+    ],
+)
+def test_a_pin_that_loses_to_another_task_of_the_same_rule_is_refused(other_runs, winner):
+    # T1 and T6 test C-001. Pinning T1 to bbb leaves T1@bbb x2 against T6@aaa x{other_runs}, and
+    # the pooling picks aaa. Breaks if the pin is accepted although every pinned run is then
+    # set aside (the CLI exited 0 with T1 missing from the page), or if the error does not name
+    # the task, the pinned commit, the rule and the commit actually pooled.
+    runs = [
+        *[make_run(f"a-{i}", task="T1", repo_sha="bbb") for i in (1, 2)],
+        make_run("a-3", task="T1", repo_sha="aaa"),
+        *[make_run(f"b-{i}", task="T6", repo_sha="aaa") for i in range(1, other_runs + 1)],
+    ]
+    with pytest.raises(ValueError) as caught:
+        aggregate(
+            runs, unreadable=0, ledger=LEDGER, extraction_recall=None, repo_sha_pins={"T1": "bbb"}
+        )
+
+    message = str(caught.value)
+    assert "T1" in message and "bbb" in message and "C-001" in message and winner in message
+
+
+def test_a_pin_that_leaves_a_rule_of_the_task_with_no_runs_is_refused():
+    # T has C-001 runs only at X and C-002 runs only at Y; pin T=xxx. Breaks if C-002 vanishes
+    # from the page (it had no entry, only a share of the global not_comparable total) instead
+    # of the pin being refused with the rule and "nothing" (no commit) in the message.
+    runs = [
+        make_run("a-1", task="T1", constraint="C-001", repo_sha="xxx"),
+        make_run("b-1", task="T1", constraint="C-002", repo_sha="yyy"),
+    ]
+    with pytest.raises(ValueError) as caught:
+        aggregate(
+            runs, unreadable=0, ledger=LEDGER, extraction_recall=None, repo_sha_pins={"T1": "xxx"}
+        )
+
+    message = str(caught.value)
+    assert "T1" in message and "xxx" in message and "C-002" in message and "nothing" in message
+
+
+def test_the_cli_exits_with_an_error_for_a_pin_that_cannot_take_effect(tmp_path, capsys):
+    # Breaks if the CLI writes a page (exit 0) when the pinned task's runs were all set aside.
+    parent = tmp_path / "runs"
+    write_run(parent, make_run("a-1", task="T1", repo_sha="bbb"))
+    write_run(parent, make_run("b-1", task="T6", repo_sha="aaa"))
+    write_run(parent, make_run("b-2", task="T6", repo_sha="aaa"))
+    out = tmp_path / "results.json"
+
+    assert run_cli(tmp_path, [str(parent)], "--repo-sha", "T1=bbb", "--out", str(out)) == 2
+
+    assert "T1" in capsys.readouterr().err
+    assert not out.exists()

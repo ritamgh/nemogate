@@ -447,6 +447,18 @@
       },
       "has_check": true,
       "kind": "constraint",
+      "not_comparable": 1,
+      "reproducibility": {
+        "ledger_hash": "1f2e3d4c5b6a",
+        "lockfile_hash": "abcdef012345",
+        "model_ids": {
+          "helper": "model/helper-x",
+          "planner": "model/planner-z",
+          "sut": "model/sut-y"
+        },
+        "repo_sha": "0123456789abcdef0123456789abcdef01234567",
+        "safe_config_hash": "8c5a0a1ec16e"
+      },
       "task_ids": [
         "TA"
       ],

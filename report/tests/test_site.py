@@ -1211,3 +1211,52 @@ def test_results_files_without_outcomes_render_to_the_bytes_main_rendered(name, 
     assert site.main(["--results", str(FIXTURES / f"{name}.json"), "--out", str(out)]) == 0
 
     assert out.read_bytes() == (FIXTURES / f"golden_{name}.html").read_bytes()
+
+
+# --- per-rule pooling: the commit each rule was pooled at -------------------------------------
+
+
+SHA_A = "f06137eaf4a6d5624792fd679ace7ace52940f8a"
+
+
+def with_groups(rich: dict, other_sha: str | None = None) -> dict:
+    """results_rich.json as the per-rule format writes it: every rule says its group, and
+    C-002 is pooled at `other_sha` when given."""
+    head = rich["reproducibility"]
+    for body in rich["constraints"].values():
+        body["reproducibility"] = {**head, "repo_sha": SHA_A}
+        body["not_comparable"] = 0
+    rich["reproducibility"] = {**head, "repo_sha": SHA_A}
+    if other_sha:
+        rich["constraints"]["C-002"]["reproducibility"]["repo_sha"] = other_sha
+        rich["constraints"]["C-002"]["not_comparable"] = 72
+    return rich
+
+
+def test_a_rule_section_names_the_commit_its_runs_were_pooled_at_and_the_runs_set_aside(rich):
+    # Breaks if the page hides which commit a rule's numbers come from, or the runs left out.
+    page = site.render(with_groups(rich, other_sha="4d81a3dbbb0000"))
+
+    first, second = article(page, "C-001"), article(page, "C-002")
+    assert f'<code title="{SHA_A}">f06137eaf4a6</code>' in first
+    assert "4d81a3dbbb00" in second
+    assert "72 runs of this rule under other conditions were set aside as not comparable" in (
+        text_of(second)
+    )
+    assert "set aside" not in text_of(first)
+
+
+def test_the_header_says_so_when_rules_were_pooled_under_different_conditions(rich):
+    # Breaks if the header keeps claiming one set of conditions for every rule.
+    same = text_of(site.render(with_groups(rich)))
+    rich = with_groups(load("results_rich.json"), other_sha="4d81a3dbbb0000")
+    mixed = text_of(site.render(rich))
+
+    assert "Only runs made under exactly these conditions were counted." in same
+    assert "Only runs made under exactly these conditions were counted." not in mixed
+    assert "these are the conditions of the largest group" in mixed
+
+
+def test_a_results_file_without_per_rule_groups_shows_no_pooled_at_line(rich):
+    # Breaks if old results files (no `reproducibility` on a rule) get a line saying "none".
+    assert "Pooled at" not in text_of(site.render(rich))

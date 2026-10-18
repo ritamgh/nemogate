@@ -191,12 +191,26 @@ def in_group(run: RunView, group: Mapping[str, Any] | None) -> bool:
     )
 
 
-def load_trace_evidence(paths: list[Path], group: Mapping[str, Any] | None) -> TraceEvidence:
+def load_trace_evidence(
+    paths: list[Path],
+    group: Mapping[str, Any] | None,
+    rule_groups: Mapping[str, Mapping[str, Any]] | None = None,
+) -> TraceEvidence:
     """Exemplars drawn only from the runs the statistics counted: those in `group` (the
     `reproducibility` block of the results file) that `replay.stats` does not set aside as
-    inconclusive, so the trace shown comes from the runs the numbers beside it are made of."""
+    inconclusive, so the trace shown comes from the runs the numbers beside it are made of.
+
+    `rule_groups` (rule id -> the `reproducibility` block of that rule, when the file has them)
+    replaces `group` per rule: each rule was pooled at its own group, and a rule without one had
+    no run pooled."""
     runs, skipped = load_runs(paths)
-    counted = [r for r in runs if in_group(r, group) and r.exercised]
+
+    def group_of(run: RunView) -> Mapping[str, Any] | None:
+        if rule_groups is None:
+            return group
+        return rule_groups.get(run.record.constraint_id)
+
+    counted = [r for r in runs if in_group(r, group_of(r)) and r.exercised]
     return TraceEvidence(pick_exemplars(counted), len(runs), skipped, len(runs) - len(counted))
 
 

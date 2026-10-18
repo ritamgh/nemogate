@@ -35,7 +35,8 @@ What it shows:
   construction), that for other rules a 0 is a measured result, and that whether carrying the
   rule adds anything over blocking is the hypothesis being measured, not a result.
 - Header: the reproducibility group (short hashes, with the full value in the tooltip, and the
-  model ids), run accounting (found, pooled, inconclusive by reason) and the honesty strip
+  model ids; with rules pooled at different commits it is the largest group, and the note beside
+  it says each rule's own group is in its section), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
   The strip is always shown, including when nothing was pooled.
 - Boundary graph: agents are parsed from the `delegation:<from>-><to>` and
@@ -48,7 +49,9 @@ What it shows:
   deficiency); the rate is also the line thickness and the text on the edge, and a table under the
   graph lists the same numbers. Each edge links to the card of the first constraint that has the
   boundary; the table links to all of them.
-- One card per constraint: rule text, kind, a Graded / Not graded tag, and per boundary a
+- One card per constraint: rule text, kind, a Graded / Not graded tag, the tasks that
+  contributed runs, the repo commit its runs were pooled at and how many of its runs were set
+  aside as not comparable (rules are pooled separately, so they can differ), and per boundary a
   table of cells (arm, operator, runs, violation rate and task success with their 95% Wilson
   intervals and a small interval bar). A `natural` cell whose results carry `violations_by_label`
   adds one line under the violation rate, such as "2 of 3 broken: 1 lost in the handoff,
@@ -119,7 +122,8 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   constraint's boundary section, the first violating `mutated` run by run id beside the first
   comparison run that kept the rule (a gated run with the same operator, else a natural run;
   same task, rule and boundary, and `is_comparable`). Only runs the statistics counted are
-  used: those in the results file's `reproducibility` group that `replay.stats` does not set aside
+  used: those in the rule's own `reproducibility` group (the file's top-level one for an older file
+  without per-rule groups) that `replay.stats` does not set aside
   (`stats.is_exercised`; a folder it cannot read is skipped), so the trace comes from the runs
   the numbers are made of.
   Each side shows the planner's text diffed against what the receiver got (a line tagged
