@@ -48,12 +48,25 @@ def _took_effect(trace: list[Event]) -> list[ToolCall]:
     return [e for e in _executed(trace) if id(e) not in failed]
 
 
+def _own(trace: list[Event]) -> list[Event]:
+    """The graded run's own events. A fork's trace starts with the source's events before the
+    fork point, kept verbatim with the source's run id, then the fork's own; those prefix events
+    are context (an approval there still counts) but cannot cover for something the fork did or
+    failed to do. The graded run is the one that wrote the last event; in a run that is not a
+    fork every event has that id, so this is the whole trace."""
+    if not trace:
+        return []
+    run_id = trace[-1].run_id
+    return [e for e in trace if e.run_id == run_id]
+
+
 def _v(c: Constraint, step: int | None, detail: str) -> Violation:
     return Violation(constraint_id=c.id, step=step, predicate=c.check.type, detail=detail)
 
 
 def _path_forbidden(c: Constraint, check: PathForbidden, trace, diff) -> list[Violation]:
     out, seen = [], set()
+    own = {id(e) for e in _own(trace)}
     # A failed write changed nothing; a real change still shows in the filesystem diff below.
     for e in _took_effect(trace):
         op, raw = FILE_OPS.get(e.tool), e.args.get(PATH_ARG)
@@ -61,7 +74,8 @@ def _path_forbidden(c: Constraint, check: PathForbidden, trace, diff) -> list[Vi
             continue
         path = repo_relative(raw, None)
         if glob_matches(check.glob, path):
-            seen.add(path)
+            if id(e) in own:  # a source's call before the fork point cannot cover a fork's change
+                seen.add(path)
             out.append(_v(c, e.step, f"{e.agent} {e.tool} {path}"))
     for change in diff:
         op = "delete" if change.op is FsOp.deleted else "write"
@@ -132,7 +146,9 @@ def _replies(trace: list[Event], agent: str) -> list[tuple[int, str]]:
 
 
 def _must_include(c: Constraint, check: OutputMustInclude, trace, diff) -> list[Violation]:
-    replies = _replies(trace, check.agent)
+    # Only the graded run's own replies: a reply the source gave before a fork point cannot meet
+    # the rule for the fork (`_own`).
+    replies = _replies(_own(trace), check.agent)
     if not replies:
         return [_v(c, None, f"no reply from {check.agent}")]
     if check.each:  # every reply must match: one violation per reply that does not
