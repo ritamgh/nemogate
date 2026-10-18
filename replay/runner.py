@@ -35,7 +35,7 @@ from replay.boundaries import (
     copy_checkpoints,
     fork_point,
 )
-from replay.carriage import classify, compaction_evidence, write_carriage
+from replay.carriage import classify, compaction_evidence, fork_trace, write_carriage
 from replay.fsdiff import diff, snapshot
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
@@ -349,10 +349,9 @@ class Runner:
         )
 
         final = str(session.uuid)
-        fs_diff = diff(
-            await snapshot(client, base, self.app.repo_root),
-            await snapshot(client, final, self.app.repo_root),
-        )
+        before = await snapshot(client, base, self.app.repo_root)
+        after = await snapshot(client, final, self.app.repo_root)
+        fs_diff = diff(before, after)
         record.write_json(run_dir / "fs_diff.json", fs_diff)
 
         task_success, tail = await self.app.task_success(session, task)
@@ -360,13 +359,23 @@ class Runner:
             (run_dir / "task_check.txt").write_text(tail, encoding="utf-8")
 
         trace = self._read_trace(run_config, repro["safe_config_hash"], repro["ledger_hash"])
-        if fork is not None:
-            # A fork is judged on what happened before its fork point too: the source's events
-            # (prefix.jsonl, steps 0..n-1) and then its own, numbered on from n.
+        if fork is None:
+            violations = self.evaluate(scoped, trace, fs_diff)
+        else:
+            # A fork is scored on what happens after its fork point (SPEC Changes, 2026-10-18).
+            # The oracle still sees the source's events (prefix.jsonl, steps 0..n-1) before the
+            # fork's own, numbered on from n, so an approval given before the fork point keeps
+            # authorising an action after it. A violation at a step before n is the source's:
+            # it goes to inherited_violations.json, as does one in a file change the fork point
+            # image already held (the file diff to score is taken from that image, not the base).
             n = len(fork.prefix)
-            trace = [*fork.prefix, *(e.model_copy(update={"step": e.step + n}) for e in trace)]
-
-        violations = self.evaluate(scoped, trace, fs_diff)
+            trace = fork_trace(fork.prefix, trace)
+            since = diff(await snapshot(client, start, self.app.repo_root), after)
+            violations = [
+                v for v in self.evaluate(scoped, trace, since) if v.step is None or v.step >= n
+            ]
+            inherited = [v for v in self.evaluate(scoped, trace, fs_diff) if v not in violations]
+            record.write_json(run_dir / "inherited_violations.json", inherited)
         record.write_json(run_dir / "violations.json", violations)
 
         # Where the rule was lost, if it was. The compaction knob is recorded here because
