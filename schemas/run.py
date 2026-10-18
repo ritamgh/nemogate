@@ -28,9 +28,11 @@ class FsChange(BaseModel):
     emptied: bool = Field(default=False, exclude_if=lambda emptied: emptied is False)
 
     @model_validator(mode="after")
-    def _emptied_file_exists(self) -> "FsChange":
-        if self.emptied and self.op is FsOp.deleted:
-            raise ValueError("a deleted path cannot also be emptied")
+    def _emptied_only_when_modified(self) -> "FsChange":
+        # Emptying is a file that had content and now has none. A deleted path has no file, and
+        # an added one had nothing to lose (a new empty __init__.py is not a delete).
+        if self.emptied and self.op is not FsOp.modified:
+            raise ValueError(f"only a modified file can be emptied, not an {self.op.value} one")
         return self
 
 

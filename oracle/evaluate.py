@@ -96,8 +96,9 @@ def _approval_before(c: Constraint, check: ApprovalBefore, trace, diff) -> list[
         if e.tool == check.tool and not any(step < e.step for step in approvals)
     ]
     if check.also_empty and not approvals:
-        # The diff has no steps, so an emptied file counts as approved only if some approval was
-        # granted in the run (the same scope as a delete's approval: not tied to a path).
+        # The diff has no steps, so an emptied file counts as approved if any approval was granted
+        # in the run, even one granted after the emptying; a delete call needs an earlier one.
+        # Same path-free scope as a delete's approval.
         out += [
             _v(c, None, f"emptied {repo_relative(change.path, None)} with no approval")
             for change in diff

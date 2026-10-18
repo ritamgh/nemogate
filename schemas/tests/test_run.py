@@ -259,5 +259,6 @@ def test_fs_change_emptied_defaults_off_stays_out_of_dumps_and_needs_a_file():
     assert FS_DIFF.validate_json('[{"path": "a.py", "op": "modified"}]') == [plain]
     emptied = FsChange(path="a.py", op="modified", emptied=True)
     assert FsChange.model_validate(emptied.model_dump(mode="json")) == emptied
-    with pytest.raises(ValidationError, match="deleted path"):
-        FsChange(path="a.py", op="deleted", emptied=True)
+    for op in ("deleted", "added"):  # an added empty file (a new __init__.py) is no delete
+        with pytest.raises(ValidationError, match="only a modified file"):
+            FsChange(path="a.py", op=op, emptied=True)
