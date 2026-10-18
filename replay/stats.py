@@ -1,6 +1,7 @@
 """Stats card: pool finished runs into cells, put intervals on them and write results.json.
 
-`python -m replay.stats RUNS... --ledger nemogate.yaml [--extraction-recall FILE] --out FILE`
+`python -m replay.stats RUNS... --ledger nemogate.yaml [--extraction-recall FILE]
+[--repo-sha TASK=COMMIT]... --out FILE`
 reads run folders (record.json, and fork.json / carriage.json when present; a folder with
 error.json and no record.json is an errored run) and writes the
 results file the report page reads. The format is in replay/README.md, section "stats.py".
@@ -15,7 +16,7 @@ import json
 import math
 import sys
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -236,12 +237,24 @@ def is_exercised(run: LoadedRun) -> bool:
     return run.label != Label.NOT_EXERCISED
 
 
-def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
-    """The largest comparable group (`is_comparable`), empty if there are no runs.
+def _group_rank(group: Sequence[LoadedRun]) -> tuple[Any, ...]:
+    """Sort key of a comparable group: the largest first; ties: the smallest repo_sha,
+    model_ids, safe_config_hash, ledger_hash and lockfile_hash in turn (so the choice never
+    depends on input order)."""
+    head = group[0].record
+    ids = sorted((str(role), name) for role, name in head.model_ids.items())
+    return (
+        -len(group),
+        head.repo_sha,
+        ids,
+        head.safe_config_hash,
+        head.ledger_hash,
+        head.lockfile_hash,
+    )
 
-    Largest = most runs; ties: the smallest repo_sha, model_ids, safe_config_hash, ledger_hash
-    and lockfile_hash in turn (so the choice never depends on input order).
-    """
+
+def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
+    """The largest comparable group (`is_comparable`), empty if there are no runs."""
     groups: list[list[LoadedRun]] = []
     for run in runs:
         for group in groups:
@@ -250,20 +263,33 @@ def _pooled_group(runs: Sequence[LoadedRun]) -> list[LoadedRun]:
                 break
         else:
             groups.append([run])
+    return min(groups, key=_group_rank, default=[])
 
-    def rank(group: list[LoadedRun]) -> tuple[Any, ...]:
-        head = group[0].record
-        ids = sorted((str(role), name) for role, name in head.model_ids.items())
-        return (
-            -len(group),
-            head.repo_sha,
-            ids,
-            head.safe_config_hash,
-            head.ledger_hash,
-            head.lockfile_hash,
-        )
 
-    return min(groups, key=rank, default=[])
+def _reproducibility(record: RunRecord) -> dict[str, Any]:
+    """The conditions a group of runs shares, as results.json writes them."""
+    return {
+        "model_ids": {str(role): name for role, name in record.model_ids.items()},
+        "safe_config_hash": record.safe_config_hash,
+        "ledger_hash": record.ledger_hash,
+        "repo_sha": record.repo_sha,
+        "lockfile_hash": record.lockfile_hash,
+    }
+
+
+def _pin_filter(runs: Sequence[LoadedRun], pins: Mapping[str, str]) -> Callable[[LoadedRun], bool]:
+    """Whether a run may be pooled given `pins` (task id -> repo_sha or a prefix of it): a run
+    of a pinned task must be at that commit, every other run is unaffected. ValueError if a pin
+    matches no run of its task, so a mistyped pin never silently pools something else."""
+    for task, sha in pins.items():
+        if not any(r.record.task_id == task and r.record.repo_sha.startswith(sha) for r in runs):
+            raise ValueError(f"--repo-sha {task}={sha}: no run of task {task} is at that commit")
+
+    def allowed(run: LoadedRun) -> bool:
+        sha = pins.get(run.record.task_id)
+        return sha is None or run.record.repo_sha.startswith(sha)
+
+    return allowed
 
 
 def _compaction(knobs: tuple[int | None, int | None] | None) -> dict[str, int | None] | None:
@@ -459,18 +485,29 @@ def aggregate(
     ledger: Ledger,
     extraction_recall: float | None,
     errored_runs: Sequence[ErroredRun] = (),
+    repo_sha_pins: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """The results dict (format_version 2) for `runs` and the `unreadable`, `errored` and `noop`
-    (mutation no-op) folders; `errored_runs` says what the errored ones cost, by arm."""
-    group = _pooled_group(runs)
+    (mutation no-op) folders; `errored_runs` says what the errored ones cost, by arm.
+
+    Runs are pooled per rule (a cell and its comparisons belong to one), each rule at its own
+    largest comparable group, so a rule run at another commit than the rest still appears and no
+    comparison mixes commits. `repo_sha_pins` (task id -> commit) overrides that choice for a
+    task: its runs at other commits are set aside."""
+    allowed = _pin_filter(runs, repo_sha_pins or {})
+    by_rule: dict[str, list[LoadedRun]] = {}
+    for run in runs:
+        by_rule.setdefault(run.record.constraint_id, []).append(run)
     # NOT_EXERCISED runs stay: the label is given only to runs that did not break the rule, so
     # dropping them would inflate the violation rate (see the natural cell's `not_exercised`).
-    pooled = sorted(group, key=lambda r: r.record.run_id)
+    groups = {cid: _pooled_group([r for r in rs if allowed(r)]) for cid, rs in by_rule.items()}
+    set_aside = {cid: len(by_rule[cid]) - len(group) for cid, group in groups.items()}
+    pooled = sorted((r for group in groups.values() for r in group), key=lambda r: r.record.run_id)
     inconclusive = {
         "unreadable_record": unreadable,
         "run_error": errored,
         "mutation_noop": noop,
-        "not_comparable": len(runs) - len(group),
+        "not_comparable": len(runs) - len(pooled),
     }
     declared = {c.id: c for c in ledger.constraints}
 
@@ -508,6 +545,9 @@ def aggregate(
             "has_check": constraint.check is not None,
             # the gate refuses a breaking call to this rule before it runs (block_only, gated)
             "blocked_before_call": checkable_before_the_call(constraint),
+            # the conditions this rule's cells were pooled under, and the rule's runs set aside
+            "reproducibility": _reproducibility(groups[constraint_id][0].record),
+            "not_comparable": set_aside[constraint_id],
             "task_ids": sorted(
                 {r.record.task_id for cs in boundaries.values() for rs in cs.values() for r in rs}
             ),
@@ -516,18 +556,12 @@ def aggregate(
 
     total = len(ledger.constraints)
     with_check = sum(c.check is not None for c in ledger.constraints)
-    head = pooled[0].record if pooled else None
+    # The header shows the largest group; each rule says which group its own cells are from.
+    head = min((g for g in groups.values() if g), key=_group_rank, default=[None])[0]
+    head = None if head is None else head.record
     return {
         "format_version": FORMAT_VERSION,
-        "reproducibility": None
-        if head is None
-        else {
-            "model_ids": {str(role): name for role, name in head.model_ids.items()},
-            "safe_config_hash": head.safe_config_hash,
-            "ledger_hash": head.ledger_hash,
-            "repo_sha": head.repo_sha,
-            "lockfile_hash": head.lockfile_hash,
-        },
+        "reproducibility": None if head is None else _reproducibility(head),
         "runs": {
             "found": len(runs) + unreadable + errored + noop,
             "pooled": len(pooled),
@@ -563,6 +597,20 @@ def _read_recall(path: Path) -> float:
     return float(recall)
 
 
+def _parse_pins(items: Iterable[str]) -> dict[str, str]:
+    """`--repo-sha TASK=COMMIT` items as {task: commit}; ValueError on a malformed or repeated
+    one."""
+    pins: dict[str, str] = {}
+    for item in items:
+        task, sep, sha = item.partition("=")
+        if not sep or not task or not sha or "," in item:
+            raise ValueError(f"--repo-sha {item!r}: expected TASK=COMMIT")
+        if task in pins:
+            raise ValueError(f"--repo-sha given twice for task {task}")
+        pins[task] = sha
+    return pins
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m replay.stats", description=__doc__)
     parser.add_argument("paths", nargs="+", type=Path, help="run folders, or folders of runs")
@@ -575,9 +623,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="spend.jsonl: prices errored runs whose error.json has no cost (default: unknown)",
     )
+    parser.add_argument(
+        "--repo-sha",
+        action="append",
+        default=[],
+        metavar="TASK=COMMIT",
+        help="pool this task's runs at COMMIT (a repo_sha or a prefix of it) instead of at its "
+        "largest group; its runs at other commits are counted as not comparable. Repeatable",
+    )
     parser.add_argument("--out", type=Path, required=True, help="results.json to write")
     args = parser.parse_args(argv)
     try:
+        pins = _parse_pins(args.repo_sha)
         recall = None if args.extraction_recall is None else _read_recall(args.extraction_recall)
         ledger = load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
         loaded = load_runs(args.paths, spend_log=args.spend_log)
@@ -589,6 +646,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ledger=ledger,
             extraction_recall=recall,
             errored_runs=loaded.errored_runs,
+            repo_sha_pins=pins,
         )
     except (OSError, ValueError, yaml.YAMLError) as exc:
         # FileNotFoundError, bad recall, bad ledger (YAML or schema), unknown constraint id
