@@ -75,7 +75,6 @@ def test_cost_time_and_blocking_are_shown_per_arm_with_their_intervals():
 
     assert "Block-only drop $0.110 (range $0.067 to $0.153) mean of 2 runs" in text
     assert "150 s (range 100 to 200 s) mean of 2 runs" in text
-    assert "50% (9–91%) 1 of 2 runs, blocked or not" in text
     assert "1.0 blocked calls per run (range 0.0 to 2.0)" in text
     assert "0.5 repeated after a block per run (range 0.0 to 1.0)" in text
     assert "re-planned the same action in 1 of 3 next delegations" in text
@@ -88,7 +87,6 @@ def test_unknown_time_and_missing_traces_are_said_not_shown_as_zero():
 
     # the mutated cell: 2 runs with no timing and no trace
     assert "unknown no timing recorded" in text
-    assert "no trace to count from" in text
 
 
 def test_cost_and_time_of_each_compaction_setting_get_their_own_row():
@@ -367,3 +365,78 @@ def test_a_cell_without_forks_or_from_an_older_file_has_no_fork_label():
     for n_forks in (None, 0):
         text = text_of(metrics_table(site.render(fork_page(2, n_forks))))
         assert "fork" not in text
+
+
+def runs_table(page: str) -> str:
+    return re.search(r'<table class="cells">.*?</table>', page, flags=re.S).group(0)
+
+
+def test_the_attempt_rate_is_a_column_of_the_runs_table_beside_violations_and_success():
+    # Breaks if the attempt rate stays in the cost table: the reader would have to match rows
+    # across two tables to see that a blocking arm's 0 violations hid 1 of 2 tries.
+    text = text_of(runs_table(site.render(metrics_page())))
+
+    assert "Violation rate Task success Attempted the rule's action" in text
+    assert "50% (9–91%) 1 of 2 runs, blocked or not" in text
+    assert "attempt" not in text_of(metrics_table(site.render(metrics_page()))).lower()
+
+
+def test_a_cell_with_no_trace_or_no_metrics_says_so_in_the_attempt_column_not_zero():
+    text = text_of(runs_table(site.render(metrics_page())))
+
+    assert "Mutated drop" in text and "no trace to count from" in text  # metrics, no rate
+    assert "Gated (NemoGate) drop" in text and "not in this results file" in text
+
+
+def test_the_runs_table_has_no_attempt_column_for_a_file_without_arm_metrics():
+    page = one_constraint(
+        {"delegation:a->b": {"cells": [make_cell("natural", "none", 4, 0, 4)], "comparisons": []}}
+    )
+
+    assert "Attempted the rule" not in runs_table(site.render(page))
+
+
+def gate_effect_page(attempts: dict | None) -> dict:
+    cells = [
+        with_metrics(
+            make_cell("block_only", "none", 20, 0, 19),
+            attempt_rate=rate(10, 20, 0.5, 0.2993, 0.7007),
+        ),
+        with_metrics(
+            make_cell("gated", "none", 20, 0, 20), attempt_rate=rate(3, 20, 0.15, 0.0524, 0.3604)
+        ),
+    ]
+    comparisons = [] if attempts is None else [attempts]
+    return one_constraint({"delegation:a->b": {"cells": cells, "comparisons": comparisons}})
+
+
+ATTEMPT_REDUCTION = {
+    "name": "attempt_reduction",
+    "operator": "none",
+    "compaction": None,
+    "a": {"arm": "gated", "operator": "none"},
+    "b": {"arm": "block_only", "operator": "none"},
+    "metric": "attempt_rate",
+    "diff": -0.35,
+    "lo": -0.5732,
+    "hi": -0.0592,
+    "n_a": 20,
+    "n_b": 20,
+}
+
+
+def test_the_gate_effect_on_attempts_is_shown_with_its_interval_and_excludes_zero():
+    # Breaks if the comparison stays in results.json only, or an interval below 0 is called
+    # indistinguishable from it.
+    text = text_of(site.render(gate_effect_page(ATTEMPT_REDUCTION)))
+
+    assert "Gate effect on attempts (none)" in text
+    assert "-35 pp (95% interval -57 pp to -6 pp) Lower than 0: the interval excludes 0." in text
+
+
+def test_a_results_file_without_the_attempt_comparison_shows_no_empty_line_for_it():
+    # Breaks if an older file (or a pair with nothing to count from) prints "not run" for a
+    # comparison it never had.
+    text = text_of(site.render(gate_effect_page(None)))
+
+    assert "Gate effect on attempts" not in text

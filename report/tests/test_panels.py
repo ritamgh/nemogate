@@ -238,6 +238,31 @@ def test_no_group_means_no_exemplar_not_an_unfiltered_one():
     assert evidence.not_counted == 8
 
 
+def test_a_rule_is_counted_in_its_own_pooled_group_not_the_headline_one():
+    # The headline group is that of the largest rule; a rule pooled at another commit has its own
+    # group in results.json. Here C-001 was pooled at the commit of the one run that is not in the
+    # headline group. Breaks if the headline group still decides, so the exemplars would come
+    # from runs the C-001 numbers beside them are not made of.
+    other = (RUN_FOLDERS / "r-20260101T000000-0aa000" / "record.json").read_text()
+    other_sha = json.loads(other)["repo_sha"]
+    own = {**GROUP, "repo_sha": other_sha}
+
+    evidence = panels.load_trace_evidence([RUN_FOLDERS], GROUP, {"C-001": own})
+
+    assert evidence.exemplars == {}  # that run is gated and kept the rule: no violating mutated run
+    assert evidence.not_counted == 7
+    same = panels.load_trace_evidence([RUN_FOLDERS], GROUP, {"C-001": GROUP})
+    assert same == panels.load_trace_evidence([RUN_FOLDERS], GROUP)
+
+
+def test_a_rule_with_no_group_of_its_own_counts_no_run_when_the_file_names_groups():
+    # Breaks if a rule missing from the per-rule groups falls back to the headline group.
+    evidence = panels.load_trace_evidence([RUN_FOLDERS], GROUP, {"C-002": GROUP})
+
+    assert evidence.exemplars == {}
+    assert evidence.not_counted == 8
+
+
 def test_without_a_gated_run_the_comparison_is_the_natural_run(tmp_path):
     # Breaks if the fallback is missing, or if the gated run with another repo_sha (it sorts
     # first) is taken although it was not run under the same conditions.
