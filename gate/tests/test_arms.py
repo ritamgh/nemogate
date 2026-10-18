@@ -77,7 +77,10 @@ def test_gated_repins_the_rule_and_names_it_when_blocking(tmp_path, backend, mod
     assert MIGRATIONS_RULE in block.reason
 
 
-def test_gated_blocks_a_delete_until_approval_then_allows_it(tmp_path, backend):
+def test_gated_keeps_blocking_a_delete_because_the_reference_app_never_approves(tmp_path, backend):
+    # The reference app's approval tool answers "pending" as an error, so the gate records the
+    # request as not approved and the delete stays blocked after it. (A granted approval, which
+    # unblocks a delete, is covered with synthetic events in test_policy and the fork tests.)
     target = tmp_path / "repo" / "app" / "old.py"
     target.write_text("x = 1\n")
     trace, ledger = run(
@@ -92,13 +95,13 @@ def test_gated_blocks_a_delete_until_approval_then_allows_it(tmp_path, backend):
             call("delete", "d1", file_path="/repo/app/old.py"),
             call("request_approval", "a1", action="delete /repo/app/old.py", reason="dead"),
             call("delete", "d2", file_path="/repo/app/old.py"),
-            AIMessage(content="Removed after approval."),
+            AIMessage(content="Could not delete."),
         ],
         helper=[picks(2)],
     )
     deletes = [e.blocked for e in trace if isinstance(e, ToolCall) and e.tool == "delete"]
-    assert deletes == [True, False]
-    assert not target.exists()
+    assert deletes == [True, True]
+    assert target.exists()
     assert evaluate(ledger, trace, []) == []
 
 
