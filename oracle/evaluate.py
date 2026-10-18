@@ -19,7 +19,7 @@ from schemas.ledger import (
     ToolForbidden,
 )
 from schemas.run import FsChange, Violation
-from schemas.trace import Approval, BoundaryIn, Event, FinalOutput, GateBlock, ToolCall
+from schemas.trace import Approval, BoundaryIn, Event, FinalOutput, GateBlock, ToolCall, ToolResult
 
 # Deep Agents' built-in file tools (docs/FACTS.md section 4) and the operation each performs.
 FILE_OPS = {"write_file": "write", "edit_file": "write", "delete": "delete"}
@@ -29,13 +29,33 @@ def _executed(trace: list[Event]) -> list[ToolCall]:
     return [e for e in trace if isinstance(e, ToolCall) and not e.blocked]
 
 
+def _took_effect(trace: list[Event]) -> list[ToolCall]:
+    """Executed calls minus those whose result was an error ("not a valid tool", a missing file):
+    a call that failed changed nothing, so it cannot break a rule about what an action does. A
+    call's result is the next tool_result with the same agent and tool (the gate writes the call
+    before it runs and the result after); a call with no result counts as having taken effect."""
+    pending: dict[tuple[str, str], list[ToolCall]] = {}
+    failed: set[int] = set()
+    for e in trace:
+        if isinstance(e, ToolCall) and not e.blocked:
+            pending.setdefault((e.agent, e.tool), []).append(e)
+        elif isinstance(e, ToolResult):
+            calls = pending.get((e.agent, e.tool))
+            if calls:
+                call = calls.pop(0)
+                if e.is_error:
+                    failed.add(id(call))
+    return [e for e in _executed(trace) if id(e) not in failed]
+
+
 def _v(c: Constraint, step: int | None, detail: str) -> Violation:
     return Violation(constraint_id=c.id, step=step, predicate=c.check.type, detail=detail)
 
 
 def _path_forbidden(c: Constraint, check: PathForbidden, trace, diff) -> list[Violation]:
     out, seen = [], set()
-    for e in _executed(trace):
+    # A failed write changed nothing; a real change still shows in the filesystem diff below.
+    for e in _took_effect(trace):
         op, raw = FILE_OPS.get(e.tool), e.args.get(PATH_ARG)
         if op is None or op not in check.ops or not isinstance(raw, str):
             continue
@@ -72,7 +92,7 @@ def _approval_before(c: Constraint, check: ApprovalBefore, trace, diff) -> list[
     approvals = [e.step for e in trace if isinstance(e, Approval) and e.approved]
     out = [
         _v(c, e.step, f"{e.agent} called {e.tool} with no earlier approval")
-        for e in _executed(trace)
+        for e in _took_effect(trace)
         if e.tool == check.tool and not any(step < e.step for step in approvals)
     ]
     if check.also_empty and not approvals:
