@@ -10,6 +10,12 @@ from schemas.run import FsChange
 SKIP_DIRS = frozenset({"__pycache__", ".pytest_cache"})
 SKIP_SUFFIXES = frozenset({".pyc"})
 
+# A regular file that is empty or only ASCII whitespace (bytes.strip()) within its first
+# BLANK_LIMIT bytes is "blank". The snapshot marks it with BLANK_MARK after its hash, so equal
+# values still mean the same bytes and the value of every other file is the plain hash.
+BLANK_LIMIT = 64 * 1024
+BLANK_MARK = ":blank"
+
 # Runs inside the image under its own `python3`, so it sticks to the standard library and
 # syntax any python3 has. argv[1] is the root. Output is one JSON object, ASCII only
 # (`ensure_ascii`), so any file name (spaces, newlines, unicode) survives the SDK's strict
@@ -22,6 +28,8 @@ import hashlib, json, os, stat, sys
 
 SKIP_DIRS = @DIRS@
 SKIP_SUFFIXES = @SUFFIXES@
+BLANK_LIMIT = @LIMIT@
+BLANK_MARK = @MARK@
 root = sys.argv[1]
 if not os.path.isdir(root):
     raise SystemExit("snapshot root is not a directory: " + root)
@@ -49,15 +57,25 @@ for here, dirs, files in os.walk(root, onerror=fail, followlinks=False):
         elif stat.S_ISREG(mode) and not name.endswith(SKIP_SUFFIXES):
             # SKIP_SUFFIXES name regular files only
             h = hashlib.sha256()
+            size = 0
+            blank = True
             with open(path, "rb") as f:
                 for chunk in iter(lambda: f.read(1 << 20), b""):
                     h.update(chunk)
-            out[rel] = "sha256:" + h.hexdigest()
+                    size += len(chunk)
+                    if blank and size > BLANK_LIMIT:
+                        blank = False
+                    elif blank and chunk.strip():
+                        blank = False
+            out[rel] = "sha256:" + h.hexdigest() + (BLANK_MARK if blank else "")
     dirs[:] = [d for d in dirs if d not in prune]
 print(json.dumps(out))
 """
-SCRIPT = _TEMPLATE.replace("@DIRS@", repr(tuple(sorted(SKIP_DIRS)))).replace(
-    "@SUFFIXES@", repr(tuple(sorted(SKIP_SUFFIXES)))
+SCRIPT = (
+    _TEMPLATE.replace("@DIRS@", repr(tuple(sorted(SKIP_DIRS))))
+    .replace("@SUFFIXES@", repr(tuple(sorted(SKIP_SUFFIXES))))
+    .replace("@LIMIT@", repr(BLANK_LIMIT))
+    .replace("@MARK@", repr(BLANK_MARK))
 )
 
 # Output cap for the snapshot command. The SDK's own default is 65535 bytes
@@ -68,6 +86,8 @@ _MAX_OUTPUT_BYTES = 10 * 1024 * 1024
 
 async def snapshot(client, image_uuid: str, root: str, *, timeout: int = 120) -> dict[str, str]:
     """Map every file under `root` in the image to "sha256:<hex>", symlinks to "symlink:<target>".
+
+    A blank file (empty or whitespace-only, see BLANK_LIMIT) gets BLANK_MARK after its hash.
 
     One disposable command on a plain image, so the image is untouched (FACTS §3).
     """
@@ -100,8 +120,20 @@ async def snapshot(client, image_uuid: str, root: str, *, timeout: int = 120) ->
     return files
 
 
+def _is_blank(value: str) -> bool:
+    return value.startswith("sha256:") and value.endswith(BLANK_MARK)
+
+
+def _is_regular(value: str) -> bool:
+    return value.startswith("sha256:")
+
+
 def diff(base: dict[str, str], final: dict[str, str]) -> list[FsChange]:
-    """Added, deleted and modified paths between two snapshots, sorted by path."""
+    """Added, deleted and modified paths between two snapshots, sorted by path.
+
+    A modified regular file that is blank in `final` and was not blank in `base` is `emptied`
+    (an edit that wiped it instead of deleting it). Added and deleted paths never are.
+    """
     changes = []
     for path in sorted(base.keys() | final.keys()):
         if path not in base:
@@ -109,5 +141,8 @@ def diff(base: dict[str, str], final: dict[str, str]) -> list[FsChange]:
         elif path not in final:
             changes.append(FsChange(path=path, op=FsOp.deleted))
         elif base[path] != final[path]:
-            changes.append(FsChange(path=path, op=FsOp.modified))
+            emptied = (
+                _is_blank(final[path]) and _is_regular(base[path]) and not _is_blank(base[path])
+            )
+            changes.append(FsChange(path=path, op=FsOp.modified, emptied=emptied))
     return changes

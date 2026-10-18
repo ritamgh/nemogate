@@ -49,6 +49,9 @@ async def snapshot(client, image_uuid: str, root: str, *, timeout: int = 120) ->
     # "symlink:<target>" for a symlink (never followed). SKIP_DIRS names skip real DIRECTORIES
     # only (a regular file or symlink called `__pycache__` is recorded); SKIP_SUFFIXES skip
     # REGULAR FILES only (a directory `pkg.pyc/` is walked, a symlink `x.pyc` is recorded).
+    # A BLANK regular file (empty or only ASCII whitespace, `bytes.strip() == b""`, size at most
+    # BLANK_LIMIT = 64 KiB) gets BLANK_MARK (":blank") after its hash: "sha256:<hex>:blank". The
+    # hash of every other file is the plain "sha256:<hex>", so equality still means same bytes.
     # Runs ONE command, disposable, on a plain image: `image = await client.images.use(UUID(uuid))`
     # then `await image.run(shell=..., disposable=True, timeout=timeout)` (never on a session:
     # FACTS §3). The command is `python3 -c <script>` that prints one JSON object on stdout
@@ -57,6 +60,12 @@ async def snapshot(client, image_uuid: str, root: str, *, timeout: int = 120) ->
 def diff(base: dict[str, str], final: dict[str, str]) -> list[FsChange]
     # added (only in final), deleted (only in base), modified (both, different value).
     # Sorted by path. Unchanged paths are absent.
+    # `emptied=True` only on a modified change whose final value is a blank regular file and
+    # whose base value is a regular file that is not blank (an edit wiped the file instead of
+    # deleting it). Never on added or deleted, never when the file was already blank, never for a
+    # symlink. Used for the base-image diff and the fork-point diff alike. Snapshots live in
+    # memory only; `fs_diff.json` stores the result, so an older run has no `emptied` and needs a
+    # fresh snapshot of its images to get one.
 ```
 
 ## record.py

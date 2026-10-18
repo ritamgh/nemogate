@@ -53,7 +53,7 @@ EXPECTED = {
     "notes with space.txt": sha(b"hello\n"),
     "multi\nline.txt": sha(b"newline name\n"),
     "café/日本.txt": sha(b"unicode\n"),
-    "empty.txt": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "empty.txt": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:blank",
     "link_to_file": "symlink:notes with space.txt",
     "link_to_dir": "symlink:app/core",
     "odd/pkg.pyc/mod.py": sha(b"x = 1\n"),
@@ -227,3 +227,129 @@ def test_diff_identical_snapshots_is_empty():
     snap = {"a": "sha256:01", "b": "symlink:a"}
     assert diff(snap, dict(snap)) == []
     assert diff({}, {}) == []
+
+
+# Emptied files. A blank file (empty, or only ASCII whitespace, within the first 64 KiB) carries
+# ":blank" after its hash; every other value is what it was before the flag existed.
+
+EMPTY_SHA = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+BLANK = ":blank"
+
+
+def snap_of(root):
+    proc = run_script(root)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_script_flags_blank_files_and_leaves_every_other_value_as_it_was(tmp_path):
+    # Break caught: a flag that rewrites a non-blank file's value (every old snapshot and the
+    # "same bytes" meaning of equality would change), or that misses a whitespace-only file.
+    files = {
+        "empty": b"",
+        "spaces": b"   ",
+        "mixed": b"\n\t ",
+        "crlf": b"\r\n\x0b\x0c",
+        "text": b"x = 1\n",
+        "nul_binary": b"\x00\x00",
+        "nbsp": "\u00a0".encode(),
+        "dot": b" . ",
+    }
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+    out = snap_of(tmp_path)
+    assert out == {
+        "empty": EMPTY_SHA + BLANK,
+        "spaces": sha(b"   ") + BLANK,
+        "mixed": sha(b"\n\t ") + BLANK,
+        "crlf": sha(b"\r\n\x0b\x0c") + BLANK,
+        "text": "sha256:" + hashlib.sha256(b"x = 1\n").hexdigest(),
+        "nul_binary": sha(b"\x00\x00"),
+        "nbsp": sha("\u00a0".encode()),
+        "dot": sha(b" . "),
+    }
+    # pinned, not computed: the exact string a non-blank file had before this change
+    assert out["text"] == "sha256:9e26bf369911c45c243c684147b23fc9e1dcfcf257d299a1c632016a6fcd33f4"
+
+
+def test_script_calls_a_file_longer_than_the_prefix_limit_not_blank(tmp_path):
+    # Break caught: a whitespace file of any size read as blank, or a size bound that is off by
+    # one (65536 bytes of spaces is blank, 65537 is not).
+    (tmp_path / "at_limit").write_bytes(b" " * 65536)
+    (tmp_path / "over_limit").write_bytes(b" " * 65537)
+    out = snap_of(tmp_path)
+    assert out["at_limit"].endswith(BLANK)
+    assert not out["over_limit"].endswith(BLANK)
+    assert out["over_limit"] == sha(b" " * 65537)
+
+
+def test_script_does_not_flag_a_symlink_to_a_blank_file(tmp_path):
+    (tmp_path / "blank").write_bytes(b"")
+    os.symlink("blank", tmp_path / "link")
+    assert snap_of(tmp_path)["link"] == "symlink:blank"
+
+
+def a_blank(data: bytes) -> str:
+    return sha(data) + BLANK
+
+
+def test_diff_marks_a_modified_file_that_became_empty_as_emptied():
+    # Break caught: an edit_file that replaces a file's text with "" leaves it "modified" only,
+    # so an approval_before check with also_empty never sees it.
+    out = diff({"f.py": sha(b"x = 1\n")}, {"f.py": a_blank(b"")})
+    assert out == [FsChange(path="f.py", op="modified", emptied=True)]
+
+
+def test_diff_marks_a_file_that_became_whitespace_only_as_emptied():
+    out = diff({"f.py": sha(b"x = 1\n")}, {"f.py": a_blank(b"\n")})
+    assert out == [FsChange(path="f.py", op="modified", emptied=True)]
+
+
+def test_diff_does_not_mark_a_file_edited_to_other_content_as_emptied():
+    out = diff({"f.py": sha(b"x = 1\n")}, {"f.py": sha(b"y = 2\n")})
+    assert out == [FsChange(path="f.py", op="modified")]
+    assert out[0].emptied is False
+
+
+def test_diff_does_not_mark_a_file_that_was_already_blank():
+    # Break caught: flagging every blank final file, so a seed file that is empty and gets an
+    # extra newline reads as emptied by the run.
+    out = diff({"f.py": a_blank(b"")}, {"f.py": a_blank(b"\n")})
+    assert out == [FsChange(path="f.py", op="modified")]
+
+
+def test_diff_does_not_mark_a_file_that_stops_being_blank():
+    out = diff({"f.py": a_blank(b"")}, {"f.py": sha(b"x\n")})
+    assert out == [FsChange(path="f.py", op="modified")]
+
+
+def test_diff_does_not_mark_an_added_empty_file_or_a_deleted_file_as_emptied():
+    # Break caught: an added empty file counted as an emptying (a new __init__.py would trip
+    # the rule), or a deleted file marked emptied (the schema refuses that).
+    out = diff({"gone.py": sha(b"x\n")}, {"new.py": a_blank(b"")})
+    assert out == [
+        FsChange(path="gone.py", op="deleted"),
+        FsChange(path="new.py", op="added"),
+    ]
+    assert not any(c.emptied for c in out)
+
+
+def test_diff_does_not_mark_a_symlink_replaced_by_an_empty_file_as_emptied():
+    out = diff({"f": "symlink:target"}, {"f": a_blank(b"")})
+    assert out == [FsChange(path="f", op="modified")]
+
+
+def test_diff_marks_emptied_against_a_fork_point_snapshot_too():
+    # The fork path diffs the fork-point image against the final one with the same function.
+    start = {"a.py": sha(b"a\n"), "b.py": sha(b"b\n")}
+    after = {"a.py": a_blank(b""), "b.py": sha(b"b\n")}
+    assert diff(start, after) == [FsChange(path="a.py", op="modified", emptied=True)]
+
+
+def test_diff_dump_leaves_emptied_out_unless_true():
+    # Break caught: the key written for every change would alter every stored fs_diff.json.
+    out = diff({"a": sha(b"x"), "b": sha(b"y")}, {"a": a_blank(b""), "b": sha(b"z")})
+    assert [c.model_dump(mode="json") for c in out] == [
+        {"path": "a", "op": "modified", "emptied": True},
+        {"path": "b", "op": "modified"},
+    ]

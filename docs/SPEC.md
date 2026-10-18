@@ -64,6 +64,11 @@ Changes:
   - **Comparability:** a run's ledger holds only its target, so the ledger hash of a T10 run changes (the full-ledger hash now includes C-008). Runs before and after do not pool.
   - **Oct 19 sweep:** its T10 runs are re-scored offline against C-008 with the merged oracle (a separate piece of work); the saved runs do not change.
 
+- 2026-10-18 (A): fs_diff records emptied files. An addition for Shekhar's `also_empty` check (#74); no schema change beyond his:
+  - **What counts:** `fs_diff.json` marks a change `"emptied": true` when the path is `modified`, is a regular file that is blank at the end of the run (empty, or only ASCII whitespace: `bytes.strip() == b""`, and not more than 64 KiB) and was not blank in the base image. A file blank in both images, an added empty file, a deleted file, and a symlink replaced by an empty file are not emptied. The key is left out when false, so an old `fs_diff.json` loads unchanged.
+  - **How:** the in-image snapshot script appends `:blank` to the hash of a blank file (`sha256:<hex>:blank`); every other value is the plain hash it was before. `diff()` reads the flag, so the base-image diff and the fork-point diff both carry `emptied`.
+  - **Old runs:** `emptied` is computed from the snapshots at run time, and snapshots are not stored (only the diff is). A run made before this change has no flag, and a re-score needs a fresh snapshot of its final image (`contree_image` in `record.json`) and of its base image (`base_image` in `boundaries.json`). Re-scoring from the stored `fs_diff.json` alone cannot see an emptied file.
+
 ### Accounts and environment
 
 | Decision | Default | Why |
