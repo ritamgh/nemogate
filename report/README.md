@@ -64,7 +64,8 @@ What it shows:
   carriage.json) are counted under it as "Not placed". Its CSS (`presence.css`) is added only to
   a page that has a grid, so a page without one is unchanged. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
-  (`load_bearing`) and gate effect on task success (`ledger_value`) are shown with their interval,
+  (`load_bearing`), gate effect on task success (`ledger_value`) and gate effect on attempts
+  (`attempt_reduction`, shown only when the results file has it) are shown with their interval,
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
   `has_check: false` is tagged Not graded and shows no rate, comparison or trace (only a count of
   its runs); its cells are also left out of the boundary graph's pooled rates.
@@ -74,10 +75,18 @@ What it shows:
   waited for the user), the cost of complying and not a failure to comply. A run that broke the
   rule counts only as broke, even if the task finished. The existing columns stay; results files
   without the field render to the same bytes as before.
+- A cell with `arm_metrics` also shows "Attempted the rule's action" in the cell table, beside
+  the violation rate and task success: the share of runs that made at least one call at the
+  forbidden action, blocked or not (`arm_metrics.attempt_rate`, Wilson 95%). A foot note says
+  why: the violation rate counts only what got through, so a blocking arm can show no violations
+  while the coder still tried. A cell with `arm_metrics` but no rate says "no trace to count
+  from" or "not about a tool or path", and a cell without `arm_metrics` says "not in this
+  results file". Results files from before `arm_metrics` get no column and render to the bytes
+  they always did.
 - Under each cell table, "Cost and time per run": per arm and operator, mean cost and wall time
   with a 95% bootstrap interval from five runs and the lowest to highest value, labelled
   "range", from fewer (unknown time is said, not shown as 0; the means cover graded runs only,
-  and the table says so), the attempt rate, and for
+  and the table says so), and for
   the block_only and gated arms what happened after a block (blocked calls and repeats per run,
   carry-over, re-plans, runs stuck, recovery steps with the cost and time shares marked as
   estimates; a line says how many runs carry-over and re-plans leave out because several task

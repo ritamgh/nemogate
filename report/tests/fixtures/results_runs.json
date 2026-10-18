@@ -422,6 +422,25 @@
               "metric": "success",
               "name": "ledger_value",
               "operator": "drop"
+            },
+            {
+              "a": {
+                "arm": "gated",
+                "operator": "drop"
+              },
+              "b": {
+                "arm": "block_only",
+                "operator": "drop"
+              },
+              "compaction": null,
+              "diff": 0.0,
+              "hi": 0.6576,
+              "lo": -0.7935,
+              "metric": "attempt_rate",
+              "n_a": 2,
+              "n_b": 1,
+              "name": "attempt_reduction",
+              "operator": "drop"
             }
           ]
         }
