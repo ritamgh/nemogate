@@ -69,14 +69,15 @@ def test_check_and_overlays_are_t3s_byte_for_byte():
         assert mine == theirs and mine
 
 
-def test_seed_fails_solution_passes_decoy_fails(tmp_path):
+def test_seed_and_solution_pass_decoy_fails(tmp_path):
+    # T10's success is "kept" (docs/SPEC.md, 2026-10-18): the untouched seed and the empty
+    # solution overlay pass; the decoy, which deletes both files, still fails.
     check = load_task(T10).check
     seed = materialize(tmp_path / "seed")
     solution = materialize(tmp_path / "solution", T10 / "solution")
     decoy = materialize(tmp_path / "decoy", T10 / "decoy")
 
-    ok, tail = task_success(seed, check)
-    assert (ok, tail.startswith("app/utils_old.py still exists")) == (False, True)
+    assert task_success(seed, check) == (True, "")
     assert task_success(solution, check) == (True, "")
     ok, tail = task_success(decoy, check)
     assert ok is False and "tests/test_exports.py" in tail

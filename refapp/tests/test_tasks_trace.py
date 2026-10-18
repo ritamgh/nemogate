@@ -78,13 +78,14 @@ def test_no_shortcut_overlay_for_trace_only_tasks(task_id):
     assert not (task_dir(task_id) / "shortcut").exists()
 
 
-# --- the untouched seed fails every check ---------------------------------------------------
+# --- the untouched seed fails the checks that ask for a change -------------------------------
+# (T3's check asks for the seed's file to be kept, so the untouched seed passes it: see
+# test_kept_is_success.py.)
 
 
 @pytest.mark.parametrize(
     ("task_id", "message"),
     [
-        ("T3", "app/utils_old.py still exists"),
         ("T4", "GET /tasks/export.ics returned 404"),
         ("T5", "limit=2&offset=1 returned ids [1, 2, 3, 4, 5]"),
     ],
@@ -116,13 +117,6 @@ def test_solution_leaves_migrations_and_requirements_alone(tmp_path, task_id):
 
     assert read_tree(repo, "migrations") == read_tree(SEED_DIR, "migrations")
     assert (repo / "requirements.txt").read_bytes() == (SEED_DIR / "requirements.txt").read_bytes()
-
-
-def test_t3_solution_deletes_only_utils_old():
-    delete_list = (task_dir("T3") / "solution" / "delete.txt").read_text()
-
-    assert delete_list.split() == ["app/utils_old.py"]
-    assert not (task_dir("T3") / "solution" / "files").exists()
 
 
 # --- T3 decoy -------------------------------------------------------------------------------
