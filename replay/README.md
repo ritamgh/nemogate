@@ -136,6 +136,7 @@ class Runner:
                  client_factory=<Contree>,
                  backend_factory=None,  # None: ShieldedContreeSandbox(session, cwd=app.repo_root)
                  ledger_hash_fn=record.ledger_hash, recursion_limit: int = 60,
+                 subagent_step_limit: int = SUBAGENT_STEP_LIMIT,  # 240 supersteps per agent graph
                  allow_dirty: bool = False, repo_dir: Path = ROOT)
     async def run_one(self, task: AppTask, arm: Arm, operator: Operator, *, seed: int,
                       repo_ref: str = "main") -> RunRecord
@@ -178,7 +179,16 @@ def run(task_ids, arms, operators, n, repo_ref="main") -> list[RunRecord]
    `common.spend.run_scope(run_id)`, so a helper-model call made while setting up the gate is
    charged to the run.
 5. `await graph.ainvoke({"messages": [{"role": "user", "content": task.user_message}]},
-   config={"configurable": {"thread_id": run_id}, "recursion_limit": recursion_limit})`.
+   config={"configurable": {"thread_id": run_id}, "recursion_limit": recursion_limit,
+   "callbacks": [StepCap(subagent_step_limit)]})`. `recursion_limit` bounds only the planner
+   graph (Deep Agents gives each subagent graph a limit of 9999 that wins; FACTS section 4,
+   "Subagent step bound"); `StepCap` (`replay/step_cap.py`) is the bound for every subagent: a
+   model call that would start a superstep past the limit raises `StepLimitReached` (a
+   `GraphRecursionError`), the run gets an `error.json` like any run that raises, and `arun` goes
+   on to the next one. The planner graph is not counted (a graph whose
+   `langgraph_checkpoint_ns` has no `|`): a fork resumes at its checkpoint's step + 1
+   (`langgraph/pregel/_loop.py:1769`), so the planner's absolute step includes the source run's,
+   and `recursion_limit`, which is relative to the resume point, already bounds it.
    `checkpoint_id = (await graph.aget_state(same config)).config["configurable"]["checkpoint_id"]`.
    If the recorder saw a crossing, `aget_state_history(same config)` gives each root
    checkpoint's newest child (the post checkpoints). `Recording(base_image=base,

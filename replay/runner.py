@@ -37,6 +37,7 @@ from replay.boundaries import (
 )
 from replay.carriage import classify, compaction_evidence, fork_trace, write_carriage
 from replay.fsdiff import diff, snapshot
+from replay.step_cap import StepCap
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
 from schemas.enums import Arm, Operator
@@ -64,6 +65,10 @@ ERROR = "error.json"  # a run that raised: what `arun` writes before it carries 
 TRACEBACK_LINES = 20  # how much of the traceback error.json keeps
 # A failure that no later run can avoid, or that a human must hear about: it stops the sweep.
 STOPS_THE_SWEEP = (SpendCapReached, ConfigError, MissingEnvError)
+# Supersteps one agent graph may take (two per model call: 120 calls) before its run ends as an
+# error. The longest single delegation in the Oct 19 sweep's finished runs made 88 tool calls
+# (about 178 supersteps; none cost over $0.64); a runaway one made 246+ calls and ~$2.
+SUBAGENT_STEP_LIMIT = 240
 
 
 def _default_client() -> Any:
@@ -126,6 +131,7 @@ class Runner:
         backend_factory: Callable[[Any], Any] | None = None,
         ledger_hash_fn: Callable[[Ledger], str] = record.ledger_hash,
         recursion_limit: int = 60,
+        subagent_step_limit: int = SUBAGENT_STEP_LIMIT,
         allow_dirty: bool = False,
         repo_dir: Path = ROOT,
     ) -> None:
@@ -139,6 +145,7 @@ class Runner:
         self.backend_factory = backend_factory or self._default_backend
         self.ledger_hash_fn = ledger_hash_fn
         self.recursion_limit = recursion_limit
+        self.subagent_step_limit = subagent_step_limit
         self.allow_dirty = allow_dirty
         self.repo_dir = repo_dir
         self.records: list[RunRecord] = []  # what the latest `arun` finished
@@ -466,6 +473,9 @@ class Runner:
         config = {
             "configurable": {"thread_id": thread_id},
             "recursion_limit": self.recursion_limit,
+            # `recursion_limit` stops only the planner graph; Deep Agents gives each subagent
+            # graph a limit of its own. The callbacks reach the subagents too (replay/step_cap.py).
+            "callbacks": [StepCap(self.subagent_step_limit)],
         }
         recorder = BoundaryRecorder(session, run_config.target_boundary)
         # SpendHandler (common/llm.py:99) is a sync, non-inline callback handler. In async runs

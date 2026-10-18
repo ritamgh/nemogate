@@ -424,14 +424,19 @@ def test_run_one_gives_the_same_list_to_both_middleware_slots(tmp_path):
 
 
 def test_run_one_invokes_the_graph_with_the_user_message_thread_and_recursion_limit(tmp_path):
-    h = Harness(tmp_path, recursion_limit=25)
+    h = Harness(tmp_path, recursion_limit=25, subagent_step_limit=30)
     rec = asyncio.run(h.run_one("X1"))
     graph = h.app.graph
+    ((payload, config),) = graph.invoked
+    assert payload == {"messages": [{"role": "user", "content": "Do X1."}]}
+    # the step cap rides in `callbacks` (replay/step_cap.py); the rest of the config is exact
+    (cap,) = config.pop("callbacks")
+    assert (type(cap).__name__, cap.limit) == ("StepCap", 30)
     expected_config = {"configurable": {"thread_id": rec.run_id}, "recursion_limit": 25}
-    assert graph.invoked == [
-        ({"messages": [{"role": "user", "content": "Do X1."}]}, expected_config)
+    assert config == expected_config
+    assert [{k: v for k, v in c.items() if k != "callbacks"} for c in graph.state_configs] == [
+        expected_config
     ]
-    assert graph.state_configs == [expected_config]
 
 
 def test_run_one_starts_the_session_from_the_base_image_and_diffs_base_against_final(
