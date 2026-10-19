@@ -6,7 +6,7 @@ Two pages, both generated offline from run data. Neither calls a model.
 
 ```
 uv run python -m report.site --results results/results.json --out results/site/index.html \
-    [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]
+    [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE]
 ```
 
 Reads the `results.json` that `replay/stats.py` writes (`format_version` 2; any other version is
@@ -40,6 +40,12 @@ What it shows:
   for any other rule it adds nothing of the kind; when that handoff was run under more than one
   compaction setting, the sentence names the setting it quotes and says the others have their own
   rows below; "No comparison has enough runs yet" when there is none.
+- With `--notes FILE`, a section "Notes on these numbers" right after the results section (so
+  after its verdict line, before the key): the file's paragraphs, split on blank lines, in order.
+  It is for a re-grade or a caveat that is not in the results file; the text stays in the file,
+  never in code. It is plain text and escaped, so markup shows as typed. Without the option, or
+  with an empty file, nothing is added and the page is byte-identical to one built without it. A
+  missing or unreadable file is exit code 2 and no page is written.
 - Below the results: the key (the four arms, the operators, and "Words on this page": boundary,
   compaction, not comparable, inconclusive and 95% interval in plain words; the statistical
   method stays in the Method block at the foot), then "What each part fixes": four static lines.
