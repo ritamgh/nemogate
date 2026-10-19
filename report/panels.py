@@ -12,8 +12,9 @@ import html
 import json
 import math
 import re
+from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,7 @@ class TraceEvidence:
     skipped: int  # run folders with a config but no usable record or trace
     not_counted: int = 0  # loaded folders not shown as examples (other conditions than the
     # counted runs, or the rule never came up: counted in the rates, but not a run that kept it)
+    found_by_rule: Mapping[str, int] = field(default_factory=dict)  # loaded runs per target rule
 
 
 def _read_events(path: Path) -> list[Event]:
@@ -211,7 +213,13 @@ def load_trace_evidence(
         return rule_groups.get(run.record.constraint_id)
 
     counted = [r for r in runs if in_group(r, group_of(r)) and r.exercised]
-    return TraceEvidence(pick_exemplars(counted), len(runs), skipped, len(runs) - len(counted))
+    return TraceEvidence(
+        pick_exemplars(counted),
+        len(runs),
+        skipped,
+        len(runs) - len(counted),
+        dict(sorted(Counter(r.record.constraint_id for r in runs).items())),
+    )
 
 
 # --- the trace panel --------------------------------------------------------------------------
@@ -591,17 +599,39 @@ def exercised(constraints: dict[str, Any]) -> list[str]:
     )
 
 
-def rule_list(items: list[tuple[str, str]]) -> str:
+def rule_list(items: list[tuple[str, str]], notes: Mapping[str, str] | None = None) -> str:
+    """Rules by id and text; `notes` adds a plain line under a rule (why it never ran)."""
     if not items:
         return '<p class="note">None.</p>'
+    notes = notes or {}
     return (
         '<ul class="rules">'
-        + "".join(f"<li><code>{e(i)}</code> {e(t)}</li>" for i, t in items)
+        + "".join(
+            f"<li><code>{e(i)}</code> {e(t)}"
+            + (f'<span class="count">{e(notes[i])}</span>' if i in notes else "")
+            + "</li>"
+            for i, t in items
+        )
         + "</ul>"
     )
 
 
-def render_coverage(results: dict[str, Any], ledger: Ledger | None) -> str:
+def never_ran_note(count: int) -> str:
+    """Why a rule has no counted run, from the run folders the page read (`--runs`)."""
+    if not count:
+        return "No run of this rule is in the run folders this page read."
+    plural = "run of this rule is" if count == 1 else "runs of this rule are"
+    return (
+        f"{count} {plural} in the run folders this page read, but the results "
+        "file counts none of them: it was made from other runs or under other conditions."
+    )
+
+
+def render_coverage(
+    results: dict[str, Any], ledger: Ledger | None, found: Mapping[str, int] | None = None
+) -> str:
+    """`found` (run folders read per target rule, from `--runs`) says, for a rule that never
+    ran, whether its runs were in the folders at all. Without it no reason is given."""
     honesty, constraints = results["honesty"], results["constraints"]
     total, checked = honesty.get("constraints_total", 0), honesty.get("constraints_with_check", 0)
     run_ids = exercised(constraints)
@@ -635,7 +665,12 @@ def render_coverage(results: dict[str, Any], ledger: Ledger | None) -> str:
             if len(ledger.constraints) != total
             else ""
         )
-        never = f"<h3>Never exercised (no counted run)</h3>{rule_list(unexercised)}"
+        notes = (
+            {cid: never_ran_note(found.get(cid, 0)) for cid, _ in unexercised}
+            if found is not None
+            else None
+        )
+        never = f"<h3>Never exercised (no counted run)</h3>{rule_list(unexercised, notes)}"
     else:
         unchecked = [
             (c, constraints[c].get("text", ""))

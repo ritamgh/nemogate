@@ -376,7 +376,7 @@ def test_the_attempt_rate_is_a_column_of_the_runs_table_beside_violations_and_su
     # across two tables to see that a blocking arm's 0 violations hid 1 of 2 tries.
     text = text_of(runs_table(site.render(metrics_page())))
 
-    assert "Violation rate Task success Attempted the rule's action" in text
+    assert "Violation rate Task passed (rule not considered) Attempted the rule's action" in text
     assert "50% (9–91%) 1 of 2 runs, blocked or not" in text
     assert "attempt" not in text_of(metrics_table(site.render(metrics_page()))).lower()
 

@@ -282,7 +282,7 @@ def test_clustered_cell_carries_a_warning_once(rich):
 def test_comparison_crossing_zero_says_so_in_words(rich):
     page = site.render(rich)
     c2 = text_of(article(page, "C-002"))
-    assert "Gate effect on task success (drop)" in c2
+    assert "Gate effect on passing the task (drop)" in c2
     assert "+10 pp (95% interval -30 pp to +50 pp) Not distinguishable from 0 at n = 10." in c2
     assert page.count("Not distinguishable from 0 at n = 10.") == 1
 
@@ -307,12 +307,14 @@ def test_summary_sentence_uses_only_numbers_from_the_cells(rich):
     page = site.render(rich)
     assert (
         "With the rule lost at the handoff <code>delegation:planner-&gt;coder</code>, the coder "
-        "broke it 80% of the time (8 of 10 runs). Blocking alone left task success at 50%. "
+        "broke it 80% of the time (8 of 10 runs). Blocking alone left task success (rule not "
+        "considered) at 50%. "
         "With NemoGate carrying the rule, task success was 60%, +10 pp against blocking alone: "
         "not distinguishable from 0 at n = 10."
     ) in page
     assert (
-        "broke it 50% of the time (5 of 10 runs). Blocking alone left task success at 50%. "
+        "broke it 50% of the time (5 of 10 runs). Blocking alone left task success (rule not "
+        "considered) at 50%. "
         "With NemoGate carrying the rule, task success was 100%, +50 pp against blocking alone "
         "(95% interval +20 pp to +70 pp)."
     ) in page
@@ -517,7 +519,9 @@ def test_scrolling_tables_and_the_graph_are_focusable_named_and_hinted(rich):
     page = site.render(rich)
     wraps = re.findall(r'<div class="tablewrap"[^>]*>', page)
 
-    assert len(wraps) == 5  # coverage, boundary table, and one per boundary section (3)
+    # coverage, boundary table, one per boundary section (3), and the outcome table of each of
+    # the two graded rules at the top
+    assert len(wraps) == 7
     for wrap in wraps:
         assert 'tabindex="0"' in wrap and 'role="region"' in wrap and 'aria-label="' in wrap
     assert 'aria-label="Runs of C-001 at delegation:planner-&gt;coder"' in page
@@ -618,7 +622,8 @@ def test_summary_names_the_recipient_only_on_a_delegation(rich):
     page = site.render(rich)
     assert (
         "With the rule lost at the handoff <code>return:coder-&gt;planner</code>, the rule was "
-        "broken 50% of the time (5 of 10 runs). Blocking alone left task success at 40%. "
+        "broken 50% of the time (5 of 10 runs). Blocking alone left task success (rule not "
+        "considered) at 40%. "
         "With NemoGate carrying the rule, task success was 90%."
     ) in page
     assert "the planner broke it" not in page
@@ -868,8 +873,9 @@ def test_the_summary_takes_rates_and_difference_from_the_same_compaction_setting
     page = site.render(one_constraint(mixed_settings_boundary()))
 
     assert (
-        "Blocking alone left task success at 10%. With NemoGate carrying the rule, task success "
-        "was 50%, +40 pp against blocking alone: not distinguishable from 0 at n = 10."
+        "Blocking alone left task success (rule not considered) at 10%. With NemoGate carrying "
+        "the rule, task success was 50%, +40 pp against blocking alone: not distinguishable "
+        "from 0 at n = 10."
     ) in text_of(page)
     assert "+60 pp against blocking alone" not in text_of(page)
 
@@ -1178,7 +1184,9 @@ def test_task_success_shows_the_three_way_split_and_the_foot_note():
 
     assert "5 of 10 runs done 5 · kept the rule, left open 3 · broke the rule 2" in text
     assert FOOT in text
-    assert text.index("Task success") < text.index("kept the rule, left open 3")
+    assert text.index("Task passed (rule not considered)") < text.index(
+        "kept the rule, left open 3"
+    )
 
 
 def test_the_existing_columns_are_kept_beside_the_split():
@@ -1192,8 +1200,11 @@ def test_the_existing_columns_are_kept_beside_the_split():
 def test_a_results_file_without_outcomes_renders_to_the_page_it_always_did():
     # Breaks if old results files gain the split, the foot note or any other markup: removing
     # exactly what outcomes adds must give back the page rendered without the field.
-    old = outcome_page(None)
-    new = outcome_page({"done": 5, "kept_open": 3, "broke": 2})
+    # The outcome table at the top of the page reads `outcomes` by design (it says "not in this
+    # results file" without it), so the comparison is of the rule's card, where the field adds
+    # only the split and its foot note.
+    old = article(outcome_page(None), "C-900")
+    new = article(outcome_page({"done": 5, "kept_open": 3, "broke": 2}), "C-900")
 
     assert "left open" not in old
     stripped = re.sub(r'<span class="count outcomes".*?</span>', "", new, flags=re.S)
@@ -1204,8 +1215,10 @@ def test_a_results_file_without_outcomes_renders_to_the_page_it_always_did():
 @pytest.mark.parametrize("name", ["results_rich", "results_empty"])
 def test_results_files_without_outcomes_render_to_the_bytes_main_rendered(name, tmp_path):
     # Breaks if any shared markup, label, column or style changes for results files from before
-    # `outcomes` (say "Task success" renamed). The goldens are these fixtures rendered by
-    # report/site.py as it was on main before the outcomes change, not by the current renderer.
+    # `outcomes` without anyone meaning it. The goldens are these fixtures rendered by the
+    # outcome-first page (2026-10-19, which deliberately moved the key below the results and
+    # renamed "Task success" to "Task passed (rule not considered)"); regenerate them only for a
+    # page change that is named in the PR, never to make this test pass.
     out = tmp_path / "index.html"
 
     assert site.main(["--results", str(FIXTURES / f"{name}.json"), "--out", str(out)]) == 0
