@@ -4,8 +4,11 @@
 [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]`
 
 Reads the file `replay/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
-and renders a header (reproducibility group, run accounting, honesty strip), a boundary graph
-(inline SVG, built only from the boundary ids in the data) and one card per constraint. The
+and renders, in order: a short reading guide, "What happened, rule by rule" (per rule, each
+cell's runs as done / kept the rule but left the task open / broke the rule, and block-only beside
+gated after a block), the largest-effect sentence, the key, the honesty strip and header
+(reproducibility, run accounting), coverage, a boundary graph (inline SVG, built only from the
+boundary ids in the data) and one card per constraint with every rate and interval. The
 evidence panels (coverage, the trace at the violating action, the repair patch) live in
 `report/panels.py`. Inline CSS,
 no script, no font or network request. Every dynamic value goes through `html.escape`. The output
@@ -67,13 +70,13 @@ KEY_ARMS = (
     ("Mutated", "the handoff is sabotaged by an operator and nothing guards the rule."),
     (
         "Block-only",
-        "sabotaged handoff, and the gate refuses an action that breaks the rule, without "
-        "sending the rule again.",
+        "the gate refuses an action that breaks the rule, without sending the rule again. The "
+        "handoff is sabotaged too unless the operator is none.",
     ),
     (
         "Gated",
-        "sabotaged handoff, and the gate both refuses a rule-breaking action and puts the "
-        "rule back into the handoff.",
+        "the gate both refuses a rule-breaking action and puts the rule back into the handoff. "
+        "The handoff is sabotaged too unless the operator is none.",
     ),
 )
 KEY_OPERATORS = (
@@ -561,7 +564,21 @@ def rule_groups(results: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
     return groups or None
 
 
-def render_header(results: dict[str, Any], verdict: str) -> str:
+def commits_note(results: dict[str, Any]) -> str:
+    """When rules were pooled at different repo commits: every commit, with its rules."""
+    by_sha: dict[str, list[str]] = {}
+    for cid, group in sorted((rule_groups(results) or {}).items()):
+        by_sha.setdefault(group.get("repo_sha") or "none recorded", []).append(cid)
+    if len(by_sha) < 2:
+        return ""
+    listed = ", ".join(f"{short(sha)} ({e(', '.join(cids))})" for sha, cids in by_sha.items())
+    return (
+        f'<p class="note">This page pools runs made at {len(by_sha)} repo commits; each rule\'s '
+        f"numbers are at its own commit, named in its section: {listed}.</p>"
+    )
+
+
+def render_header(results: dict[str, Any]) -> str:
     repro = results.get("reproducibility") or {}
     models = repro.get("model_ids") or {}
     model_items = (
@@ -577,7 +594,7 @@ def render_header(results: dict[str, Any], verdict: str) -> str:
         for key, label in (
             ("safe_config_hash", "safe config"),
             ("ledger_hash", "ledger"),
-            ("repo_sha", "repo commit"),
+            ("repo_sha", "repo commit, largest group" if commits_note(results) else "repo commit"),
             ("lockfile_hash", "lockfile"),
         )
     )
@@ -621,14 +638,7 @@ def render_header(results: dict[str, Any], verdict: str) -> str:
         group_note = "Only runs made under exactly these conditions were counted."
     else:
         group_note = "No runs were counted, so there is no shared set of conditions."
-    return f"""<header class="top">
-<h1>NemoGate results</h1>
-<p class="lead">Do the rules survive the handoffs between agents? Each boundary below was tested by
-sabotaging the handoff and counting how often the rule was then broken.</p>
-{verdict}
-</header>
-{render_key()}{render_fixes()}
-<section aria-labelledby="honesty-h" class="strip">
+    return f"""<section aria-labelledby="honesty-h" class="strip">
 <h2 id="honesty-h">What these numbers can and cannot tell you</h2>
 <ul class="honesty">
 <li><span class="v">{e(recall_text)}</span>
@@ -657,9 +667,19 @@ them</span></li>
 </div>
 <div>
 <h2>Same conditions</h2>
-<dl class="kv">{hashes}</dl>
+{commits_note(results)}<dl class="kv">{hashes}</dl>
 </div>
 </section>"""
+
+
+def render_top() -> str:
+    return f"""<header class="top">
+<h1>NemoGate results</h1>
+<p class="lead">Do rules survive the handoffs between agents? Each rule was given to a team of
+agents, with and without sabotaging the handoff and with and without the NemoGate gate, and every
+run was checked against it.</p>
+{render_howto()}
+</header>"""
 
 
 # --- verdict and key --------------------------------------------------------------------------
@@ -748,10 +768,12 @@ def render_key() -> str:
     ops = "".join(
         f"<div><dt><code>{e(k)}</code></dt><dd>{e(v)}</dd></div>" for k, v in KEY_OPERATORS
     )
+    terms = "".join(f"<div><dt>{e(k)}</dt><dd>{e(v)}</dd></div>" for k, v in TERMS)
     return (
         '<section aria-labelledby="key-h" class="key"><h2 id="key-h">Key</h2><div class="keycols">'
         f'<div><h3>Arms (how a run was set up)</h3><dl class="kv stack">{arms}</dl></div>'
         f'<div><h3>Operators (how the handoff is sabotaged)</h3><dl class="kv stack">{ops}</dl>'
+        f'<h3>Words on this page</h3><dl class="kv stack terms">{terms}</dl>'
         "</div></div></section>"
     )
 
@@ -939,7 +961,7 @@ def cell_row(
     return (
         f'<tr><th scope="row">{label}<td data-label="Runs">{n_text}{warn}</td>'
         f'<td data-label="Violation rate">{cvr}</td>'
-        f'<td data-label="Task success">{success}</td>{tried}</tr>'
+        f'<td data-label="{e(PASSED)}">{success}</td>{tried}</tr>'
     )
 
 
@@ -1005,8 +1027,9 @@ COMPARISONS = (
     ),
     (
         "ledger_value",
-        "Gate effect on task success",
-        "task success with the rule carried (gated) minus task success with blocking alone",
+        "Gate effect on passing the task",
+        "share of runs that passed the task with the rule carried (gated) minus with blocking "
+        "alone; the rule is not considered, so a run that broke it and passed counts as passed",
         "gated",
     ),
     (
@@ -1038,6 +1061,24 @@ def indistinct(comp: dict[str, Any], cells: list[dict[str, Any]]) -> str:
     """Plain wording for an interval that includes 0, with the run counts it rests on."""
     counts = compared_n(cells, comp)
     return "not distinguishable from 0 at " + (n_text(*counts) if counts else "these sample sizes")
+
+
+def broke_note(cells: list[dict[str, Any]], comp: dict[str, Any]) -> str:
+    """Under the gate effect on passing the task: whether the two arms' passes all kept the rule
+    (then it is also the difference in clean successes). Empty without `outcomes`."""
+    knobs = comp.get("compaction", ANY)
+    pair = [find_cell(cells, comp[side]["arm"], comp[side]["operator"], knobs) for side in "ab"]
+    if not all(c and c.get("outcomes") for c in pair):
+        return ""
+    if all(c["outcomes"]["broke"] == 0 for c in pair if c):
+        return line(
+            "Neither arm broke the rule here, so this is also the difference in runs that did the "
+            "job without breaking the rule."
+        )
+    return line(
+        "Some of these runs broke the rule; a run that broke it and passed the task counts as "
+        "passed here."
+    )
 
 
 def render_comparisons(cells: list[dict[str, Any]], comparisons: list[dict[str, Any]]) -> str:
@@ -1072,6 +1113,7 @@ def render_comparisons(cells: list[dict[str, Any]], comparisons: list[dict[str, 
                     f"{e(pp(comp['hi']))})</span> "
                     f'<span class="verdict{" zero" if crosses else ""}">{e(verdict)}</span>'
                     + interval_bar(comp["diff"], comp["lo"], comp["hi"], signed=True)
+                    + (broke_note(cells, comp) if name == "ledger_value" else "")
                 )
             items.append(f"<div><dt>{head}<small>{e(meaning)}</small></dt><dd>{body}</dd></div>")
     return '<dl class="compare">' + "".join(items) + "</dl>"
@@ -1149,7 +1191,8 @@ def summaries(boundaries: dict[str, Any]) -> list[str]:
                 f"With the rule {e(phrase)} at the handoff <code>{e(bid)}</code>{under}, {broke} "
                 f"{pct(mut['cvr']['rate'])} of the time "
                 f"({e(mut['violations'])} of {e(mut['n'])} runs). "
-                f"Blocking alone left task success at {pct(blk['success']['rate'])}. "
+                f"Blocking alone left task success (rule not considered) at "
+                f"{pct(blk['success']['rate'])}. "
                 f"{e(gate_effect(boundaries, bid, op, blk, gat))}"
             )
     return out
@@ -1411,7 +1454,8 @@ def graded_section(
         f'<table class="cells"><colgroup>{cols}</colgroup>'
         "<thead><tr>"
         '<th scope="col">Arm</th><th scope="col">Operator</th><th scope="col">Runs</th>'
-        '<th scope="col">Violation rate</th><th scope="col">Task success</th>'
+        '<th scope="col">Violation rate</th>'
+        f'<th scope="col">{e(PASSED)}</th>'
         f"{extra_head}</tr></thead>"
         f"<tbody>{rows}</tbody></table>"
     )
@@ -1542,6 +1586,388 @@ def render_method(results: dict[str, Any]) -> str:
     )
 
 
+# --- what happened: the outcome section --------------------------------------------------------
+
+HEADLINE = "Did the job without breaking the rule"
+PASSED = "Task passed (rule not considered)"
+OP_ROW = {  # how a row names its operator
+    "none": "no sabotage",
+    "drop": "rule lost (drop)",
+    "hedge": "rule made vague (hedge)",
+    "compress_100": "handoff compressed to 100 words (compress_100)",
+}
+ARM_WORD = {
+    "natural": "natural",
+    "mutated": "mutated",
+    "block_only": "block-only",
+    "gated": "gated",
+}
+HOWTO = (
+    "Each run either <strong>did the job without breaking the rule</strong>, "
+    "<strong>kept the rule but left the task open</strong>, or <strong>broke the rule</strong>. "
+    "The first is the result that counts.",
+    "&ldquo;Task passed&rdquo; alone ignores the rule: a run that broke the rule can still pass "
+    "the task's own tests and check.",
+    "Natural adds nothing. Mutated sabotages the handoff (the operator says how; "
+    "&ldquo;no sabotage&rdquo; means none). Block-only refuses a rule-breaking call. Gated "
+    "(NemoGate) refuses it and also puts the rule back into the handoff.",
+    "Every share comes with its run count. The exact rates and their 95% intervals are in each "
+    "rule's details further down; the words are defined in the Key.",
+)
+TERMS = (
+    (
+        "Boundary",
+        "a handoff between two agents, where the context is shortened and passed on: "
+        "delegation:<from>-><to> hands work down, return:<from>-><to> hands the answer back.",
+    ),
+    (
+        "Compaction",
+        "the planner's conversation is summarised once it grows past a token limit. Runs with it "
+        "on and off are counted apart.",
+    ),
+    (
+        "Not comparable",
+        "a run made under other conditions (models, safe config, ledger, repo commit or "
+        "lockfile) than the runs its rule is counted with. It is left out of the rates.",
+    ),
+    (
+        "Inconclusive",
+        "a run that gives no verdict: it errored, its record could not be read, it was not "
+        "comparable, or the sabotage changed nothing. It is left out of every rate.",
+    ),
+    (
+        "95% interval",
+        "the range the true rate is likely in, given how many runs there are: fewer runs, wider "
+        "range. How it is computed is under Method at the foot of the page.",
+    ),
+)
+
+
+def op_row(op: str) -> str:
+    return OP_ROW.get(op, f"altered by {op}")
+
+
+def passed_anyway(cell: dict[str, Any]) -> int | None:
+    """Runs that broke the rule and still passed the task: task successes minus the runs that
+    were done (no violation and the task passed). None without `outcomes`, or if the counts do
+    not fit together (then nothing is claimed)."""
+    out = cell.get("outcomes")
+    if not out:
+        return None
+    k = cell["successes"] - out["done"]
+    return k if 0 <= k <= out["broke"] else None
+
+
+def task_phrase(body: dict[str, Any]) -> str:
+    tasks = body.get("task_ids") or []
+    if not tasks:
+        return ""
+    return ("task " if len(tasks) == 1 else "tasks ") + ", ".join(tasks)
+
+
+def ordered_cells(body: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """(boundary, cell) for every cell of a rule: by boundary, compaction setting, arm, operator."""
+    out = []
+    for bid in sorted(body.get("boundaries", {})):
+        cells = body["boundaries"][bid].get("cells", [])
+        settings = compaction_settings(cells)
+        for c in sorted(
+            cells,
+            key=lambda c: (settings.index(c.get("compaction")), arm_rank(c["arm"]), c["operator"]),
+        ):
+            out.append((bid, c))
+    return out
+
+
+def row_note(body: dict[str, Any], bid: str, cell: dict[str, Any]) -> str:
+    """The boundary when the rule has several, and the compaction setting when it matters."""
+    parts = []
+    if len(body.get("boundaries", {})) > 1:
+        parts.append(bid)
+    setting = cell.get("compaction")
+    cells = body["boundaries"][bid].get("cells", [])
+    if len(compaction_settings(cells)) > 1 or (setting and setting.get("tokens")):
+        parts.append(compaction_note(setting))
+    return "; ".join(parts)
+
+
+def outcome_bar(cell: dict[str, Any]) -> str:
+    """Three segments, done, kept open, broke, as shares of the cell's runs. Decorative: the
+    counts are in the row. Broke is striped and never in the done colour."""
+    out, n = cell["outcomes"], cell["n"]
+    segs = "".join(
+        f'<span class="seg {cls}" style="width:{round(100 * out[key] / n, 2):g}%"></span>'
+        for key, cls in (("done", "done"), ("kept_open", "open"), ("broke", "broke"))
+        if out[key]
+    )
+    return f'<span class="obar" aria-hidden="true">{segs}</span>'
+
+
+def outcome_row(body: dict[str, Any], bid: str, cell: dict[str, Any]) -> str:
+    n = cell["n"]
+    note = row_note(body, bid, cell)
+    head = (
+        f'<th scope="row">{e(ARM_LABEL.get(cell["arm"], cell["arm"]))} '
+        f'<span class="op">{e(op_row(cell["operator"]))}</span>'
+        + (f'<span class="count">{e(note)}</span>' if note else "")
+        + "</th>"
+    )
+    out = cell.get("outcomes")
+    if out and n:
+        headline = (
+            f'<span class="rate">{pct(out["done"] / n)}</span>'
+            f'<span class="count">{e(out["done"])} of {e(n)} runs</span>' + outcome_bar(cell)
+        )
+        kept, broke = e(out["kept_open"]), e(out["broke"])
+        anyway = passed_anyway(cell)
+        if not out["broke"]:
+            anyway_text = '<span class="notrun">none broke it</span>'
+        elif anyway is None:
+            anyway_text = "&ndash;"
+        else:
+            anyway_text = f"{e(anyway)} of {e(out['broke'])}"
+    else:
+        headline = '<span class="notrun">not in this results file</span>'
+        kept, broke, anyway_text = "&ndash;", e(cell["violations"]), "&ndash;"
+    return (
+        f"<tr>{head}"
+        f'<td data-label="Runs">{e(n)}</td>'
+        f'<td data-label="{e(HEADLINE)}" class="headline">{headline}</td>'
+        f'<td data-label="Kept the rule, left the task open">{kept}</td>'
+        f'<td data-label="Broke the rule">{broke}</td>'
+        f'<td data-label="Of those, task passed anyway">{anyway_text}</td>'
+        f'<td data-label="{e(PASSED)}" class="passed">{e(cell["successes"])} of {e(n)}</td></tr>'
+    )
+
+
+def outcome_table(cid: str, body: dict[str, Any]) -> str:
+    rows = "".join(outcome_row(body, bid, c) for bid, c in ordered_cells(body))
+    table = (
+        '<table class="outcome"><colgroup><col style="width:22%"><col style="width:7%">'
+        '<col style="width:24%"><col style="width:12%"><col style="width:10%">'
+        '<col style="width:12%"><col style="width:13%"></colgroup><thead><tr>'
+        '<th scope="col">Arm and sabotage</th><th scope="col">Runs</th>'
+        f'<th scope="col">{e(HEADLINE)}</th>'
+        '<th scope="col">Kept the rule, left the task open</th>'
+        '<th scope="col">Broke the rule</th>'
+        '<th scope="col">Of those, task passed anyway</th>'
+        f'<th scope="col">{e(PASSED)}</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+    return panels.tablewrap(f"What happened in the runs of {cid}", table)
+
+
+def block_row(body: dict[str, Any], bid: str, cell: dict[str, Any]) -> str:
+    note = row_note(body, bid, cell)
+    head = (
+        f'<th scope="row">{e(ARM_LABEL.get(cell["arm"], cell["arm"]))} '
+        f'<span class="op">{e(op_row(cell["operator"]))}</span>'
+        + (f'<span class="count">{e(note)}</span>' if note else "")
+        + "</th>"
+    )
+    m = cell.get("arm_metrics") or {}
+    b = m.get("blocks")
+    if b is None:
+        why = "not in this results file" if not m else "no trace to count from"
+        return f'<tr>{head}<td colspan="5" class="notrun">{e(why)}</td></tr>'
+    stuck = b.get("stuck")
+    stuck_text = (
+        f"{e(stuck['k'])} of {e(stuck['n'])}"
+        if stuck
+        else '<span class="notrun">no run was blocked</span>'
+    )
+    att = m.get("attempt_rate")
+    att_text = (
+        f"{e(att['k'])} of {e(att['n'])} ({pct(att['rate'])})"
+        if att
+        else '<span class="notrun">not about a tool or path</span>'
+    )
+    return (
+        f"<tr>{head}"
+        f'<td data-label="Runs with a block">{e(b["runs_with_block"])} of {e(cell["n"])}</td>'
+        f'<td data-label="Blocked calls per run">{mean_text(b["blocked"], one_decimal)}</td>'
+        f'<td data-label="Retries per run">{mean_text(b["repeats"], one_decimal)}</td>'
+        f'<td data-label="Stuck: blocked, then failed the task">{stuck_text}</td>'
+        f'<td data-label="Tried the forbidden action">{att_text}</td></tr>'
+    )
+
+
+def attempt_lines(body: dict[str, Any], bid: str) -> list[str]:
+    """The gated minus block-only attempt rate, per operator (and compaction setting)."""
+    b = body["boundaries"][bid]
+    cells = b.get("cells", [])
+    several = len(compaction_settings(cells)) > 1
+    out = []
+    for comp in b.get("comparisons", []):
+        if comp.get("name") != "attempt_reduction":
+            continue
+        under = f", {compaction_note(comp.get('compaction'))}" if several else ""
+        crosses = comp["lo"] <= 0 <= comp["hi"]
+        tail = f", {indistinct(comp, cells)}" if crosses else "; the interval excludes 0"
+        out.append(
+            "Gated minus block-only, runs that tried the forbidden action "
+            f"({e(comp.get('operator'))}{e(under)}): {e(pp(comp['diff']))} (95% interval "
+            f"{e(pp(comp['lo']))} to {e(pp(comp['hi']))}){e(tail)}."
+        )
+    return out
+
+
+def block_table(cid: str, body: dict[str, Any]) -> str:
+    """Block-only beside gated after a block, for a rule whose block-only and gated cells carry
+    block counts. Empty otherwise (an older results file, or one blocking arm only)."""
+    tables = []
+    for bid in sorted(body.get("boundaries", {})):
+        cells = body["boundaries"][bid].get("cells", [])
+        mine = [c for c in cells if c["arm"] in BLOCKING_ARMS]
+        if {c["arm"] for c in mine} != set(BLOCKING_ARMS) or not any(
+            (c.get("arm_metrics") or {}).get("blocks") for c in mine
+        ):
+            continue
+        rows = "".join(
+            block_row(body, b, c) for b, c in ordered_cells(body) if b == bid and c in mine
+        )
+        table = (
+            '<table class="blocks"><colgroup><col style="width:22%"><col style="width:13%">'
+            '<col style="width:17%"><col style="width:17%"><col style="width:15%">'
+            '<col style="width:16%"></colgroup><thead><tr>'
+            '<th scope="col">Arm and sabotage</th><th scope="col">Runs with a block</th>'
+            '<th scope="col">Blocked calls per run</th><th scope="col">Retries per run</th>'
+            '<th scope="col">Stuck: blocked, then failed the task</th>'
+            '<th scope="col">Tried the forbidden action</th></tr></thead>'
+            f"<tbody>{rows}</tbody></table>"
+        )
+        lines = "".join(f'<p class="note">{t}</p>' for t in attempt_lines(body, bid))
+        where = f" at <code>{e(bid)}</code>" if len(body["boundaries"]) > 1 else ""
+        tables.append(
+            f"<h4>When the gate blocked a call{where}: block-only against gated</h4>"
+            + panels.tablewrap(f"Block-only against gated for {cid} at {bid}", table)
+            + lines
+        )
+    return "".join(tables)
+
+
+BLOCK_NOTE = (
+    '<p class="note">A retry is a call on a file or tool the gate had already refused in that '
+    "run. Stuck counts the runs with a block that then failed the task. Tried the forbidden "
+    "action counts runs with at least one such call, blocked or not: both arms block, so this "
+    "is where carrying the rule (gated) can differ from blocking alone. Means come with a 95% "
+    "bootstrap interval from five runs, and the lowest to highest value from fewer.</p>"
+)
+
+
+def render_group(cid: str, body: dict[str, Any], anchors: Anchors, explain: bool) -> str:
+    """One rule's outcome table and block table. `explain`: add the block table's definitions
+    (the first block table on the page only)."""
+    meta = [f"rule <code>{e(cid)}</code>"]
+    if task_phrase(body):
+        phrase = task_phrase(body)
+        meta.insert(0, e(phrase[0].upper() + phrase[1:]))
+    pooled = body.get("reproducibility")
+    if pooled:
+        meta.append(f"runs made at repo commit {short(pooled.get('repo_sha') or 'none recorded')}")
+    meta.append(f'<a href="#{e(anchors.constraint[cid])}">exact rates and intervals</a>')
+    blocks = block_table(cid, body)
+    return (
+        f'<section class="ogroup" data-rule="{e(cid)}" aria-label="{e(cid)}">'
+        f'<h3 class="rule">{e(body.get("text", ""))}</h3>'
+        f'<p class="ometa">{" &middot; ".join(meta)}</p>'
+        f"{outcome_table(cid, body)}{blocks}{BLOCK_NOTE if blocks and explain else ''}</section>"
+    )
+
+
+def split_sentence(results: dict[str, Any], anchors: Anchors) -> str:
+    """Task success and the rule are separate: the example is the cell with the most runs that
+    broke the rule and still passed the task, from the data. No example when there is none."""
+    lead = (
+        "Task success and keeping the rule are counted separately, so a run can break the rule "
+        "and still count as a task success."
+    )
+    best = None
+    any_outcomes = False
+    for cid, body in sorted(results["constraints"].items()):
+        if not is_graded(body):
+            continue
+        for bid, c in ordered_cells(body):
+            any_outcomes = any_outcomes or bool(c.get("outcomes"))
+            k = passed_anyway(c)
+            if k and (best is None or k > best[0]):
+                best = (k, cid, bid, c)
+    if best is None:
+        if not any_outcomes:
+            text = (
+                f"{lead} This results file has no per-run outcome split, so this page cannot say "
+                "how often that happened."
+            )
+        else:
+            text = (
+                "Task success and keeping the rule are counted separately. In these results no "
+                "run that broke the rule passed the task, so every task success here also kept "
+                "the rule."
+            )
+        return f'<p class="split-note">{text}</p>'
+    k, cid, bid, c = best
+    body = results["constraints"][cid]
+    tasks = task_phrase(body)
+    where = f" at <code>{e(bid)}</code>" if len(body["boundaries"]) > 1 else ""
+    note = (
+        row_note(body, bid, c)
+        if len(compaction_settings(body["boundaries"][bid]["cells"])) > 1
+        else ""
+    )
+    under = f", {e(compaction_note(c.get('compaction')))}" if note else ""
+    op = c["operator"]
+    with_what = "no sabotage" if op == "none" else f"the rule {OPERATOR_PHRASE.get(op, op)}"
+    out, n = c["outcomes"], c["n"]
+    return (
+        f'<p class="split-note">{lead} For example, <a href="#{e(anchors.constraint[cid])}">'
+        f"<code>{e(cid)}</code></a>{f' ({e(tasks)})' if tasks else ''}{where}{under}, "
+        f"{e(ARM_WORD.get(c['arm'], c['arm']))} runs with {e(with_what)}: "
+        f"{e(out['broke'])} of {e(n)} runs broke the rule and {e(k)} of those {e(out['broke'])} "
+        f"still passed the task, so task success reads {e(c['successes'])} of {e(n)} while "
+        f"{e(out['done'])} of {e(n)} did the task and kept the rule.</p>"
+    )
+
+
+def render_outcomes(results: dict[str, Any], anchors: Anchors, verdict: str) -> str:
+    constraints = results["constraints"]
+    graded = [cid for cid in sorted(constraints) if is_graded(constraints[cid])]
+    ungraded = [cid for cid in sorted(constraints) if not is_graded(constraints[cid])]
+    groups, explained = [], False
+    for cid in graded:
+        groups.append(render_group(cid, constraints[cid], anchors, not explained))
+        explained = explained or '<table class="blocks"' in groups[-1]
+    legend = (
+        '<ul class="okey" aria-label="Bar key">'
+        f'<li><span class="seg done"></span>{e(HEADLINE)}</li>'
+        '<li><span class="seg open"></span>Kept the rule, left the task open</li>'
+        '<li><span class="seg broke"></span>Broke the rule, whether or not the task passed</li>'
+        "</ul>"
+    )
+    skipped = (
+        '<p class="note">Not graded, so not shown here (no compiled check, so no run can be '
+        "marked as breaking the rule): "
+        + ", ".join(f"<code>{e(c)}</code>" for c in ungraded)
+        + ".</p>"
+        if ungraded
+        else ""
+    )
+    return (
+        '<section aria-labelledby="outcomes-h" class="outcomes">'
+        '<h2 id="outcomes-h">What happened, rule by rule</h2>'
+        f"{split_sentence(results, anchors)}{legend}"
+        + "".join(groups)
+        + f"{skipped}{verdict}</section><!--/outcomes-->"
+    )
+
+
+def render_howto() -> str:
+    items = "".join(f"<li>{t}</li>" for t in HOWTO)
+    return (
+        '<aside class="howto" aria-labelledby="howto-h"><h2 id="howto-h">How to read this</h2>'
+        f"<ol>{items}</ol></aside>"
+    )
+
+
 # --- page -------------------------------------------------------------------------------------
 
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8")
@@ -1584,9 +2010,15 @@ def render(
             '<div class="empty"><strong>No runs were counted.</strong> There is nothing to chart '
             "yet: no boundary, no constraint and no rate. Nothing here is a zero.</div>"
         )
+    outcomes = (
+        render_outcomes(results, anchors, render_verdict(results, anchors))
+        if constraints
+        else render_verdict(results, anchors)
+    )
     body = (
-        f"{render_header(results, render_verdict(results, anchors))}"
-        f"{panels.render_coverage(results, ledger)}{graph_section}"
+        f"{render_top()}{outcomes}{render_key()}{render_fixes()}{render_header(results)}"
+        f"{panels.render_coverage(results, ledger, trace.found_by_rule if trace else None)}"
+        f"{graph_section}"
         f"{panels.render_patch_panel(repairs)}{render_method(results)}"
     )
     css = CSS + PRESENCE_CSS if 'class="presence"' in body else CSS

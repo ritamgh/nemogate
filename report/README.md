@@ -16,27 +16,46 @@ byte-identical. Generated pages are not committed.
 
 What it shows:
 
-- Top: one plain verdict line made from the data (the largest rule effect among graded
-  constraints, preferring one whose interval excludes 0, with its runs, interval and what the
-  gated runs did in the same case; when gated was never broken, the rule is one the gate blocks
-  before the call (`blocked_before_call` in the results, from `gate.policy`) and some gated run
-  was blocked, it adds that the 0 comes from blocking, which block-only gets by construction;
+- Top: the title, one line on what was tested, and "How to read this" (four lines: the three
+  outcomes, that "task passed" alone ignores the rule, what the arms do, where the exact numbers
+  and the definitions are).
+- "What happened, rule by rule" (the first result on the page): one sentence that task success
+  and keeping the rule are counted separately, with an example from the data (the cell with the
+  most runs that broke the rule and still passed the task, `successes - outcomes.done`; when no
+  cell has one it says so, and a file without `outcomes` says it cannot tell), a key to the bar,
+  then per graded rule (tasks, rule id, the repo commit its runs were made at, a link to its
+  card) a table with one row per cell: runs, "Did the job without breaking the rule"
+  (`outcomes.done`, the headline, with a three-part bar: done solid, kept the rule but left the
+  task open dotted, broke the rule striped and never in the done colour), kept open, broke, of
+  those how many still passed the task, and "Task passed (rule not considered)". Where the rule
+  has block-only and gated cells with block counts, "When the gate blocked a call" puts the two
+  arms side by side: runs with a block, blocked calls and retries per run (95% bootstrap, or the
+  range from fewer than five), runs stuck after a block, and the attempt rate, with the
+  gated-minus-block-only attempt difference under it; the first such table on the page defines
+  its words. Ungraded rules are named, not tabled. Then the verdict line: the largest rule effect
+  among graded constraints, preferring one whose interval excludes 0, with its runs, interval and
+  what the gated runs did in the same case; when gated was never broken, the rule is one the gate
+  blocks before the call (`blocked_before_call` in the results, from `gate.policy`) and some gated
+  run was blocked, it adds that the 0 comes from blocking, which block-only gets by construction;
   for any other rule it adds nothing of the kind; when that handoff was run under more than one
   compaction setting, the sentence names the setting it quotes and says the others have their own
-  rows below; "No comparison has enough runs yet" when there
-  is none), then a key defining the four arms and the operators in method words.
-- Under the key, "What each part fixes": four static lines. The gate blocks a tool call that
-  breaks a rule checkable before the call (path, tool and approval rules), whatever the cause, and
-  gated also holds back a reply that misses an output rule (`gate/policy.py`, `gate/middleware.py`);
-  repair targets rules lost in the handoff (`repair/menu.py`); rules checked on the filesystem diff
-  are graded after the run and not blocked (docs/SPEC.md, predicate table). A fourth line
-  says that for a path, tool or approval rule a 0 broken in the block-only and gated arms comes
-  from blocking (the gate refuses with the check that grades the run, so both get it by
-  construction), that for other rules a 0 is a measured result, and that whether carrying the
-  rule adds anything over blocking is the hypothesis being measured, not a result.
+  rows below; "No comparison has enough runs yet" when there is none.
+- Below the results: the key (the four arms, the operators, and "Words on this page": boundary,
+  compaction, not comparable, inconclusive and 95% interval in plain words; the statistical
+  method stays in the Method block at the foot), then "What each part fixes": four static lines.
+  The gate blocks a tool call that breaks a rule checkable before the call (path, tool and
+  approval rules), whatever the cause, and gated also holds back a reply that misses an output
+  rule (`gate/policy.py`, `gate/middleware.py`); repair targets rules lost in the handoff
+  (`repair/menu.py`); rules checked on the filesystem diff are graded after the run and not
+  blocked (docs/SPEC.md, predicate table). A fourth line says that for a path, tool or approval
+  rule a 0 broken in the block-only and gated arms comes from blocking (the gate refuses with the
+  check that grades the run, so both get it by construction), that for other rules a 0 is a
+  measured result, and that whether carrying the rule adds anything over blocking is the
+  hypothesis being measured, not a result.
 - Header: the reproducibility group (short hashes, with the full value in the tooltip, and the
   model ids; with rules pooled at different commits it is the largest group, and the note beside
-  it says each rule's own group is in its section), run accounting (found, pooled, inconclusive by reason) and the honesty strip
+  it says each rule's own group is in its section, lists every commit with its rules, and labels
+  the commit "largest group"), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
   The strip is always shown, including when nothing was pooled.
 - Boundary graph: agents are parsed from the `delegation:<from>-><to>` and
@@ -72,12 +91,17 @@ What it shows:
   and an interval that crosses 0 says "Not distinguishable from 0 at n = N." A constraint with
   `has_check: false` is tagged Not graded and shows no rate, comparison or trace (only a count of
   its runs); its cells are also left out of the boundary graph's pooled rates.
+- In the cards the task success column is headed "Task passed (rule not considered)", the gate's
+  success comparison is "Gate effect on passing the task" (when both cells have `outcomes` it adds
+  whether either arm broke the rule: if neither did, it is also the difference in clean
+  successes), and the summary sentence says "task success (rule not considered)".
 - Task success also shows the three-way split when a cell has `outcomes`: "done N · kept the rule,
   left open N · broke the rule N", and a foot note under the table says what "kept the rule, left
   open" means: the rule was obeyed but the task was not finished (for example a deletion that
   waited for the user), the cost of complying and not a failure to comply. A run that broke the
-  rule counts only as broke, even if the task finished. The existing columns stay; results files
-  without the field render to the same bytes as before.
+  rule counts only as broke, even if the task finished. The existing columns stay; a card of a
+  results file without the field is the card it was before (the outcome table at the top then
+  says "not in this results file").
 - A cell with `arm_metrics` also shows "Attempted the rule's action" in the cell table, beside
   the violation rate and task success: the share of runs that made at least one call at the
   forbidden action, blocked or not (`arm_metrics.attempt_rate`, Wilson 95%). A foot note says
@@ -110,7 +134,9 @@ report/tests/fixtures/ledger.yaml --out report/tests/fixtures/results_runs.json`
 regenerates it and compares), so the numbers and the trace panel describe the same runs.
 `results_rich.json` is hand-written, has no run folders behind it, and is for page features: (two constraints, a return edge, a clustered cell, a null
 extraction recall, an interval crossing 0, missing cells, markup in a rule text) and
-`results_empty.json` (nothing pooled, `reproducibility` null).
+`results_empty.json` (nothing pooled, `reproducibility` null). `golden_results_*.html` are those
+two rendered by the current page; re-render them only for a page change named in the PR. The
+outcome-first section is tested in `test_site_outcome_first.py`.
 
 ### Evidence panels (`panels.py`)
 
@@ -118,6 +144,9 @@ extraction recall, an interval crossing 0, missing cells, markup in a rule text)
   full ledger. Declared, with a compiled check, exercised (at least one pooled run), exercised and
   checked, extraction recall ("not measured" when null), and the unchecked and never-exercised
   rules by id and text. Without `--ledger` only constraints that had pooled runs can be named.
+  With `--runs` as well, each never-exercised rule says whether the run folders held any of its
+  runs ("No run of this rule is in the run folders this page read", or how many there are and
+  that the results file counts none of them); without `--runs` no reason is given.
 - **Trace at the violating action** (`--runs`, run folders or folders of them): in each
   constraint's boundary section, the first violating `mutated` run by run id beside the first
   comparison run that kept the rule (a gated run with the same operator, else a natural run;
