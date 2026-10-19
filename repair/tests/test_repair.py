@@ -434,10 +434,44 @@ def shaped_edit(old_string, new_string=None):
     )
 
 
+LAST_LINE = "person you delegate to cannot see this conversation. Finish with a short summary."
+
+
 def test_a_whole_body_line_of_a_triple_quoted_prompt_is_a_valid_anchor():
     # Catches a fix that tightens the guard so far that the reliable anchor (a whole line inside
-    # the prompt text) is refused too.
-    check_edits([shaped_edit(BODY_LINE)], SHAPED_FILES)
+    # the prompt text) is refused too: after the last line, which has no continuation, and before
+    # any line.
+    check_edits([shaped_edit(LAST_LINE)], SHAPED_FILES)
+    check_edits([shaped_edit(BODY_LINE, "Copy every rule into each task. " + BODY_LINE)],
+                SHAPED_FILES)  # fmt: skip
+
+
+def test_an_insert_after_a_backslash_continuation_is_refused():
+    # Live repair round 2: the writer anchored on a line ending in a backslash continuation and
+    # added "\nCopy ...". At runtime backslash-newline joins the lines, so the prompt read
+    # "...because the Copy every rule into each task." with the sentence cut in two.
+    with pytest.raises(GuardViolation, match="right after a backslash"):
+        check_edits([shaped_edit(BODY_LINE)], SHAPED_FILES)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "ok"),
+    [
+        ("Delegate the work.", "Delegate the work. Copy every rule.", True),
+        ("Delegate the work.", "Delegate the work.\nCopy every rule.", True),
+        ("Delegate the work.", "Delegate the work.Copy every rule.", False),  # the live glue
+        ("Delegate the work.", "Copy every rule.Delegate the work.", False),
+        ("You lead a team", "You lead a team, carefully", True),  # continues the sentence
+    ],
+    ids=["space", "newline", "glued-after", "glued-before", "continues"],
+)
+def test_an_insert_must_not_run_into_the_text_around_it(old, new, ok):
+    edits = [Edit(file="app/prompts.py", old_string=old, new_string=new)]
+    if ok:
+        check_edits(edits, FILES)
+    else:
+        with pytest.raises(GuardViolation, match="run into its neighbour"):
+            check_edits(edits, FILES)
 
 
 def test_the_assignment_line_with_wrong_quoting_is_still_refused_by_the_guard():
@@ -479,7 +513,10 @@ def test_the_retry_after_a_bad_anchor_shows_the_guard_error_and_the_real_lines()
     # guard's text and the closest whole lines of the file, and the second edit, anchored on
     # one of them, produces the patch and is re-run.
     planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
-    bad, good = shaped_edit(LIVE_BAD_ANCHOR), shaped_edit(BODY_LINE)
+    # The good edit inserts before the hinted line: after it, the line's backslash continuation
+    # would glue the addition into the sentence (the round-2 gap, refused by the guard).
+    bad = shaped_edit(LIVE_BAD_ANCHOR)
+    good = shaped_edit(BODY_LINE, "Copy every rule into each task. " + BODY_LINE)
     writer = Spy(
         get_model(
             "sut",
@@ -824,3 +861,9 @@ def test_cli_discards_a_rejected_patchs_branch(live_cli):
     same = [record(f"p{i}", i < 2) for i in range(3)]  # 2 of 3 violated: no improvement
     code, rerun = live_cli("--n", "3", "--yes", after=same)
     assert code == 1 and rerun.discarded == 1
+
+
+def test_the_write_prompt_asks_for_a_separated_addition():
+    # The guard refuses a glued insert; the prompt says how to avoid one up front.
+    assert "Start your addition with a newline" in " ".join(WRITE_PROMPT.split())
+    assert "ends with a backslash" in " ".join(WRITE_PROMPT.split())

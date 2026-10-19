@@ -63,6 +63,53 @@ def check_editable(paths: Iterable[str]) -> None:
             raise GuardViolation(f"{path} is protected ({reason}) and can never be patched")
 
 
+# A letter or digit, or the end of a sentence or clause: what a following word would run into.
+_SENTENCE_END = frozenset(".!?:;,")
+
+
+def _wordlike(char: str) -> bool:
+    return char.isalnum() or char in _SENTENCE_END
+
+
+def _join_problem(left: str, inserted: str, right: str) -> str | None:
+    """Why `inserted`, placed between the characters `left` and `right` ("" at a file edge),
+    would run into the text around it, or None.
+
+    A backslash right before it is a string-literal line continuation or escape: it swallows even
+    a leading newline, so the insert would be joined onto the line before ("the user.Copy ...").
+    Otherwise a word must not touch a word or a sentence end without a space or newline between;
+    quotes, brackets and other delimiters may touch it (inserting before a closing quote is fine).
+    """
+    if left == "\\":
+        return "it comes right after a backslash, which would join it onto the line before"
+    if _wordlike(left) and inserted[0].isalnum():
+        return f"it starts right after {left!r} with no space or newline between"
+    if _wordlike(inserted[-1]) and right.isalnum():
+        return f"it ends right before {right!r} with no space or newline between"
+    return None
+
+
+def _check_joins(edit: Edit, text: str) -> None:
+    """The text an insert-only edit adds must read as separate words in the patched file: the
+    first live repair round glued its line on ("...for the user.Copy every rule...")."""
+    at = text.index(edit.old_string)
+    cut = edit.new_string.index(edit.old_string)
+    before, after = edit.new_string[:cut], edit.new_string[cut + len(edit.old_string) :]
+    end = at + len(edit.old_string)
+    joins = (
+        (text[at - 1 : at], before, edit.old_string[:1]),
+        (edit.old_string[-1:], after, text[end : end + 1]),
+    )
+    for left, inserted, right in joins:
+        problem = inserted and _join_problem(left, inserted, right)
+        if problem:
+            raise GuardViolation(
+                f"the text added in {edit.file} would run into its neighbour: {problem}. Start "
+                f"the addition with a newline (or end it with one), and do not insert right after "
+                f"a backslash ({inserted[:60]!r})"
+            )
+
+
 def check_edits(edits: Sequence[Edit], files: Mapping[str, str]) -> None:
     """Each edit is checked against the text as left by the edits before it, which is exactly
     how apply_edits applies them, so overlapping edits cannot slip through."""
@@ -83,6 +130,7 @@ def check_edits(edits: Sequence[Edit], files: Mapping[str, str]) -> None:
             raise GuardViolation(
                 f"edits must be insert-only: new_string must keep old_string verbatim ({edit.file})"
             )
+        _check_joins(edit, text)
         current[edit.file] = text.replace(edit.old_string, edit.new_string, 1)
         added += len(edit.new_string) - len(edit.old_string)
     if added > MAX_ADDED_TOKENS * CHARS_PER_TOKEN:
