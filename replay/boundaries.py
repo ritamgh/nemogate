@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveInt, SerializerFunctionWrapHandler, model_serializer
 
 from schemas.enums import STRICT, BoundaryId, NonEmptyStr
 
@@ -42,11 +42,24 @@ class Recording(BaseModel):
 
 
 class ForkOrigin(BaseModel):
-    """`fork.json`: the recorded run a fork continues, and the crossing it resumed before."""
+    """`fork.json`: the recorded run a fork continues, and the crossing it resumed before.
+
+    `crossing_index` says which crossing of the target boundary that is when it is not the first
+    (1 = the second). It is left out of the file for the first, so a fork cut there, and every
+    fork.json written before forks could cut later, reads and writes as it always did.
+    """
 
     model_config = STRICT
     source_run_id: NonEmptyStr
     crossing: Crossing
+    crossing_index: PositiveInt | None = None
+
+    @model_serializer(mode="wrap")
+    def _leave_out_the_first(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.crossing_index is None:
+            data.pop("crossing_index", None)
+        return data
 
 
 def _sender(target_boundary: str) -> str:
@@ -120,17 +133,19 @@ class BoundaryRecorder(AgentMiddleware):
         return tuple(out)
 
 
-def fork_point(recording: Recording, boundary: str) -> Crossing | None:
-    """The crossing to fork before: the first whose delegation or return is `boundary`.
+def crossings_of(recording: Recording, boundary: str) -> tuple[Crossing, ...]:
+    """Every crossing whose delegation or return is `boundary`, in delegation order: where a
+    fork of the run can resume (the runner picks one, replay/README.md "fork_one")."""
+    return tuple(c for c in recording.crossings if boundary in (c.delegation, c.returned))
 
-    The first, so every crossing of the boundary lies after the fork. A return forks before its
-    delegation too: no root checkpoint lies between the subagent finishing and its reply, so the
-    call runs again. None if the run never crossed `boundary`.
+
+def fork_point(recording: Recording, boundary: str) -> Crossing | None:
+    """The first crossing whose delegation or return is `boundary`, None if the run never
+    crossed it. A fork resumes before it unless a later handoff of the boundary is the first to
+    carry the rule (the runner's cut). A return forks before its delegation too: no root
+    checkpoint lies between the subagent finishing and its reply, so the call runs again.
     """
-    for crossing in recording.crossings:
-        if boundary in (crossing.delegation, crossing.returned):
-            return crossing
-    return None
+    return next(iter(crossings_of(recording, boundary)), None)
 
 
 def copy_checkpoints(src: Path, dst: Path) -> None:

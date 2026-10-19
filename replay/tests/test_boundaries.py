@@ -7,7 +7,15 @@ from uuid import UUID
 
 import pytest
 
-from replay.boundaries import BoundaryRecorder, Crossing, Recording, copy_checkpoints, fork_point
+from replay.boundaries import (
+    BoundaryRecorder,
+    Crossing,
+    ForkOrigin,
+    Recording,
+    copy_checkpoints,
+    crossings_of,
+    fork_point,
+)
 
 
 def crossing(call_id: str, sub: str, pre: str, image: str) -> Crossing:
@@ -44,6 +52,37 @@ def test_fork_point_is_the_first_crossing_of_the_boundary_either_way(boundary):
 
 def test_fork_point_of_a_boundary_the_run_never_crossed_is_none():
     assert fork_point(RECORDING, "delegation:planner->tester") is None
+
+
+@pytest.mark.parametrize("boundary", ["delegation:planner->coder", "return:coder->planner"])
+def test_crossings_of_lists_every_crossing_of_the_boundary_in_order_either_way(boundary):
+    """Catches a candidate list for a later cut that misses a crossing, keeps another boundary's
+    (the reviewer's t1) or reorders them: the cut index must name the same crossing everywhere."""
+    assert [c.tool_call_id for c in crossings_of(RECORDING, boundary)] == ["t2", "t3"]
+    assert crossings_of(RECORDING, "delegation:planner->tester") == ()
+
+
+OLD_FORK_JSON = {"source_run_id": "r-1", "crossing": RECORDING.crossings[1].model_dump(mode="json")}
+
+
+def test_a_fork_json_written_before_later_cuts_still_loads_and_dumps_as_it_was():
+    """Catches the new optional field breaking old fork.json files (STRICT models forbid
+    unknown keys, so a required field would refuse every earlier fork) or being written for a
+    fork cut at the first crossing, which would change those files from what they were."""
+    origin = ForkOrigin.model_validate(OLD_FORK_JSON)
+    assert origin.crossing_index is None
+    assert origin.model_dump(mode="json") == OLD_FORK_JSON
+
+
+def test_a_fork_cut_at_a_later_crossing_records_which_one():
+    """Catches the later cut not reaching fork.json, so a reader could not tell the fork resumed
+    before the second crossing of its boundary rather than the first."""
+    origin = ForkOrigin(source_run_id="r-1", crossing=RECORDING.crossings[2], crossing_index=1)
+    dumped = origin.model_dump(mode="json")
+    assert dumped == {**OLD_FORK_JSON, "crossing": dumped["crossing"], "crossing_index": 1}
+    assert ForkOrigin.model_validate(dumped) == origin
+    with pytest.raises(ValueError):
+        ForkOrigin(source_run_id="r-1", crossing=RECORDING.crossings[1], crossing_index=0)
 
 
 def test_copy_checkpoints_copies_every_row_and_leaves_the_source_alone(tmp_path):
