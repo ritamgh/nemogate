@@ -20,7 +20,15 @@ from repair.guards import (
 )
 from repair.loop import Rates, rates, repair_once, write_report
 from repair.menu import MENU, get_fix
-from repair.patch import WRITE_PROMPT, Edit, Patch, apply_edits, unified_diff, write_patch
+from repair.patch import (
+    WRITE_PROMPT,
+    Edit,
+    Patch,
+    anchor_hints,
+    apply_edits,
+    unified_diff,
+    write_patch,
+)
 from repair.plan import PLAN_PROMPT, BudgetExceeded, CallBudget, FixChoice, choose_fix
 from repair.worktree import WorktreeRerun
 from schemas.run import RunRecord
@@ -398,6 +406,134 @@ def test_a_patch_refused_by_a_guard_is_written_once_more_with_the_reason():
     assert second.startswith(first)
     assert "must occur exactly once in app/prompts.py (it occurs" in second
     assert '"old_string": "\\n"' in second  # its own rejected edit, shown back
+
+
+# A prompts module shaped like the reference team's: a module-level triple-quoted string whose
+# first line ends in a backslash continuation (`"""\` + newline), body lines ending the same way.
+SHAPED = (
+    '"""Prompts."""\n\n'
+    'LEAD_PROMPT = """\\\n'
+    "You lead a small software team working on the repository at /repo. You do not edit files \\\n"
+    "yourself. Understand the request, then delegate the work with the task tool, because the \\\n"
+    "person you delegate to cannot see this conversation. Finish with a short summary."
+    '"""\n'
+)
+SHAPED_FILES = {"app/prompts.py": SHAPED}
+BODY_LINE = (
+    "yourself. Understand the request, then delegate the work with the task tool, because the \\"
+)
+# The anchor Super sent on both tries in the live round (the guard's own message, unescaped).
+LIVE_BAD_ANCHOR = 'LEAD_PROMPT = ""\\\nYou lead a small software team working on the repository at'
+
+
+def shaped_edit(old_string, new_string=None):
+    return Edit(
+        file="app/prompts.py",
+        old_string=old_string,
+        new_string=new_string or old_string + "\nCopy every rule into each task.",
+    )
+
+
+def test_a_whole_body_line_of_a_triple_quoted_prompt_is_a_valid_anchor():
+    # Catches a fix that tightens the guard so far that the reliable anchor (a whole line inside
+    # the prompt text) is refused too.
+    check_edits([shaped_edit(BODY_LINE)], SHAPED_FILES)
+
+
+def test_the_assignment_line_with_wrong_quoting_is_still_refused_by_the_guard():
+    # Catches a fix that loosens the exactly-once match (e.g. fuzzy anchors) so the live round's
+    # bad anchor, two quotes and an escaped backslash instead of `"""\` + newline, would pass.
+    with pytest.raises(GuardViolation, match=r"occurs 0 times: 'LEAD_PROMPT = \"\"\\\\\\nYou lead"):
+        check_edits([shaped_edit(LIVE_BAD_ANCHOR)], SHAPED_FILES)
+
+
+def test_the_write_prompt_steers_the_anchor_to_a_whole_line_inside_the_text():
+    # Catches the writer being left free to anchor on the `NAME = """\` line, whose quotes and
+    # backslash it mistypes.
+    assert "whole line" in WRITE_PROMPT
+    assert "opens or closes" in WRITE_PROMPT
+
+
+def test_anchor_hints_offer_the_closest_whole_lines_and_never_the_string_delimiter_line():
+    # Catches a retry that tells the writer it was wrong but not what the file really says: the
+    # live anchor had 0 matches because of a few quote characters.
+    hints = anchor_hints([shaped_edit(LIVE_BAD_ANCHOR)], SHAPED_FILES)
+    first_body = "You lead a small software team working on the repository at /repo."
+    assert first_body in hints
+    assert 'LEAD_PROMPT = """' not in hints
+
+
+def test_anchor_hints_skip_edits_whose_anchor_already_occurs_once():
+    # Catches hints for an edit that was fine: they would send the writer off a good anchor.
+    assert anchor_hints([shaped_edit(BODY_LINE)], SHAPED_FILES) == ""
+
+
+def test_anchor_hints_fall_back_to_the_first_unique_body_lines_when_nothing_is_close():
+    # Catches an empty hint list when the anchor resembles nothing in the file.
+    hints = anchor_hints([shaped_edit("zzz qqq xxx")], SHAPED_FILES)
+    assert BODY_LINE in hints
+
+
+def test_the_retry_after_a_bad_anchor_shows_the_guard_error_and_the_real_lines():
+    # Live 2026-10-19: both tries sent the same unmatched anchor. The retry now carries the
+    # guard's text and the closest whole lines of the file, and the second edit, anchored on
+    # one of them, produces the patch and is re-run.
+    planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
+    bad, good = shaped_edit(LIVE_BAD_ANCHOR), shaped_edit(BODY_LINE)
+    writer = Spy(
+        get_model(
+            "sut",
+            stub_responses=[
+                structured("EditList", {"edits": [bad.model_dump()]}),
+                structured("EditList", {"edits": [good.model_dump()]}),
+            ],
+        )
+    )
+    seen = []
+
+    def rerun(patch):
+        seen.append(patch)
+        return [record(f"p{i}", False) for i in range(3)]
+
+    result = repair_once(
+        evidence=EVIDENCE,
+        baseline=BASELINE,
+        files=SHAPED_FILES,
+        agents=["lead", "worker"],
+        planner_model=planner,
+        writer_model=writer,
+        rerun=rerun,
+    )
+    first, second = writer.prompts
+    assert "occurs 0 times" in second
+    assert "Whole lines of app/prompts.py" not in first
+    assert "Whole lines of app/prompts.py" in second and BODY_LINE in second
+    assert result.accepted is True and len(seen) == 1
+    assert seen[0].files_after["app/prompts.py"].count("Copy every rule into each task.") == 1
+
+
+def test_a_writer_that_repeats_the_bad_anchor_is_still_rejected_without_a_rerun():
+    # Catches hints that make a bad anchor pass: the same wrong anchor twice must end in the
+    # guard's rejection, as in the live round, and never reach a re-run.
+    planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
+    bad = shaped_edit(LIVE_BAD_ANCHOR).model_dump()
+    writer = get_model("sut", stub_responses=[structured("EditList", {"edits": [bad]})] * 2)
+
+    def rerun(patch):
+        raise AssertionError("must not re-run a patch that failed the guards")
+
+    result = repair_once(
+        evidence=EVIDENCE,
+        baseline=BASELINE,
+        files=SHAPED_FILES,
+        agents=["lead", "worker"],
+        planner_model=planner,
+        writer_model=writer,
+        rerun=rerun,
+    )
+    assert result.accepted is False and result.after is None
+    assert result.reason.startswith("guard: old_string must occur exactly once")
+    assert result.reason.endswith("(2 tries)")
 
 
 class Spy:
