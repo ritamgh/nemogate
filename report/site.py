@@ -1968,6 +1968,21 @@ def render_howto() -> str:
     )
 
 
+def render_notes(notes: str | None) -> str:
+    """The optional "Notes on these numbers" section. `notes` is plain text, paragraphs separated
+    by blank lines; every character is escaped. Nothing (not even a heading) when there is no
+    text, so a page without notes is the page it always was."""
+    paragraphs = [
+        p.strip() for p in re.split(r"\n[ \t]*\n", (notes or "").replace("\r\n", "\n")) if p.strip()
+    ]
+    if not paragraphs:
+        return ""
+    return (
+        '<section aria-labelledby="notes-h" class="notes"><h2 id="notes-h">Notes on these '
+        "numbers</h2>" + "".join(f"<p>{e(p)}</p>" for p in paragraphs) + "</section>"
+    )
+
+
 # --- page -------------------------------------------------------------------------------------
 
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8")
@@ -1981,10 +1996,12 @@ def render(
     trace: panels.TraceEvidence | None = None,
     repairs: list[panels.RepairView] | None = None,
     ledger: Ledger | None = None,
+    notes: str | None = None,
 ) -> str:
     """The page. `trace` (from --runs), `repairs` (--repair) and `ledger` (--ledger) are optional
     evidence; without `trace` the constraint cards have no trace panel, without `repairs` the
-    patch panel says there is no repair run yet."""
+    patch panel says there is no repair run yet. `notes` (--notes) is free text shown after the
+    results, escaped."""
     check_format(results)
     constraints = results["constraints"]
     anchors = Anchors(constraints)
@@ -2016,7 +2033,7 @@ def render(
         else render_verdict(results, anchors)
     )
     body = (
-        f"{render_top()}{outcomes}{render_key()}{render_fixes()}{render_header(results)}"
+        f"{render_top()}{outcomes}{render_notes(notes)}{render_key()}{render_fixes()}{render_header(results)}"
         f"{panels.render_coverage(results, ledger, trace.found_by_rule if trace else None)}"
         f"{graph_section}"
         f"{panels.render_patch_panel(repairs)}{render_method(results)}"
@@ -2055,8 +2072,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="the ledger the runs used: lists unchecked and unexercised rules",
     )
+    parser.add_argument(
+        "--notes",
+        type=Path,
+        metavar="FILE",
+        help="plain text, paragraphs split by blank lines: shown as 'Notes on these numbers'",
+    )
     args = parser.parse_args(argv)
     try:
+        notes = args.notes.read_text(encoding="utf-8") if args.notes else None
         results = json.loads(args.results.read_text(encoding="utf-8"))
         page = render(
             results,
@@ -2069,6 +2093,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ledger=load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
             if args.ledger
             else None,
+            notes=notes,
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")
