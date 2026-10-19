@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import traceback
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -60,6 +61,8 @@ RUNS_DIR = ROOT / "runs"
 CHECKPOINTS = "checkpoints.sqlite"  # file names in a run folder
 BOUNDARIES = "boundaries.json"
 PREFIX = "prefix.jsonl"  # a fork: the source's trace events before the fork point
+# In the runs dir, next to the run folders: the cut every fork of one source shares (`_cut`).
+FORK_CUT = "fork-cut-{}.json"
 TIMING = "timing.json"  # a run's wall time; stats reads it (older run folders have none)
 ERROR = "error.json"  # a run that raised: what `arun` writes before it carries on
 TRACEBACK_LINES = 20  # how much of the traceback error.json keeps
@@ -244,6 +247,8 @@ class Runner:
                 f"cannot fork {source_run_id}: task {task.id} now targets {task.constraint} at "
                 f"{task.boundary}, but the run recorded {source.constraint_id} at {source.boundary}"
             )
+        # Before the cut search, which may call the helper: a refused cell costs nothing.
+        _refuse_cell(task, arm, operator, self.ledger)
         events = parse_trace_jsonl((source_dir / "trace.jsonl").read_text(encoding="utf-8"))
         index = self._cut(source_run_id, source.boundary, task.constraint, crossings, events)
         crossing = crossings[index]
@@ -273,15 +278,39 @@ class Runner:
         change nothing (NothingToMutate). The helper judges each handoff in order with drop's own
         sentence picking; if none carries the rule, the first crossing, where the fork's operator
         then finds nothing to mutate as before. The cut belongs to the source, not to the arm:
-        every fork of it uses the one an earlier fork wrote to fork.json, so all its arms share
-        one prefix even across processes. One crossing needs no helper call.
+        the first fork to choose it records it in `runs_dir/fork-cut-<source>.json`, created
+        atomically, and every fork of the source uses what that file says, so all its arms share
+        one prefix even when several processes fork it at once (a forker that loses the race
+        drops its own answer). One crossing needs no helper call and no file.
         """
         if len(crossings) == 1:
             return 0
-        recorded = _recorded_cut(self.runs_dir, source_run_id)
+        path = self.runs_dir / FORK_CUT.format(source_run_id)
+        if not path.exists():
+            found = self._search_cut(source_run_id, boundary, constraint_id, crossings, events)
+            chosen = ForkOrigin(
+                source_run_id=source_run_id, crossing=crossings[found], crossing_index=found or None
+            )
+            _record_cut(path, chosen)
+        recorded = ForkOrigin.model_validate_json(path.read_text(encoding="utf-8")).crossing
         ids = [c.tool_call_id for c in crossings]
-        if recorded is not None and recorded.tool_call_id in ids:
-            return ids.index(recorded.tool_call_id)
+        if recorded.tool_call_id not in ids:
+            raise ValueError(
+                f"cannot fork {source_run_id}: {path.name} names tool call "
+                f"{recorded.tool_call_id}, which is no crossing of {boundary} in the source"
+            )
+        return ids.index(recorded.tool_call_id)
+
+    def _search_cut(
+        self,
+        source_run_id: str,
+        boundary: str,
+        constraint_id: str,
+        crossings: Sequence[Crossing],
+        events: Sequence[Any],
+    ) -> int:
+        """The first of `crossings` whose recorded handoff the helper finds carrying the rule,
+        else 0 (`_cut`)."""
         sent = [e.content for e in events if isinstance(e, BoundaryOut) and e.boundary == boundary]
         rule = self.ledger.get(constraint_id).text
         # Charged to neither the source (its record is written) nor a fork (not made yet).
@@ -923,16 +952,21 @@ def _carries(rule: str, kind: str, helper: Any) -> Callable[[str], bool]:
     return carries
 
 
-def _recorded_cut(runs_dir: Path, source_run_id: str) -> Crossing | None:
-    """The crossing an earlier fork of `source_run_id` in `runs_dir` resumed before, if any."""
-    for path in sorted(runs_dir.glob("*/fork.json")):
+def _record_cut(path: Path, cut: ForkOrigin) -> None:
+    """Write `cut` to `path` unless a cut is there already: the first writer wins. The file is
+    written whole under a temporary name and then hard-linked into place, which fails if `path`
+    exists (atomic on one filesystem), so a reader never sees a partial file and two writers
+    never both succeed."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(json.dumps(cut.model_dump(mode="json"), indent=2) + "\n")
         try:
-            origin = ForkOrigin.model_validate_json(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if origin.source_run_id == source_run_id:
-            return origin.crossing
-    return None
+            os.link(tmp, path)
+        except FileExistsError:
+            pass  # another forker recorded its cut first; the caller reads that one
+    finally:
+        os.unlink(tmp)
 
 
 def _prefix(source_run_id: str, events: Sequence[Any], crossing: Crossing, nth: int) -> list[Any]:

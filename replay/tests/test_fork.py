@@ -261,7 +261,7 @@ class World:
         return asyncio.run(runner.fork_one(source.run_id, arm, op, seed=0, repo_ref="HEAD"))
 
     def run_ids(self) -> list[str]:
-        return sorted(p.name for p in self.runs_dir.iterdir())
+        return sorted(p.name for p in self.runs_dir.iterdir() if p.is_dir())  # run folders
 
 
 def recorded_app() -> App:
@@ -1054,7 +1054,7 @@ def test_a_later_fork_of_a_source_reuses_the_cut_an_earlier_fork_recorded(tmp_pa
     world = World(tmp_path)
     source = world.record(two_handoffs())
     first = world.fork(fork_app(), source, probe=Probe(picks(), picks(2)))
-    again = Probe()  # asked nothing: the cut comes from the first fork's fork.json
+    again = Probe()  # asked nothing: the cut is the one the first fork recorded
     second = world.fork(fork_app(), source, Arm.gated, Operator.none, probe=again)
 
     origins = [_read(world.runs_dir / r.run_id, "fork.json") for r in (first, second)]
@@ -1121,3 +1121,65 @@ def test_a_return_boundary_cuts_at_the_first_reply_that_carries_the_rule(tmp_pat
         (BoundaryOut, "Wrote it again. Kept out of locked/."),
         (BoundaryIn, "Wrote it again."),
     ]
+
+
+def test_two_processes_forking_one_source_at_once_share_one_cut(tmp_path):
+    """Catches a cut chosen and recorded in two steps: two forkers that both find no recorded
+    cut, ask the helper, get different answers (t1 here, t2 there) and each keep their own,
+    so two arms of one source would resume at different crossings. The first to record wins;
+    the other drops its answer and uses the winner's."""
+    import threading
+
+    class Racing(Probe):
+        """Built only once a forker found no recorded cut; waits until the other did too."""
+
+        def __init__(self, barrier, *replies):
+            super().__init__(*replies)
+            self.barrier = barrier
+
+        def __call__(self):
+            model = super().__call__()
+            self.barrier.wait(timeout=60)
+            return model
+
+    world = World(tmp_path)
+    source = world.record(two_handoffs())
+    barrier = threading.Barrier(2)
+    probes = [Racing(barrier, picks(1), picks(1)), Racing(barrier, picks(), picks(2))]  # t1; t2
+    results: list = [None, None]
+
+    def fork(i: int) -> None:
+        quiet = App(planner=["Done after the fork."], coder=["Coded again."])  # writes nothing
+        try:
+            results[i] = world.fork(quiet, source, Arm.gated, Operator.none, probe=probes[i])
+        except BaseException as exc:  # reported below, not lost in the thread
+            results[i] = exc
+
+    threads = [threading.Thread(target=fork, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+
+    assert [type(r) for r in results] == [RunRecord, RunRecord], results
+    assert [p.built for p in probes] == [1, 1]  # both searched: the race really happened
+    origins = [_read(world.runs_dir / r.run_id, "fork.json") for r in results]
+    assert origins[0] == origins[1]
+    prefixes = {(world.runs_dir / r.run_id / "prefix.jsonl").read_bytes() for r in results}
+    assert len(prefixes) == 1
+    files = sorted(p.name for p in world.runs_dir.iterdir() if not p.is_dir())
+    assert files == [f"fork-cut-{source.run_id}.json"]  # the one record, no temporary left
+
+
+def test_a_refused_cell_is_refused_before_the_cut_search_spends_anything(tmp_path):
+    """Catches the paid cut search running before the cell check: an operator the gate does not
+    build would cost helper calls on a source with several crossings and then be refused."""
+    from replay.runner import CellRefused
+
+    world = World(tmp_path)
+    source = world.record(two_handoffs())
+    probe = Probe()
+    with pytest.raises(CellRefused, match="not built"):
+        world.fork(fork_app(), source, Arm.mutated, Operator.return_corrupt, probe=probe)
+    assert probe.built == 0
+    assert world.run_ids() == [source.run_id]

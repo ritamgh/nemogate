@@ -277,8 +277,8 @@ attempt to the right conditions. `stats.py` counts a folder with `error.json` an
 
 `fork_one(source_run_id, arm, operator, *, seed, repo_ref)`: a new run (new run id and folder)
 that continues the recorded run `runs_dir/<source_run_id>/` from just before a crossing of its
-target boundary, the cut (below). It reads only that folder and the `fork.json` of earlier forks
-of the same source in `runs_dir`, so it works from a new process.
+target boundary, the cut (below). It reads only that folder and the source's recorded cut
+(`runs_dir/fork-cut-<source_run_id>.json`), so it works from a new process.
 
 **The cut** (`Runner._cut`; since 2026-10-20, docs/SPEC.md Changes "Forks can cut at a later
 crossing"). The fork resumes before the first crossing of the target boundary whose recorded
@@ -288,10 +288,16 @@ handoff without the rule change nothing: before this, every mutating fork of suc
 as `NothingToMutate`, so the arm had no data. How it is chosen:
 
 - One crossing of the boundary: that one, no model call.
-- An earlier fork of the same source in `runs_dir` (any `*/fork.json` naming it): its crossing.
-  The cut belongs to the source, not to the arm or operator, so every fork of one source, in
-  this process or a later one, shares one cut and one `prefix.jsonl` (pairing holds: arms
-  differ only at and after the cut).
+- The source's recorded cut, `runs_dir/fork-cut-<source_run_id>.json` (a `ForkOrigin`: the
+  crossing, and `crossing_index` when not the first), if it exists: its crossing. The cut
+  belongs to the source, not to the arm or operator, so every fork of one source, in this
+  process or another, shares one cut and one `prefix.jsonl` (pairing holds: arms differ only at
+  and after the cut). The first forker to choose a cut records it, and the first writer wins:
+  the file is written whole under a temporary name and hard-linked into place (`os.link` fails
+  if it exists), so two processes that searched at once both read the winner's cut and the
+  loser drops its own answer. Inside one process the search is synchronous (no `await`), so
+  concurrent `fork_one` coroutines cannot interleave in it. The file is a plain file beside the
+  run folders; `stats`, `sweep_status` and the report read directories only.
 - Otherwise the helper (`helper_factory`, default `get_model(Role.helper)`) judges the source's
   recorded handoffs at the boundary in order: the `boundary_out` texts of `trace.jsonl` (the
   delegations, or on a `return:` boundary the replies), the i-th for the i-th crossing. The
@@ -309,8 +315,9 @@ as `NothingToMutate`, so the arm had no data. How it is chosen:
 
 Cost: per source, one helper call per handoff judged, up to and including the first that
 carries the rule (two for a handoff whose reply does not parse or that drop would empty), made
-by the first fork of the source only; 0 for every later fork and for a source that crossed its
-boundary once. The calls are logged under the run id `<source_run_id>:fork-cut`, so they count
+by the first fork of the source only (by each of the forkers that race to record it); 0 for
+every later fork and for a source that crossed its boundary once. The cell is checked
+(`refusal`) before the search, so a refused cell costs no call. The calls are logged under the run id `<source_run_id>:fork-cut`, so they count
 against the cap but belong to no run record (the source's is written, no fork exists yet).
 `fork.json` records the cut as `crossing` plus `crossing_index` when it is not the first. With a
 later cut, the source's earlier crossings of the boundary are in `prefix.jsonl`: they are the
