@@ -21,7 +21,9 @@ Only insert text. Each edit names a file, an exact passage that occurs exactly o
 (old_string), and the same passage with your addition included (new_string). Make old_string a \
 whole line of the instruction text, copied character for character, and put your addition after \
 it. Do not anchor on the line that opens or closes a quoted string (the one with the name, the \
-equals sign and the quote marks): its quotes and backslashes are easy to mistype. Keep additions \
+equals sign and the quote marks): its quotes and backslashes are easy to mistype. Start your \
+addition with a newline, and never put it right after a line that ends with a backslash (that \
+joins it onto the line). Keep additions \
 short and general: do not paste conversation history or task details.
 
 {files}"""
