@@ -17,6 +17,7 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
+
 def fisher_exact(a: int, n1: int, b: int, n2: int) -> float:
     """Two-sided exact p for `a` of `n1` against `b` of `n2` (Fisher's exact test).
 
