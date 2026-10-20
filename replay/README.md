@@ -114,7 +114,11 @@ class Recording(BaseModel):  # STRICT; run_dir/boundaries.json
     crossings: tuple[Crossing, ...]   # in delegation order
 class ForkOrigin(BaseModel): # STRICT; run_dir/fork.json of a fork
     source_run_id: str
-    crossing: Crossing       # the source crossing the fork resumed before
+    crossing: Crossing       # the source crossing the fork resumed before (the cut)
+    crossing_index: PositiveInt | None = None
+    # which crossing of the target boundary that is, when not the first (1 = the second). Left
+    # out of the file for the first, so a first-crossing fork.json, and every fork.json written
+    # before 2026-10-20, reads and writes exactly as before.
 
 class BoundaryRecorder(AgentMiddleware):
     def __init__(self, session, target_boundary: str)
@@ -128,10 +132,13 @@ class BoundaryRecorder(AgentMiddleware):
     # crashes a run.
     def crossings(self, children: Mapping[str, str]) -> tuple[Crossing, ...]
     # children: root checkpoint id -> id of this run's next checkpoint (post_checkpoint).
+def crossings_of(recording, boundary) -> tuple[Crossing, ...]
+    # Every crossing whose delegation or return is `boundary`, in delegation order: the
+    # candidates for a fork's cut (runner.py, "The cut").
 def fork_point(recording, boundary) -> Crossing | None
-    # The FIRST crossing whose delegation or return is `boundary` (so every crossing of the
-    # boundary lies after the fork). A return forks before its delegation: no root checkpoint
-    # lies between the subagent finishing and its reply, so the call runs again.
+    # The FIRST of them, None if the run never crossed `boundary`. A return forks before its
+    # delegation: no root checkpoint lies between the subagent finishing and its reply, so the
+    # call runs again.
 def copy_checkpoints(src: Path, dst: Path) -> None
     # sqlite3 backup API (rows still in the -wal file included); FileNotFoundError if no src.
 ```
@@ -146,7 +153,8 @@ class Runner:
                  backend_factory=None,  # None: ShieldedContreeSandbox(session, cwd=app.repo_root)
                  ledger_hash_fn=record.ledger_hash, recursion_limit: int = 60,
                  subagent_step_limit: int = SUBAGENT_STEP_LIMIT,  # 240 supersteps per agent graph
-                 allow_dirty: bool = False, repo_dir: Path = ROOT)
+                 allow_dirty: bool = False, repo_dir: Path = ROOT,
+                 helper_factory=lambda: get_model(Role.helper))  # judges a fork's cut
     async def run_one(self, task: AppTask, arm: Arm, operator: Operator, *, seed: int,
                       repo_ref: str = "main") -> RunRecord
     async def fork_one(self, source_run_id: str, arm: Arm, operator: Operator, *, seed: int,
@@ -268,8 +276,52 @@ attempt to the right conditions. `stats.py` counts a folder with `error.json` an
 `gate.operators.NothingToMutate`: see "Mutation no-ops" under "stats.py".
 
 `fork_one(source_run_id, arm, operator, *, seed, repo_ref)`: a new run (new run id and folder)
-that continues the recorded run `runs_dir/<source_run_id>/` from just before its first crossing
-of its target boundary. It reads only that folder, so it works from a new process.
+that continues the recorded run `runs_dir/<source_run_id>/` from just before a crossing of its
+target boundary, the cut (below). It reads only that folder and the source's recorded cut
+(`runs_dir/fork-cut-<source_run_id>.json`), so it works from a new process.
+
+**The cut** (`Runner._cut`; since 2026-10-20, docs/SPEC.md Changes "Forks can cut at a later
+crossing"). The fork resumes before the first crossing of the target boundary whose recorded
+handoff carries the target rule, not always the first crossing. A rule about a later action is
+often not in the first handoff (that one is the first instruction), and `drop`/`hedge` on a
+handoff without the rule change nothing: before this, every mutating fork of such a source ended
+as `NothingToMutate`, so the arm had no data. How it is chosen:
+
+- One crossing of the boundary: that one, no model call.
+- The source's recorded cut, `runs_dir/fork-cut-<source_run_id>.json` (a `ForkOrigin`: the
+  crossing, and `crossing_index` when not the first), if it exists: its crossing. The cut
+  belongs to the source, not to the arm or operator, so every fork of one source, in this
+  process or another, shares one cut and one `prefix.jsonl` (pairing holds: arms differ only at
+  and after the cut). The first forker to choose a cut records it, and the first writer wins:
+  the file is written whole under a temporary name and hard-linked into place (`os.link` fails
+  if it exists), so two processes that searched at once both read the winner's cut and the
+  loser drops its own answer. Inside one process the search is synchronous (no `await`), so
+  concurrent `fork_one` coroutines cannot interleave in it. The file is a plain file beside the
+  run folders; `stats`, `sweep_status` and the report read directories only.
+- Otherwise the helper (`helper_factory`, default `get_model(Role.helper)`) judges the source's
+  recorded handoffs at the boundary in order: the `boundary_out` texts of `trace.jsonl` (the
+  delegations, or on a `return:` boundary the replies), the i-th for the i-th crossing. The
+  judge is the gate's own `drop` operator (`make_operator(Operator.drop, rule, helper,
+  boundary=kind)`): it carries the rule unless drop raises `NothingToMutate`. The first that
+  carries it is the cut. A delegation's text is exactly what the fork's gate will see (the tool
+  call is in the checkpoint); a reply is regenerated by the fork, so on a return boundary the
+  recorded reply is a predictor only.
+- No recorded handoff carries the rule: the first crossing, as before. The fork's operator then
+  raises `NothingToMutate` there, the genuine case, still counted as a mutation no-op.
+- The helper cannot tell (`EmptyMutation`: every sentence is the rule; `UnparsedReply`; or any
+  other failure of the call, noted on stderr): the crossing being asked about is the cut (the
+  first, when that is the one asked), so the fork's own operator decides, as before. A failure
+  that stops the sweep (`STOPS_THE_SWEEP`, the spend cap above all) propagates.
+
+Cost: per source, one helper call per handoff judged, up to and including the first that
+carries the rule (two for a handoff whose reply does not parse or that drop would empty), made
+by the first fork of the source only (by each of the forkers that race to record it); 0 for
+every later fork and for a source that crossed its boundary once. The cell is checked
+(`refusal`) before the search, so a refused cell costs no call. The calls are logged under the run id `<source_run_id>:fork-cut`, so they count
+against the cap but belong to no run record (the source's is written, no fork exists yet).
+`fork.json` records the cut as `crossing` plus `crossing_index` when it is not the first. With a
+later cut, the source's earlier crossings of the boundary are in `prefix.jsonl`: they are the
+same in every arm, and what they did is the source's (inherited, below), not the fork's.
 
 1. Refused with ValueError before any client, folder or graph exists if: the checkout is not
    `repo_ref` (as in run_one); the source's `record.json` says another arm than `natural` (the
@@ -278,12 +330,13 @@ of its target boundary. It reads only that folder, so it works from a new proces
    source record's (the fork would not be `is_comparable` with it; the message names the
    fields); the compaction knobs set now differ from the `knobs` in the source's
    `carriage.json` (they shape the planner on both sides of the fork point and nothing else
-   records them); `fork_point(<source boundaries.json>, source.boundary)` is None; the source
+   records them); the source never crossed `source.boundary` (`crossings_of` is empty:
+   `NoForkPoint`); the source
    is itself a fork (`fork.json`: its trace starts at its own fork point); the task
    `app.tasks()[source.task_id]` (KeyError if gone) now has another constraint or boundary than
    the source record's `constraint_id`/`boundary`; the source trace has no gapless run of
-   events (steps 0..n-1) up to the gate's first `boundary_out` at the crossing's delegation (the
-   prefix, below). A missing `record.json`, `carriage.json`, `boundaries.json` or
+   events (steps 0..n-1) up to the gate's `boundary_out` for the cut crossing's delegation (the
+   k-th at that delegation for the k-th crossing of the boundary: the prefix, below). A missing `record.json`, `carriage.json`, `boundaries.json` or
    `trace.jsonl` raises FileNotFoundError naming it.
 2. As run_one steps 2-11, except: `copy_checkpoints(source/checkpoints.sqlite,
    run_dir/checkpoints.sqlite)` (the fork writes into its own copy; the source folder is never
@@ -317,13 +370,13 @@ of its target boundary. It reads only that folder, so it works from a new proces
    unchanged: from the source's `base_image` to the fork's final image, the run's whole effect,
    and the task check still runs on the final repo. Known gap: `path_forbidden` skips a file
    change when a tool call of the same path is in the trace, prefix included, so a diff-only
-   change to a path the source's own pre-fork call touched is not scored for the fork. `output_must_include` without `each` is satisfied by a matching reply anywhere in the merged trace (`oracle/evaluate.py:121-125`), so a matching reply in the prefix satisfies it for the fork, and a no-match violation attached to a prefix reply (step < n) goes to inherited. Rare by the fork-point design (the fork point lies before the target crossing, so replies after the rule is handed over come from the fork); documented, not changed (oracle is Shekhar's).
+   change to a path the source's own pre-fork call touched is not scored for the fork. `output_must_include` without `each` is satisfied by a matching reply anywhere in the merged trace (`oracle/evaluate.py:121-125`), so a matching reply in the prefix satisfies it for the fork, and a no-match violation attached to a prefix reply (step < n) goes to inherited. Rare by the fork-point design (the fork point lies before the target crossing, so replies after the rule is handed over come from the fork); documented, not changed (oracle is Shekhar's). A later cut ("The cut", above) puts the replies to the earlier crossings in the prefix, so for such a fork a matching earlier reply satisfies the rule too: the gap is wider there, the same in every arm of the source.
    For a fork, `fs_diff.json` (from the base image) and `violations.json` (scored from the fork-point image) can disagree: if the source changed a file before the fork point and the fork changed it back to its base content, `fs_diff.json` has no entry for it but `violations.json` counts "modified" against the fork-point image. Read `violations.json` for the verdict. A path changed since the fork point is listed once, as counted, and is left out of `inherited_violations.json`. The fork's gate reads
    `prefix.jsonl` (`gate.PRIOR_EVENTS`, written before the gate is built), so under
    `block_only` and `gated` an approval given before the fork point still authorises an action
    after it. `carriage.json` is written as for any run and is
-   valid: the fork point lies before the first crossing of the target boundary, so the fork's
-   events hold every delegation the classifier reads, and `compaction_evidence` reads the
+   valid: the classifier reads the whole trace (prefix, then the fork's events), so it sees every
+   delegation, those before a later cut included, and `compaction_evidence` reads the
    shared history. `python -m replay.carriage` re-derives it from `prefix.jsonl`, `trace.jsonl`
    and `violations.json` with the same numbering. A
    natural fork repeats its source's planner handoff, so it is not an independent sample of
@@ -436,7 +489,10 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   `gate.operators.NothingToMutate` and the folder counts as `mutation_noop`, not `run_error`.
   The expected name is derived from the imported class (`replay/noop.py`), so renaming it in
   `gate` breaks a test. Such a run is counted and labelled, never retried (retrying would bias
-  the sample towards runs where the planner kept the rule), and is never pooled. Second line,
+  the sample towards runs where the planner kept the rule), and is never pooled. A fork cuts at
+  the first handoff whose recorded text carries the rule (runner.py, "The cut"), so a fork's
+  no-op now means no handoff of the boundary carried it, or the fork's operator did not find in
+  the cut handoff what the helper found when choosing it. Second line,
   for operators with no check in the gate (`compress_*`): a finished run in the `mutated`,
   `block_only` or `gated` arm with an operator other than `none` also counts as `mutation_noop`
   when, at its target boundary, the `boundary_in.content` texts are the `boundary_out.content`

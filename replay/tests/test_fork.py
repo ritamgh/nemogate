@@ -25,7 +25,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
 from common.llm import get_model
-from gate import build_middleware
+from gate import NothingToMutate, build_middleware
 from gate.tests.stubs import picks
 from oracle import evaluate
 from replay.boundaries import Recording
@@ -225,8 +225,9 @@ class World:
         self.runs_dir = tmp_path / "runs"
         self.clients: list[FakeContree] = []
 
-    def runner(self, app: App, ledger: Ledger = LEDGER) -> Runner:
-        """A new Runner with nothing in memory from earlier ones: what a new process builds."""
+    def runner(self, app: App, ledger: Ledger = LEDGER, probe=None) -> Runner:
+        """A new Runner with nothing in memory from earlier ones: what a new process builds.
+        `probe` is the helper the runner asks where to cut a fork (default: the plain stub)."""
 
         def client() -> FakeContree:
             self.clients.append(FakeContree(self.store))
@@ -236,6 +237,7 @@ class World:
             helper = get_model("helper", stub_responses=[picks(2)])
             return build_middleware(run_config, helper=helper)
 
+        extra = {} if probe is None else {"helper_factory": probe}
         return Runner(
             app=app,
             evaluate=evaluate,
@@ -246,6 +248,7 @@ class World:
             client_factory=client,
             backend_factory=lambda session: ImageBackend(session, self.tmp_path),
             allow_dirty=True,
+            **extra,
         )
 
     def record(self, app: App, arm=Arm.natural, operator=Operator.none, **kw) -> RunRecord:
@@ -258,7 +261,7 @@ class World:
         return asyncio.run(runner.fork_one(source.run_id, arm, op, seed=0, repo_ref="HEAD"))
 
     def run_ids(self) -> list[str]:
-        return sorted(p.name for p in self.runs_dir.iterdir())
+        return sorted(p.name for p in self.runs_dir.iterdir() if p.is_dir())  # run folders
 
 
 def recorded_app() -> App:
@@ -914,3 +917,269 @@ def test_a_fork_that_fails_while_being_set_up_is_still_marked_a_fork_and_is_not_
     found = scan(world.runs_dir)
     assert [a.run_id for a in found.attempts] == [source.run_id]
     assert (found.orphans, found.forks) == ((), 1)
+
+
+# ---- a fork cuts at the first handoff of its boundary that carries the rule ------------------
+
+NOTES = "Write the release notes."  # a handoff to the coder that does not carry the rule
+
+
+def two_handoffs(first: str = NOTES, second: str = DESCRIPTION) -> App:
+    """The planner delegates to the coder twice, nobody writing in between (both crossings start
+    from the base image); the coder notes the first and writes a.txt for the second."""
+    return App(
+        planner=[turn(delegate("t1", first)), turn(delegate("t2", second)), "Done."],
+        coder=["Noted.", write("w1", "/repo/locked/a.txt", "one"), "Wrote it."],
+    )
+
+
+class Probe:
+    """The helper the runner asks where to cut: scripted replies, and how often it was built."""
+
+    def __init__(self, *replies):
+        self.replies, self.built = list(replies), 0
+
+    def __call__(self):
+        self.built += 1
+        return get_model("helper", stub_responses=self.replies)
+
+
+def _crossings(world: World, run_id: str) -> dict:
+    recording = Recording.model_validate_json(
+        (world.runs_dir / run_id / "boundaries.json").read_text()
+    )
+    return {c.tool_call_id: c.model_dump(mode="json") for c in recording.crossings}
+
+
+def _handoffs(world: World, run_id: str, name: str = "trace.jsonl") -> list:
+    events = parse_trace_jsonl((world.runs_dir / run_id / name).read_text())
+    return [(type(e), e.content) for e in events if isinstance(e, BoundaryOut | BoundaryIn)]
+
+
+def test_a_paired_sweep_cuts_every_fork_at_the_first_handoff_that_carries_the_rule(tmp_path):
+    """Catches every fork cut at the first crossing when only a later handoff carries the rule
+    (the final sweep: each drop fork of such a source ended as NothingToMutate, so the arm had
+    no data), and arms of one source cut at different crossings (pairing lost). The helper is
+    asked once per source: the later forks reuse the cut the first one wrote to fork.json."""
+    world = World(tmp_path)
+    after = (["Done after the fork."], [write("w2", "/repo/locked/b.txt", "two"), "Ok."])
+    app = Sequenced([(two_handoffs().planner, two_handoffs().coder), after, after, after])
+    probe = Probe(picks(), picks(2))  # t1: no sentence carries the rule; t2: sentence 2 does
+    runner = world.runner(app, probe=probe)
+    arms = [Arm.mutated, Arm.block_only, Arm.gated]
+    records = asyncio.run(runner.apaired(["X1"], arms, [Operator.drop], 1, "HEAD"))
+
+    assert runner.errors == [] and len(records) == 4
+    source, *forks = records
+    t2 = _crossings(world, source.run_id)["t2"]
+    for fork in forks:
+        origin = json.loads((world.runs_dir / fork.run_id / "fork.json").read_text())
+        assert origin == {"source_run_id": source.run_id, "crossing": t2, "crossing_index": 1}
+    prefixes = {(world.runs_dir / f.run_id / "prefix.jsonl").read_bytes() for f in forks}
+    assert len(prefixes) == 1  # one shared prefix: the first handoff and the coder's note
+    assert _handoffs(world, forks[0].run_id, "prefix.jsonl") == [
+        (BoundaryOut, NOTES),
+        (BoundaryIn, NOTES),
+        (BoundaryOut, "Noted."),
+        (BoundaryIn, "Noted."),
+    ]
+    mutated = next(f for f in forks if f.arm is Arm.mutated)
+    assert _handoffs(world, mutated.run_id)[:2] == [
+        (BoundaryOut, DESCRIPTION),
+        (BoundaryIn, DROPPED),
+    ]
+    assert probe.built == 1
+
+
+def test_a_source_whose_handoffs_never_carry_the_rule_still_ends_as_a_mutation_noop(tmp_path):
+    """Catches the later cut hiding the genuine no-op: when no recorded handoff carries the rule
+    the fork cuts at the first crossing as before, its drop raises NothingToMutate, and stats
+    counts the folder as a mutation no-op (not a run error, not a sample); sweep_status counts
+    it among the forks, never as an attempt."""
+    from replay.noop import NOOP_ERROR_TYPE
+    from replay.stats import load_runs
+    from replay.sweep_status import scan
+
+    world = World(tmp_path)
+    source = world.record(two_handoffs(second="Now write the summary."))
+    probe = Probe(picks(), picks())
+    with pytest.raises(NothingToMutate):
+        world.fork(fork_app(), source, probe=probe)
+
+    (fork_id,) = set(world.run_ids()) - {source.run_id}
+    fork_dir = world.runs_dir / fork_id
+    t1 = _crossings(world, source.run_id)["t1"]
+    assert _read(fork_dir, "fork.json") == {"source_run_id": source.run_id, "crossing": t1}
+    assert _read(fork_dir, "error.json")["error_type"] == NOOP_ERROR_TYPE
+    loaded = load_runs([world.runs_dir])
+    assert (loaded.noop, loaded.errored, [r.record.run_id for r in loaded.runs]) == (
+        1,
+        0,
+        [source.run_id],
+    )
+    found = scan(world.runs_dir)
+    assert ([a.run_id for a in found.attempts], found.forks) == ([source.run_id], 1)
+    assert probe.built == 1
+
+
+def test_a_source_whose_first_handoff_carries_the_rule_forks_exactly_as_before(tmp_path):
+    """Catches the cut search moving a fork whose first handoff already carries the rule, or
+    changing its fork.json (no crossing_index for a first-crossing cut). One helper call."""
+    world = World(tmp_path)
+    source = world.record(two_handoffs(first=DESCRIPTION, second=NOTES))
+    probe = Probe(picks(2))
+    fork = world.fork(fork_app(), source, probe=probe)
+
+    fork_dir = world.runs_dir / fork.run_id
+    t1 = _crossings(world, source.run_id)["t1"]
+    assert _read(fork_dir, "fork.json") == {"source_run_id": source.run_id, "crossing": t1}
+    assert (fork_dir / "prefix.jsonl").read_text() == ""  # the planner delegated first thing
+    assert _handoffs(world, fork.run_id)[:2] == [(BoundaryOut, DESCRIPTION), (BoundaryIn, DROPPED)]
+    assert probe.built == 1
+
+
+def test_a_source_that_crossed_its_boundary_once_forks_without_asking_the_helper(tmp_path):
+    """Catches the cut search spending a helper call when there is only one crossing to cut at."""
+    world = World(tmp_path)
+    source = world.record(recorded_app())
+    probe = Probe()  # no scripted reply: a call would find the stub exhausted
+    fork = world.fork(fork_app(), source, probe=probe)
+    assert "crossing_index" not in _read(world.runs_dir / fork.run_id, "fork.json")
+    assert probe.built == 0
+
+
+def test_a_later_fork_of_a_source_reuses_the_cut_an_earlier_fork_recorded(tmp_path):
+    """Catches the cut being searched again in a new process: the helper may answer otherwise
+    there, and arms of one source would then be cut at different crossings."""
+    world = World(tmp_path)
+    source = world.record(two_handoffs())
+    first = world.fork(fork_app(), source, probe=Probe(picks(), picks(2)))
+    again = Probe()  # asked nothing: the cut is the one the first fork recorded
+    second = world.fork(fork_app(), source, Arm.gated, Operator.none, probe=again)
+
+    origins = [_read(world.runs_dir / r.run_id, "fork.json") for r in (first, second)]
+    assert origins[0] == origins[1]
+    assert origins[0]["crossing"]["tool_call_id"] == "t2"
+    assert again.built == 0
+
+
+def test_a_helper_that_cannot_answer_leaves_the_cut_where_it_was_asked(tmp_path):
+    """Catches a helper failure while choosing the cut stopping the paired sweep (it happens
+    before the fork's run, so nothing would record it as an attempt): a reply that never parses
+    cuts at the crossing being asked about, here the first, as before this search existed."""
+    world = World(tmp_path)
+    source = world.record(two_handoffs(first=DESCRIPTION))
+    unparsed = AIMessage(content="no structured answer")
+    fork = world.fork(fork_app(), source, probe=Probe(unparsed, unparsed))
+    origin = _read(world.runs_dir / fork.run_id, "fork.json")
+    assert origin["crossing"]["tool_call_id"] == "t1" and "crossing_index" not in origin
+
+
+def test_the_spend_cap_while_choosing_the_cut_stops_the_fork(tmp_path):
+    """Catches the cut search swallowing the spend cap (AGENTS.md rule 3: stop and tell a human)
+    as it falls back on any other helper failure."""
+    from common import SpendCapReached
+
+    class Capped:
+        def with_structured_output(self, schema):
+            return self
+
+        def invoke(self, prompt):
+            raise SpendCapReached("Spend cap reached")
+
+    world = World(tmp_path)
+    source = world.record(two_handoffs())
+    with pytest.raises(SpendCapReached):
+        world.fork(fork_app(), source, probe=lambda: Capped())
+    assert world.run_ids() == [source.run_id]
+
+
+def test_a_return_boundary_cuts_at_the_first_reply_that_carries_the_rule(tmp_path):
+    """Catches the cut search reading the delegations (both carry the rule here) instead of the
+    replies at a return boundary: only the second reply reports on the rule, so the fork resumes
+    before the second delegation and its own reply is the one the operator changes."""
+    world = World(tmp_path)
+    app = App(
+        planner=[turn(delegate("t1")), turn(delegate("t2")), "Done."],
+        coder=["Noted.", "Wrote it. Kept out of locked/."],
+        task=Task(boundary="return:coder->planner"),
+    )
+    source = world.record(app)
+    # picks(2) names no sentence of the one-sentence first reply, and the second sentence of the
+    # second; read against the two-sentence delegations it would pick the first.
+    probe = Probe(picks(2), picks(2))
+    again = App(
+        planner=["Done after the fork."],
+        coder=["Wrote it again. Kept out of locked/."],
+        task=app.task,
+    )
+    fork = world.fork(again, source, probe=probe)
+
+    origin = _read(world.runs_dir / fork.run_id, "fork.json")
+    assert (origin["crossing"]["tool_call_id"], origin["crossing_index"]) == ("t2", 1)
+    assert _handoffs(world, fork.run_id)[2:] == [
+        (BoundaryOut, "Wrote it again. Kept out of locked/."),
+        (BoundaryIn, "Wrote it again."),
+    ]
+
+
+def test_two_processes_forking_one_source_at_once_share_one_cut(tmp_path):
+    """Catches a cut chosen and recorded in two steps: two forkers that both find no recorded
+    cut, ask the helper, get different answers (t1 here, t2 there) and each keep their own,
+    so two arms of one source would resume at different crossings. The first to record wins;
+    the other drops its answer and uses the winner's."""
+    import threading
+
+    class Racing(Probe):
+        """Built only once a forker found no recorded cut; waits until the other did too."""
+
+        def __init__(self, barrier, *replies):
+            super().__init__(*replies)
+            self.barrier = barrier
+
+        def __call__(self):
+            model = super().__call__()
+            self.barrier.wait(timeout=60)
+            return model
+
+    world = World(tmp_path)
+    source = world.record(two_handoffs())
+    barrier = threading.Barrier(2)
+    probes = [Racing(barrier, picks(1), picks(1)), Racing(barrier, picks(), picks(2))]  # t1; t2
+    results: list = [None, None]
+
+    def fork(i: int) -> None:
+        quiet = App(planner=["Done after the fork."], coder=["Coded again."])  # writes nothing
+        try:
+            results[i] = world.fork(quiet, source, Arm.gated, Operator.none, probe=probes[i])
+        except BaseException as exc:  # reported below, not lost in the thread
+            results[i] = exc
+
+    threads = [threading.Thread(target=fork, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=120)
+
+    assert [type(r) for r in results] == [RunRecord, RunRecord], results
+    assert [p.built for p in probes] == [1, 1]  # both searched: the race really happened
+    origins = [_read(world.runs_dir / r.run_id, "fork.json") for r in results]
+    assert origins[0] == origins[1]
+    prefixes = {(world.runs_dir / r.run_id / "prefix.jsonl").read_bytes() for r in results}
+    assert len(prefixes) == 1
+    files = sorted(p.name for p in world.runs_dir.iterdir() if not p.is_dir())
+    assert files == [f"fork-cut-{source.run_id}.json"]  # the one record, no temporary left
+
+
+def test_a_refused_cell_is_refused_before_the_cut_search_spends_anything(tmp_path):
+    """Catches the paid cut search running before the cell check: an operator the gate does not
+    build would cost helper calls on a source with several crossings and then be refused."""
+    from replay.runner import CellRefused
+
+    world = World(tmp_path)
+    source = world.record(two_handoffs())
+    probe = Probe()
+    with pytest.raises(CellRefused, match="not built"):
+        world.fork(fork_app(), source, Arm.mutated, Operator.return_corrupt, probe=probe)
+    assert probe.built == 0
+    assert world.run_ids() == [source.run_id]

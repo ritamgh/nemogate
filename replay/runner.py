@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import traceback
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -21,10 +22,10 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from common import ConfigError, MissingEnvError, SpendCapReached, env
+from common import ConfigError, MissingEnvError, SpendCapReached, env, get_model
 from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
-from gate.operators import make_operator
+from gate.operators import MutationFailed, NothingToMutate, make_operator
 from replay import record, sweep_status
 from replay.app import App, AppTask, pairs
 from replay.boundaries import (
@@ -33,14 +34,14 @@ from replay.boundaries import (
     ForkOrigin,
     Recording,
     copy_checkpoints,
-    fork_point,
+    crossings_of,
 )
 from replay.carriage import classify, compaction_evidence, fork_trace, write_carriage
 from replay.fsdiff import diff, snapshot
 from replay.step_cap import StepCap
 from schemas.config import AppConfig, load_config
 from schemas.contracts import EvaluateFn, MakeMiddlewareFn
-from schemas.enums import Arm, Operator
+from schemas.enums import Arm, Operator, Role
 from schemas.ledger import (
     ApprovalBefore,
     Constraint,
@@ -60,6 +61,8 @@ RUNS_DIR = ROOT / "runs"
 CHECKPOINTS = "checkpoints.sqlite"  # file names in a run folder
 BOUNDARIES = "boundaries.json"
 PREFIX = "prefix.jsonl"  # a fork: the source's trace events before the fork point
+# In the runs dir, next to the run folders: the cut every fork of one source shares (`_cut`).
+FORK_CUT = "fork-cut-{}.json"
 TIMING = "timing.json"  # a run's wall time; stats reads it (older run folders have none)
 ERROR = "error.json"  # a run that raised: what `arun` writes before it carries on
 TRACEBACK_LINES = 20  # how much of the traceback error.json keeps
@@ -134,6 +137,7 @@ class Runner:
         subagent_step_limit: int = SUBAGENT_STEP_LIMIT,
         allow_dirty: bool = False,
         repo_dir: Path = ROOT,
+        helper_factory: Callable[[], Any] = lambda: get_model(Role.helper),
     ) -> None:
         self.app = app
         self.evaluate = evaluate
@@ -148,6 +152,7 @@ class Runner:
         self.subagent_step_limit = subagent_step_limit
         self.allow_dirty = allow_dirty
         self.repo_dir = repo_dir
+        self.helper_factory = helper_factory  # the model `fork_one` asks where to cut
         self.records: list[RunRecord] = []  # what the latest `arun` finished
         self.errors: list[RunError] = []  # and the runs it caught raising
         self.unforkable: list[str] = []  # natural sources the latest `apaired` could not fork
@@ -193,9 +198,10 @@ class Runner:
         seed: int,
         repo_ref: str = "main",
     ) -> RunRecord:
-        """A new run that continues the recorded run `source_run_id` from just before its first
-        crossing of its target boundary, under `arm` and `operator`. Refused (ValueError) before
-        any work unless the source ran the natural arm and the fork would be comparable."""
+        """A new run that continues the recorded run `source_run_id` from just before a crossing
+        of its target boundary (the cut, `_cut`: the first whose handoff carries the rule),
+        under `arm` and `operator`. Refused (ValueError) before any work unless the source ran
+        the natural arm and the fork would be comparable."""
         repo_sha = record.require_checkout_at(repo_ref, self.repo_dir, allow_dirty=self.allow_dirty)
         source_dir = self.runs_dir / source_run_id
         source = RunRecord.model_validate_json(
@@ -224,8 +230,8 @@ class Runner:
         recording = Recording.model_validate_json(
             (source_dir / BOUNDARIES).read_text(encoding="utf-8")
         )
-        crossing = fork_point(recording, source.boundary)
-        if crossing is None:
+        crossings = crossings_of(recording, source.boundary)
+        if not crossings:
             raise NoForkPoint(
                 f"cannot fork {source_run_id}: it never crossed {source.boundary}, so there is "
                 "nothing to fork before"
@@ -241,18 +247,79 @@ class Runner:
                 f"cannot fork {source_run_id}: task {task.id} now targets {task.constraint} at "
                 f"{task.boundary}, but the run recorded {source.constraint_id} at {source.boundary}"
             )
-        prefix = _prefix(source_dir, crossing)
+        # Before the cut search, which may call the helper: a refused cell costs nothing.
+        _refuse_cell(task, arm, operator, self.ledger)
+        events = parse_trace_jsonl((source_dir / "trace.jsonl").read_text(encoding="utf-8"))
+        index = self._cut(source_run_id, source.boundary, task.constraint, crossings, events)
+        crossing = crossings[index]
+        prefix = _prefix(source_run_id, events, crossing, index)
         # A blocking arm's gate reads the prefix (gate.PRIOR_EVENTS) and so still honours an
         # approval given before the fork point.
-        fork = _Fork(
-            source_dir,
-            recording,
-            ForkOrigin(source_run_id=source_run_id, crossing=crossing),
-            tuple(prefix),
+        origin = ForkOrigin(
+            source_run_id=source_run_id, crossing=crossing, crossing_index=index or None
         )
+        fork = _Fork(source_dir, recording, origin, tuple(prefix))
         return await self._run(
             task, arm, operator, seed=seed, repo_ref=repo_ref, repro=repro, fork=fork
         )
+
+    def _cut(
+        self,
+        source_run_id: str,
+        boundary: str,
+        constraint_id: str,
+        crossings: Sequence[Crossing],
+        events: Sequence[Any],
+    ) -> int:
+        """Which of `crossings` (the source's crossings of `boundary`) a fork resumes before.
+
+        The first whose recorded handoff at `boundary` carries the rule: a rule about a later
+        action is often not in the first handoff, and drop or hedge on a handoff without it
+        change nothing (NothingToMutate). The helper judges each handoff in order with drop's own
+        sentence picking; if none carries the rule, the first crossing, where the fork's operator
+        then finds nothing to mutate as before. The cut belongs to the source, not to the arm:
+        the first fork to choose it records it in `runs_dir/fork-cut-<source>.json`, created
+        atomically, and every fork of the source uses what that file says, so all its arms share
+        one prefix even when several processes fork it at once (a forker that loses the race
+        drops its own answer). One crossing needs no helper call and no file.
+        """
+        if len(crossings) == 1:
+            return 0
+        path = self.runs_dir / FORK_CUT.format(source_run_id)
+        if not path.exists():
+            found = self._search_cut(source_run_id, boundary, constraint_id, crossings, events)
+            chosen = ForkOrigin(
+                source_run_id=source_run_id, crossing=crossings[found], crossing_index=found or None
+            )
+            _record_cut(path, chosen)
+        recorded = ForkOrigin.model_validate_json(path.read_text(encoding="utf-8")).crossing
+        ids = [c.tool_call_id for c in crossings]
+        if recorded.tool_call_id not in ids:
+            raise ValueError(
+                f"cannot fork {source_run_id}: {path.name} names tool call "
+                f"{recorded.tool_call_id}, which is no crossing of {boundary} in the source"
+            )
+        return ids.index(recorded.tool_call_id)
+
+    def _search_cut(
+        self,
+        source_run_id: str,
+        boundary: str,
+        constraint_id: str,
+        crossings: Sequence[Crossing],
+        events: Sequence[Any],
+    ) -> int:
+        """The first of `crossings` whose recorded handoff the helper finds carrying the rule,
+        else 0 (`_cut`)."""
+        sent = [e.content for e in events if isinstance(e, BoundaryOut) and e.boundary == boundary]
+        rule = self.ledger.get(constraint_id).text
+        # Charged to neither the source (its record is written) nor a fork (not made yet).
+        with run_scope(f"{source_run_id}:fork-cut"):
+            carries = _carries(rule, boundary.partition(":")[0], self.helper_factory())
+            for index, text in enumerate(sent[: len(crossings)]):
+                if carries(text):
+                    return index
+        return 0
 
     async def _run(
         self,
@@ -857,25 +924,68 @@ class _Fork:
     prefix: tuple[Any, ...]  # the source's trace events before the fork point
 
 
-def _prefix(source_dir: Path, crossing: Crossing) -> list[Any]:
-    """The source's trace events before the fork point: everything before the gate's first
-    handoff event at the crossing's delegation (the fork crossing is the first with that
-    delegation, and its step runs that call alone). ValueError if there is no such event."""
-    events = parse_trace_jsonl((source_dir / "trace.jsonl").read_text(encoding="utf-8"))
-    cut = next(
-        (
-            i
-            for i, e in enumerate(events)
-            if isinstance(e, BoundaryOut) and e.boundary == crossing.delegation
-        ),
-        None,
-    )
+def _carries(rule: str, kind: str, helper: Any) -> Callable[[str], bool]:
+    """Whether a recorded handoff (a delegation, or a reply on a `return` boundary) carries
+    `rule`: drop, as the gate builds it, finds a sentence of it to remove. A helper that cannot
+    tell (its reply never parses, or a call fails) answers yes, so the cut stays where it was
+    being asked, the first crossing when that is the one: the fork's own operator decides, as it
+    did before later cuts. Only a failure that stops the sweep (the spend cap above all)
+    propagates."""
+    drop = make_operator(Operator.drop, rule, helper, boundary=kind)
+
+    def carries(text: str) -> bool:
+        try:
+            drop(text)
+        except NothingToMutate:
+            return False
+        except MutationFailed:  # every sentence is the rule, or the reply never parsed
+            return True
+        except Exception as exc:
+            if _stops_the_sweep(exc):
+                raise
+            print(
+                f"choosing a fork cut: the helper failed ({exc!r}); cutting here", file=sys.stderr
+            )
+            return True
+        return True
+
+    return carries
+
+
+def _record_cut(path: Path, cut: ForkOrigin) -> None:
+    """Write `cut` to `path` unless a cut is there already: the first writer wins. The file is
+    written whole under a temporary name and then hard-linked into place, which fails if `path`
+    exists (atomic on one filesystem), so a reader never sees a partial file and two writers
+    never both succeed."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(json.dumps(cut.model_dump(mode="json"), indent=2) + "\n")
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass  # another forker recorded its cut first; the caller reads that one
+    finally:
+        os.unlink(tmp)
+
+
+def _prefix(source_run_id: str, events: Sequence[Any], crossing: Crossing, nth: int) -> list[Any]:
+    """The source's trace events before the fork point: everything before the gate's handoff
+    event for the crossing's delegation, the `nth` (0 = first) at that delegation, as the
+    crossing is the `nth` crossing of its boundary (and its step runs that call alone).
+    ValueError if there is no such event or the events before it have a gap."""
+    at = [
+        i
+        for i, e in enumerate(events)
+        if isinstance(e, BoundaryOut) and e.boundary == crossing.delegation
+    ]
+    cut = at[nth] if nth < len(at) else None
     if cut is None or [e.step for e in events[:cut]] != list(range(cut)):
         raise ValueError(
-            f"cannot fork {source_dir.name}: its trace has no gapless run of events up to a "
+            f"cannot fork {source_run_id}: its trace has no gapless run of events up to a "
             f"{crossing.delegation} handoff, so the events before the fork point are unknown"
         )
-    return events[:cut]
+    return list(events[:cut])
 
 
 async def _check_fork_point(graph: Any, start: dict, tool_call_id: str) -> None:
