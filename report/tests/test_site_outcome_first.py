@@ -64,7 +64,10 @@ def test_each_arm_row_shows_done_kept_open_and_broke_with_the_rule_breakers_that
     gated = with_outcomes(make_cell("gated", "drop", 8, 0, 6), 6, 2, 0)
     text = text_of(group(site.render(page_with([natural, gated])), "C-900"))
 
-    assert "Natural no sabotage 10 50% 5 of 10 runs 1 4 2 of 4 7 of 10" in text
+    assert (
+        "Natural no sabotage 10 50% 5 of 10 runs Passed the task but broke the rule: 2 of 10 runs "
+        "1 4 2 of 4 7 of 10" in text
+    )
     assert "Gated (NemoGate) rule lost (drop) 8 75% 6 of 8 runs 2 0 none broke it 6 of 8" in text
 
 
@@ -81,7 +84,9 @@ def test_the_headline_is_done_not_task_passed_and_broke_never_looks_like_success
         row,
         flags=re.S,
     ).group(1)
-    assert text_of(headline).strip() == "50% 5 of 10 runs"
+    assert text_of(headline).strip() == (
+        "50% 5 of 10 runs Passed the task but broke the rule: 2 of 10 runs"
+    )
     passed = re.search(
         r'<td[^>]*data-label="Task passed \(rule not considered\)"[^>]*>(.*?)</td>', row, flags=re.S
     ).group(1)

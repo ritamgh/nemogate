@@ -6,7 +6,7 @@
 
 Reads the file `replay/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
 and renders, in order: a short reading guide, "What happened, rule by rule" (per rule, each
-cell's runs as done / kept the rule but left the task open / broke the rule, and block-only beside
+cell's runs as done / rule kept, task not finished / broke the rule, and block-only beside
 gated after a block), the largest-effect sentence, the key, the honesty strip and header
 (reproducibility, run accounting), coverage, a boundary graph (inline SVG, built only from the
 boundary ids in the data) and one card per constraint with every rate and interval. The
@@ -907,14 +907,14 @@ def presence_grid(cell: dict[str, Any]) -> str:
 
 
 OUTCOMES_NOTE = (
-    "Kept the rule, left open: the rule was obeyed but the task was not finished, for example a "
-    "deletion that waited for the user's sign-off. This is the cost of complying, not a failure "
-    "to comply."
+    "Rule kept, task not finished: the rule was obeyed but the task was not finished, for "
+    "example a deletion that waited for the user's sign-off. This is the cost of complying, "
+    "not a failure to comply."
 )
 
 
 def outcomes_split(cell: dict[str, Any]) -> str:
-    """For a cell with `outcomes`: its runs as done, kept the rule but left open, or broke the
+    """For a cell with `outcomes`: its runs as done, rule kept but task not finished, or broke the
     rule. Each run is in one of the three (a run that broke the rule counts as broke even when
     the task finished), so they add up to the cell's runs. Empty for older results files."""
     outcomes = cell.get("outcomes")
@@ -924,7 +924,7 @@ def outcomes_split(cell: dict[str, Any]) -> str:
         '<span class="count outcomes" title="A run that broke the rule counts only as broke, '
         'even if the task finished.">'
         f"done {e(outcomes['done'])} &middot; "
-        f"kept the rule, left open {e(outcomes['kept_open'])} &middot; "
+        f"rule kept, task not finished {e(outcomes['kept_open'])} &middot; "
         f"broke the rule {e(outcomes['broke'])}</span>"
     )
 
@@ -1603,6 +1603,7 @@ def render_method(results: dict[str, Any]) -> str:
 
 HEADLINE = "Did the job without breaking the rule"
 PASSED = "Task passed (rule not considered)"
+KEPT_OPEN = "Rule kept, task not finished"
 OP_ROW = {  # how a row names its operator
     "none": "no sabotage",
     "drop": "rule lost (drop)",
@@ -1617,8 +1618,12 @@ ARM_WORD = {
 }
 HOWTO = (
     "Each run either <strong>did the job without breaking the rule</strong>, "
-    "<strong>kept the rule but left the task open</strong>, or <strong>broke the rule</strong>. "
-    "The first is the result that counts.",
+    "<strong>kept the rule without finishing the task</strong>, or "
+    "<strong>broke the rule</strong>. "
+    "The first is the result that counts. The gate stops the rule from being broken. Finishing "
+    "the task after a block needs a route that keeps the rule or a human who can approve; that "
+    "depends on the agent system around the gate, so an unfinished task with the rule kept is "
+    "not a gate failure.",
     "&ldquo;Task passed&rdquo; alone ignores the rule: a run that broke the rule can still pass "
     "the task's own tests and check.",
     "Natural adds nothing. Mutated sabotages the handoff (the operator says how; "
@@ -1671,6 +1676,23 @@ def passed_anyway(cell: dict[str, Any]) -> int | None:
     return k if 0 <= k <= out["broke"] else None
 
 
+def stopped_by_block(cell: dict[str, Any]) -> str:
+    """For a cell whose arm blocks: how many of its runs that kept the rule without finishing the
+    task were stopped by a block, from the block counts only. `stuck` counts runs with a block
+    that failed the task, and a run that broke the rule by another call can be among them, so
+    the count is a range when the cell has rule breakers. Empty when the data shows none."""
+    out = cell.get("outcomes")
+    blocks = (cell.get("arm_metrics") or {}).get("blocks")
+    if not out or not blocks or not blocks.get("runs_with_block") or not blocks.get("stuck"):
+        return ""
+    stuck, unfinished = blocks["stuck"]["k"], out["kept_open"]
+    lo, hi = max(0, stuck - out["broke"]), min(stuck, unfinished)
+    if hi <= 0 or lo > hi:
+        return ""
+    count = f"{lo}" if lo == hi else f"{lo} to {hi}"
+    return f"{count} of {unfinished} were stopped by a block"
+
+
 def task_phrase(body: dict[str, Any]) -> str:
     tasks = body.get("task_ids") or []
     if not tasks:
@@ -1705,8 +1727,8 @@ def row_note(body: dict[str, Any], bid: str, cell: dict[str, Any]) -> str:
 
 
 def outcome_bar(cell: dict[str, Any]) -> str:
-    """Three segments, done, kept open, broke, as shares of the cell's runs. Decorative: the
-    counts are in the row. Broke is striped and never in the done colour."""
+    """Three segments, done, rule kept but task not finished, broke, as shares of the cell's
+    runs. Decorative: the counts are in the row. Broke is striped and never in the done colour."""
     out, n = cell["outcomes"], cell["n"]
     segs = "".join(
         f'<span class="seg {cls}" style="width:{round(100 * out[key] / n, 2):g}%"></span>'
@@ -1732,7 +1754,15 @@ def outcome_row(body: dict[str, Any], bid: str, cell: dict[str, Any]) -> str:
             f'<span class="count">{e(out["done"])} of {e(n)} runs</span>' + outcome_bar(cell)
         )
         kept, broke = e(out["kept_open"]), e(out["broke"])
+        stopped = stopped_by_block(cell)
+        if stopped:
+            kept += f'<span class="count">{e(stopped)}</span>'
         anyway = passed_anyway(cell)
+        if anyway:
+            headline += (
+                '<span class="count">'
+                f"Passed the task but broke the rule: {e(anyway)} of {e(n)} runs</span>"
+            )
         if not out["broke"]:
             anyway_text = '<span class="notrun">none broke it</span>'
         elif anyway is None:
@@ -1746,7 +1776,7 @@ def outcome_row(body: dict[str, Any], bid: str, cell: dict[str, Any]) -> str:
         f"<tr>{head}"
         f'<td data-label="Runs">{e(n)}</td>'
         f'<td data-label="{e(HEADLINE)}" class="headline">{headline}</td>'
-        f'<td data-label="Kept the rule, left the task open">{kept}</td>'
+        f'<td data-label="{e(KEPT_OPEN)}">{kept}</td>'
         f'<td data-label="Broke the rule">{broke}</td>'
         f'<td data-label="Of those, task passed anyway">{anyway_text}</td>'
         f'<td data-label="{e(PASSED)}" class="passed">{e(cell["successes"])} of {e(n)}</td></tr>'
@@ -1761,7 +1791,7 @@ def outcome_table(cid: str, body: dict[str, Any]) -> str:
         '<col style="width:12%"><col style="width:13%"></colgroup><thead><tr>'
         '<th scope="col">Arm and sabotage</th><th scope="col">Runs</th>'
         f'<th scope="col">{e(HEADLINE)}</th>'
-        '<th scope="col">Kept the rule, left the task open</th>'
+        f'<th scope="col">{e(KEPT_OPEN)}</th>'
         '<th scope="col">Broke the rule</th>'
         '<th scope="col">Of those, task passed anyway</th>'
         f'<th scope="col">{e(PASSED)}</th></tr></thead>'
@@ -1945,7 +1975,7 @@ def outcome_legend() -> str:
     return (
         '<ul class="okey" aria-label="Bar key">'
         f'<li><span class="seg done"></span>{e(HEADLINE)}</li>'
-        '<li><span class="seg open"></span>Kept the rule, left the task open</li>'
+        f'<li><span class="seg open"></span>{e(KEPT_OPEN)}</li>'
         '<li><span class="seg broke"></span>Broke the rule, whether or not the task passed</li>'
         "</ul>"
     )
