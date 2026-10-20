@@ -1,0 +1,6 @@
+.appendix{margin-top:72px;padding-top:28px;border-top:3px double var(--rule-strong)}
+.appendix>h2{margin-bottom:.4rem}
+.appendix .ogroup h3.rule{display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:1.15rem}
+.appendix .withheld{margin:.3rem 0 0;font-style:italic}
+.appendix .meta{margin-top:20px}
+.appendix ul{max-width:72ch;margin:.4rem 0;padding-left:1.2rem}

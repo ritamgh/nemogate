@@ -6,7 +6,8 @@ Two pages, both generated offline from run data. Neither calls a model.
 
 ```
 uv run python -m report.site --results results/results.json --out results/site/index.html \
-    [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE]
+    [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE] \
+    [--appendix TITLE RESULTS_FILE [NOTES_FILE]]...
 ```
 
 Reads the `results.json` that `replay/stats.py` writes (`format_version` 2; any other version is
@@ -46,6 +47,20 @@ What it shows:
   never in code. It is plain text and escaped, so markup shows as typed. Without the option, or
   with an empty file, nothing is added and the page is byte-identical to one built without it. A
   missing or unreadable file is exit code 2 and no page is written.
+- With `--appendix TITLE RESULTS_FILE [NOTES_FILE]` (repeatable), a separately labelled result
+  set after everything else on the page, for runs that must be reported but not pooled with the
+  main set. Each is drawn from its own results file only: its title, a line "Counts are small;
+  read the intervals", the optional notes (plain text, escaped, like `--notes`), a run-accounting
+  block (found, counted, left out by reason, models, short hashes), "How these runs differ from
+  the main set" (changed hashes and model ids, mutation no-op counts; from the two results files),
+  then per rule the "What happened" table, the block-only against gated table where it applies and
+  the cell tables with their intervals. It never feeds the main page: the main part is
+  byte-identical with and without it. The rule's wording is withheld ("Rule text withheld
+  (held-out task)"; the card keeps the id, kind and counts), the task ids are not shown, and no
+  run folder or trace is read (`--runs` does not apply). Ids are prefixed by the appendix number.
+  A missing, unreadable or wrong-version file is exit code 2. Without the option the page is
+  byte-identical to one built before it existed. Its CSS (`appendix.css`) is added only to a page
+  that has an appendix.
 - Below the results: the key (the four arms, the operators, and "Words on this page": boundary,
   compaction, not comparable, inconclusive and 95% interval in plain words; the statistical
   method stays in the Method block at the foot), then "What each part fixes": four static lines.

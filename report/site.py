@@ -1,7 +1,8 @@
 """The results page: one self-contained static HTML file made from `results.json`.
 
 `uv run python -m report.site --results results/results.json --out results/site/index.html
-[--runs DIR...] [--repair DIR] [--ledger nemogate.yaml]`
+[--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE]
+[--appendix TITLE RESULTS_FILE [NOTES_FILE]]...`
 
 Reads the file `replay/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
 and renders, in order: a short reading guide, "What happened, rule by rule" (per rule, each
@@ -22,6 +23,7 @@ import math
 import re
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -236,8 +238,11 @@ def collect_boundaries(constraints: dict[str, Any]) -> dict[str, dict[str, Any]]
 class Anchors:
     """Stable, collision-free element ids: an index in sorted order plus a readable slug."""
 
-    def __init__(self, constraints: dict[str, Any]) -> None:
-        self.constraint = {cid: f"c{i}-{slug(cid)}" for i, cid in enumerate(sorted(constraints))}
+    def __init__(self, constraints: dict[str, Any], prefix: str = "") -> None:
+        """`prefix` keeps an appendix's ids apart from the main page's."""
+        self.constraint = {
+            cid: f"{prefix}c{i}-{slug(cid)}" for i, cid in enumerate(sorted(constraints))
+        }
         self.boundary_index: dict[str, int] = {}
         for cid in constraints:
             for bid in constraints[cid].get("boundaries", {}):
@@ -1415,7 +1420,10 @@ def graded_section(
     b: dict[str, Any],
     anchors: Anchors,
     trace: panels.TraceEvidence | None,
+    detail: bool = True,
 ) -> str:
+    """One boundary of a graded rule. `detail=False` (an appendix) keeps the cell table and its
+    notes and leaves out the cost and time table, the effect comparisons and the trace."""
     cells = b.get("cells", [])
     # One block of rows per compaction setting, so runs with the summariser on and off are
     # never shown as one row. A single setting leaves the table as it always was.
@@ -1464,6 +1472,17 @@ def graded_section(
         if trace is not None
         else ""
     )
+    more = ""
+    if detail:
+        more = (
+            render_arm_metrics(cid, bid, cells)
+            + (
+                render_comparisons_by_setting(cells, b.get("comparisons", []), settings)
+                if split
+                else render_comparisons(cells, b.get("comparisons", []))
+            )
+            + exemplar
+        )
     return (
         f'<section class="bnd" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h4 id="{sid}-h"><code>{e(bid)}</code></h4>'
@@ -1471,13 +1490,7 @@ def graded_section(
         + (f'<p class="note outcomes-note">{e(OUTCOMES_NOTE)}</p>' if any_outcomes else "")
         + (f'<p class="note attempts-note">{e(ATTEMPT_NOTE)}</p>' if any_attempts else "")
         + settings_note
-        + render_arm_metrics(cid, bid, cells)
-        + (
-            render_comparisons_by_setting(cells, b.get("comparisons", []), settings)
-            if split
-            else render_comparisons(cells, b.get("comparisons", []))
-        )
-        + exemplar
+        + more
         + "</section>"
     )
 
@@ -1928,6 +1941,16 @@ def split_sentence(results: dict[str, Any], anchors: Anchors) -> str:
     )
 
 
+def outcome_legend() -> str:
+    return (
+        '<ul class="okey" aria-label="Bar key">'
+        f'<li><span class="seg done"></span>{e(HEADLINE)}</li>'
+        '<li><span class="seg open"></span>Kept the rule, left the task open</li>'
+        '<li><span class="seg broke"></span>Broke the rule, whether or not the task passed</li>'
+        "</ul>"
+    )
+
+
 def render_outcomes(results: dict[str, Any], anchors: Anchors, verdict: str) -> str:
     constraints = results["constraints"]
     graded = [cid for cid in sorted(constraints) if is_graded(constraints[cid])]
@@ -1936,13 +1959,7 @@ def render_outcomes(results: dict[str, Any], anchors: Anchors, verdict: str) -> 
     for cid in graded:
         groups.append(render_group(cid, constraints[cid], anchors, not explained))
         explained = explained or '<table class="blocks"' in groups[-1]
-    legend = (
-        '<ul class="okey" aria-label="Bar key">'
-        f'<li><span class="seg done"></span>{e(HEADLINE)}</li>'
-        '<li><span class="seg open"></span>Kept the rule, left the task open</li>'
-        '<li><span class="seg broke"></span>Broke the rule, whether or not the task passed</li>'
-        "</ul>"
-    )
+    legend = outcome_legend()
     skipped = (
         '<p class="note">Not graded, so not shown here (no compiled check, so no run can be '
         "marked as breaking the rule): "
@@ -1968,13 +1985,18 @@ def render_howto() -> str:
     )
 
 
+def note_paragraphs(notes: str | None) -> list[str]:
+    """Plain text split on blank lines, in order, empty paragraphs dropped."""
+    return [
+        p.strip() for p in re.split(r"\n[ \t]*\n", (notes or "").replace("\r\n", "\n")) if p.strip()
+    ]
+
+
 def render_notes(notes: str | None) -> str:
     """The optional "Notes on these numbers" section. `notes` is plain text, paragraphs separated
     by blank lines; every character is escaped. Nothing (not even a heading) when there is no
     text, so a page without notes is the page it always was."""
-    paragraphs = [
-        p.strip() for p in re.split(r"\n[ \t]*\n", (notes or "").replace("\r\n", "\n")) if p.strip()
-    ]
+    paragraphs = note_paragraphs(notes)
     if not paragraphs:
         return ""
     return (
@@ -1983,11 +2005,168 @@ def render_notes(notes: str | None) -> str:
     )
 
 
+# --- appendices: separate result sets ---------------------------------------------------------
+
+WITHHELD = "Rule text withheld (held-out task)"
+APPENDIX_INTRO = (
+    "Reported apart from the main set: none of these runs is counted in the results above. "
+    "Counts are small; read the intervals."
+)
+CONDITION_FIELDS = (
+    ("repo_sha", "repo commit"),
+    ("ledger_hash", "ledger"),
+    ("safe_config_hash", "safe config"),
+    ("lockfile_hash", "lockfile"),
+)
+
+
+@dataclass(frozen=True)
+class Appendix:
+    """A second result set shown after the main page. It is read from its own results file only
+    and never feeds the main page. `notes` is plain text like `--notes`."""
+
+    title: str
+    results: dict[str, Any]
+    notes: str | None = None
+
+
+def value_or_none(value: Any) -> str:
+    return short(value) if value else "none recorded"
+
+
+def appendix_differences(main: dict[str, Any], own: dict[str, Any]) -> str:
+    """How this result set's conditions differ from the main set's, read from the two results
+    files and nothing else: the reproducibility fields that are not equal, and the mutation
+    no-ops (runs whose sabotage changed nothing) that each file counts."""
+    here, there = own.get("reproducibility") or {}, main.get("reproducibility") or {}
+    items = [
+        f"{label} {value_or_none(here.get(key))} here, {value_or_none(there.get(key))} in the "
+        "main set"
+        for key, label in CONDITION_FIELDS
+        if here.get(key) != there.get(key)
+    ]
+    mine, theirs = here.get("model_ids") or {}, there.get("model_ids") or {}
+
+    def model(mid: Any) -> str:
+        return f"<code>{e(mid)}</code>" if mid else "none recorded"
+
+    items += [
+        f"{e(role)} model {model(mine.get(role))} here, {model(theirs.get(role))} in the main set"
+        for role in sorted(set(mine) | set(theirs))
+        if mine.get(role) != theirs.get(role)
+    ]
+    noops = [r["runs"].get("inconclusive", {}).get("mutation_noop") for r in (own, main)]
+    if any(noops):
+        a, b = ("none recorded" if n is None else e(n) for n in noops)
+        items.append(
+            f"mutation no-ops: {a} here, {b} in the main set (a no-op is a run whose sabotage "
+            "changed nothing, so it is left out of every rate)"
+        )
+    body = (
+        "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
+        if items
+        else "<p>Same conditions as the main set.</p>"
+    )
+    return (
+        "<h3>How these runs differ from the main set</h3>"
+        '<p class="note">Read from the two results files only.</p>' + body
+    )
+
+
+def appendix_accounting(results: dict[str, Any]) -> str:
+    """Found, counted, left out by reason, and the conditions the runs were pooled under."""
+    repro = results.get("reproducibility") or {}
+    runs = results["runs"]
+    reasons = runs.get("inconclusive", {})
+    reason_items = "".join(
+        f"<div><dt>{e(REASON_LABEL.get(r, r.replace('_', ' ')))}</dt><dd>{e(reasons[r])}</dd></div>"
+        for r in sorted(reasons)
+    )
+    models = (
+        "".join(
+            f"<div><dt>{e(role)}</dt><dd><code>{e(mid)}</code></dd></div>"
+            for role, mid in sorted((repro.get("model_ids") or {}).items())
+        )
+        or "<div><dt>models</dt><dd>none recorded</dd></div>"
+    )
+    hashes = "".join(
+        f"<div><dt>{e(label)}</dt><dd>{value_or_none(repro.get(key))}</dd></div>"
+        for key, label in CONDITION_FIELDS
+    )
+    return (
+        '<div class="meta"><div><h3>Runs</h3>'
+        f'<dl class="kv"><div><dt>found</dt><dd>{e(runs.get("found", 0))}</dd></div>'
+        f"<div><dt>counted in the rates</dt><dd>{e(runs.get('pooled', 0))}</dd></div></dl>"
+        f'<h3>Left out, by reason</h3><dl class="kv">{reason_items}</dl></div>'
+        f'<div><h3>Models</h3><dl class="kv">{models}</dl></div>'
+        f'<div><h3>Same conditions</h3><dl class="kv">{hashes}</dl></div></div>'
+    )
+
+
+def appendix_rule(cid: str, body: dict[str, Any], anchors: Anchors, explain: bool) -> str:
+    """One rule of an appendix: its id, kind and counts. The rule's wording is never printed."""
+    graded = is_graded(body)
+    boundaries = body.get("boundaries", {})
+    meta = [f"rule <code>{e(cid)}</code>"]
+    pooled = body.get("reproducibility")
+    if pooled:
+        meta.append(f"runs made at repo commit {value_or_none(pooled.get('repo_sha'))}")
+    if graded:
+        blocks = block_table(cid, body)
+        inner = (
+            outcome_table(cid, body)
+            + blocks
+            + (BLOCK_NOTE if blocks and explain else "")
+            + "".join(
+                graded_section(cid, bid, boundaries[bid], anchors, None, detail=False)
+                for bid in sorted(boundaries)
+            )
+        )
+    else:
+        inner = "".join(
+            ungraded_section(cid, bid, boundaries[bid], anchors) for bid in sorted(boundaries)
+        )
+    return (
+        f'<section class="ogroup" data-rule="{e(cid)}" aria-label="{e(cid)}">'
+        f'<h3 class="rule"><code>{e(cid)}</code> '
+        f'<span class="badge">{e(body.get("kind", "unknown kind"))}</span></h3>'
+        f'<p class="note withheld">{e(WITHHELD)}</p>'
+        f'<p class="ometa">{" &middot; ".join(meta)}</p>{inner}</section>'
+    )
+
+
+def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str:
+    """One separately labelled result set. Ids are prefixed by the appendix number, so two sets
+    with the same rule ids do not collide. Nothing here reads run folders or trace data."""
+    results = appendix.results
+    try:
+        check_format(results)
+    except ValueError as exc:
+        raise ValueError(f"appendix {appendix.title!r}: {exc}") from exc
+    sid = f"appendix-{index}"
+    constraints = results["constraints"]
+    anchors = Anchors(constraints, prefix=f"a{index}-")
+    rules, explained = [], False
+    for cid in sorted(constraints):
+        rules.append(appendix_rule(cid, constraints[cid], anchors, not explained))
+        explained = explained or '<table class="blocks"' in rules[-1]
+    paragraphs = "".join(f"<p>{e(p)}</p>" for p in note_paragraphs(appendix.notes))
+    return (
+        f'<section class="appendix" id="{sid}" aria-labelledby="{sid}-h">'
+        f'<h2 id="{sid}-h">{e(appendix.title)}</h2>'
+        f'<p class="note">{e(APPENDIX_INTRO)}</p>{paragraphs}'
+        f"{appendix_accounting(results)}{appendix_differences(main, results)}"
+        f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
+    )
+
+
 # --- page -------------------------------------------------------------------------------------
 
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8")
 # Only for a page that has a presence grid, so a page without one is the page it always was.
 PRESENCE_CSS = (Path(__file__).parent / "presence.css").read_text(encoding="utf-8")
+# Only for a page that has an appendix, for the same reason.
+APPENDIX_CSS = (Path(__file__).parent / "appendix.css").read_text(encoding="utf-8")
 
 
 def render(
@@ -1997,11 +2176,13 @@ def render(
     repairs: list[panels.RepairView] | None = None,
     ledger: Ledger | None = None,
     notes: str | None = None,
+    appendices: Sequence[Appendix] = (),
 ) -> str:
     """The page. `trace` (from --runs), `repairs` (--repair) and `ledger` (--ledger) are optional
     evidence; without `trace` the constraint cards have no trace panel, without `repairs` the
     patch panel says there is no repair run yet. `notes` (--notes) is free text shown after the
-    results, escaped."""
+    results, escaped. `appendices` (--appendix) are separate result sets appended after
+    everything else; nothing in them reaches the rest of the page."""
     check_format(results)
     constraints = results["constraints"]
     anchors = Anchors(constraints)
@@ -2038,7 +2219,13 @@ def render(
         f"{graph_section}"
         f"{panels.render_patch_panel(repairs)}{render_method(results)}"
     )
+    if appendices:
+        body += "<!--appendices-->" + "".join(
+            render_appendix(i, a, results) for i, a in enumerate(appendices, start=1)
+        )
     css = CSS + PRESENCE_CSS if 'class="presence"' in body else CSS
+    if appendices:
+        css += APPENDIX_CSS
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -2046,6 +2233,15 @@ def render(
         "<title>NemoGate: rule survival across handoffs</title>"
         f"<style>{css}</style></head><body><main>{body}</main></body></html>\n"
     )
+
+
+def load_appendix(title: str, results_file: str, notes_file: str | None = None) -> Appendix:
+    """Read an appendix's results (and notes) file. OSError or ValueError on anything unusable."""
+    results = json.loads(Path(results_file).read_text(encoding="utf-8"))
+    if not isinstance(results, dict):
+        raise ValueError(f"appendix {title!r}: {results_file} is not a results object")
+    notes = Path(notes_file).read_text(encoding="utf-8") if notes_file else None
+    return Appendix(title, results, notes)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -2078,9 +2274,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="FILE",
         help="plain text, paragraphs split by blank lines: shown as 'Notes on these numbers'",
     )
+    parser.add_argument(
+        "--appendix",
+        action="append",
+        nargs="+",
+        default=[],
+        metavar=("TITLE", "RESULTS_FILE"),
+        help="TITLE RESULTS_FILE [NOTES_FILE], repeatable: a separate result set shown after the "
+        "page, never pooled into it. Rule wording is withheld; no run folders are read",
+    )
     args = parser.parse_args(argv)
+    for values in args.appendix:
+        if not 2 <= len(values) <= 3:
+            parser.error("--appendix takes TITLE RESULTS_FILE [NOTES_FILE]")
     try:
         notes = args.notes.read_text(encoding="utf-8") if args.notes else None
+        appendices = [load_appendix(*values) for values in args.appendix]
         results = json.loads(args.results.read_text(encoding="utf-8"))
         page = render(
             results,
@@ -2094,6 +2303,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.ledger
             else None,
             notes=notes,
+            appendices=appendices,
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")
