@@ -22,6 +22,20 @@ What it shows:
   and the definitions are). The first line also says that the gate stops the rule from being
   broken, and that finishing the task after a block needs a route that keeps the rule or a human
   who can approve, so an unfinished task with the rule kept is not a gate failure.
+- "At a glance", above "How to read this", only when the results set has exact tests (a results
+  file without `exact_tests` renders byte for byte as before): one table of every graded rule,
+  from the results file only. One row per rule and condition, because the arms of one rule do
+  not always share their operators (the ungated arm is natural at "no sabotage" and mutated at
+  an operator), so nothing is added up across rows: sabotage setting, plus handoff and
+  compaction setting where the rule has several. Only conditions with a block-only or gated
+  cell get a row; a graded rule with none still gets one row of dashes. Columns: "Broke the
+  rule, no gate", "block-only", "gated" (k of n and the share, the cells the detail tables use;
+  a dash for a missing cell, never 0) and "Exact test p (gated vs block-only)" (the `violations`
+  entry of that operator and compaction setting, gated against block-only; a paired test also
+  gives the figure that counts each source once; a dash when there is none). Each row links to
+  its boundary section. The caption says the rows are all graded rules, not a selection. The
+  table is repeated at the top of each appendix, from its own file (the rule's wording withheld
+  there as everywhere in an appendix). It reuses the outcome table's CSS (`table.outcome`).
 - "What happened, rule by rule" (the first result on the page): one sentence that task success
   and keeping the rule are counted separately, with an example from the data (the cell with the
   most runs that broke the rule and still passed the task, `successes - outcomes.done`; when no

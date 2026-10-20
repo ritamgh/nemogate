@@ -241,10 +241,12 @@ def test_without_exact_tests_the_page_has_no_exact_line_and_the_old_howto_box():
 
 
 def test_the_exact_lines_are_the_only_new_text_in_the_main_part():
-    # Breaks if adding entries changes anything but the lines and the reading box.
+    # Breaks if adding entries changes anything but the lines, the headline block at the top
+    # (which needs the entries) and the reading box.
     plain = site.render(blocks_page())
     withx = site.render(page_data(FISHER_V))
     stripped = re.sub(r'<p class="note exact">.*?</p>', "", withx, flags=re.S)
+    stripped = re.sub(r'<section class="ogroup glance".*?</section>', "", stripped, flags=re.S)
     stripped = re.sub(r'<li class="exact-howto">.*?</li>', "", stripped, flags=re.S)
 
     assert stripped == plain

@@ -684,13 +684,13 @@ them</span></li>
 </section>"""
 
 
-def render_top(exact: bool = False) -> str:
+def render_top(exact: bool = False, glance: str = "") -> str:
     return f"""<header class="top">
 <h1>NemoGate results</h1>
 <p class="lead">Do rules survive the handoffs between agents? Each rule was given to a team of
 agents, with and without sabotaging the handoff and with and without the NemoGate gate, and every
 run was checked against it.</p>
-{render_howto(exact)}
+{glance}{render_howto(exact)}
 </header>"""
 
 
@@ -1876,6 +1876,11 @@ EXACT_OUTCOME = {
 EXACT_TESTS = ("fisher", "mcnemar")
 
 
+def p_figure(p: float) -> str:
+    """The figure of a p-value: three significant figures, "< 0.001" below that."""
+    return "< 0.001" if p < 0.001 else f"{p:.3g}"
+
+
 def p_text(p: float) -> str:
     """ "p = 0.333" with three significant figures; "p < 0.001" below that."""
     return "p < 0.001" if p < 0.001 else f"p = {p:.3g}"
@@ -2160,6 +2165,155 @@ def render_howto(exact: bool = False) -> str:
     )
 
 
+# --- at a glance: the result at the top of a results set ----------------------------------------
+
+DASH = "&mdash;"
+GLANCE_COLUMNS = (
+    "Broke the rule, no gate",
+    "Broke the rule, block-only",
+    "Broke the rule, gated",
+    "Exact test p (gated vs block-only)",
+)
+GLANCE_CAPTION = (
+    "These are all the graded rules that were tested, not a selection. Each rate is the runs "
+    "that broke the rule over the runs made. A rule has one row for each sabotage setting (and "
+    "each handoff and compaction setting) it was run under; every row stands alone and no rows "
+    "are added together. Read the detail below before relying on a single row."
+)
+
+
+def glance_conditions(b: dict[str, Any]) -> list[tuple[dict[str, Any] | None, str]]:
+    """The (compaction setting, operator) pairs of a boundary that have a block-only or gated
+    cell: one row each. No sabotage first, then the operators by name."""
+    cells = b.get("cells", [])
+    out = []
+    for setting in compaction_settings(cells):
+        ops = {c["operator"] for c in cells if c.get("compaction") == setting}
+        blocking = {
+            c["operator"]
+            for c in cells
+            if c.get("compaction") == setting and c["arm"] in BLOCKING_ARMS
+        }
+        out += [(setting, op) for op in sorted(ops & blocking, key=lambda o: (o != "none", o))]
+    return out
+
+
+def glance_rate(cell: dict[str, Any] | None) -> str:
+    """k of n and the share, from the cell the detail tables use; a dash when there is no cell."""
+    if not cell or not cell.get("n"):
+        return DASH
+    return f"{e(cell['violations'])} of {e(cell['n'])} ({pct(cell['violations'] / cell['n'])})"
+
+
+def glance_p(b: dict[str, Any], setting: dict[str, Any] | None, op: str) -> str:
+    """The exact test p for broke the rule, gated against block-only, at this operator and
+    compaction setting; for a paired test also the figure that counts each source once."""
+    for t in exact_entries(b):
+        if (
+            t["name"] == "violations"
+            and t["operator"] == op
+            and t.get("compaction") == setting
+            and {t["a"]["arm"], t["b"]["arm"]} == set(BLOCKING_ARMS)
+        ):
+            by_source = t.get("p_exact_by_source")
+            return e(p_figure(t["p_exact"])) + (
+                f'<span class="count">{e(p_figure(by_source))} counting each source once</span>'
+                if by_source is not None
+                else ""
+            )
+    return DASH
+
+
+def glance_rule(cid: str, body: dict[str, Any], withheld: bool) -> str:
+    """The rule as the page shows it: its text, or where the text is withheld its id and the
+    withheld wording."""
+    if withheld:
+        return f'<code>{e(cid)}</code> <span class="notrun">{e(WITHHELD)}</span>'
+    return e(body.get("text", ""))
+
+
+def glance_row(
+    cid: str,
+    body: dict[str, Any],
+    bid: str,
+    setting: dict[str, Any] | None,
+    op: str,
+    anchors: Anchors,
+    withheld: bool,
+) -> str:
+    b = body["boundaries"][bid]
+    cells = b.get("cells", [])
+    note = row_note(body, bid, {"compaction": setting})
+    head = (
+        f'<th scope="row"><a href="#{e(anchors.section(cid, bid))}">'
+        f"{glance_rule(cid, body, withheld)}</a> "
+        f'<span class="op">{e(op_row(op))}</span>'
+        + (f'<span class="count">{e(note)}</span>' if note else "")
+        + "</th>"
+    )
+    ungated = find_cell(cells, "natural" if op == "none" else "mutated", op, setting)
+    values = (
+        glance_rate(ungated),
+        glance_rate(find_cell(cells, "block_only", op, setting)),
+        glance_rate(find_cell(cells, "gated", op, setting)),
+        glance_p(b, setting, op),
+    )
+    return "<tr>" + head + glance_cells(values) + "</tr>"
+
+
+def glance_cells(values: tuple[str, ...]) -> str:
+    return "".join(
+        f'<td data-label="{e(label)}">{value}</td>'
+        for label, value in zip(GLANCE_COLUMNS, values, strict=True)
+    )
+
+
+def glance_empty_row(cid: str, body: dict[str, Any], anchors: Anchors, withheld: bool) -> str:
+    """A graded rule with no block-only or gated cell: named, with dashes, never left out."""
+    rule = glance_rule(cid, body, withheld)
+    bids = sorted(body.get("boundaries", {}))
+    if bids:
+        rule = f'<a href="#{e(anchors.section(cid, bids[0]))}">{rule}</a>'
+    return f'<tr><th scope="row">{rule}</th>{glance_cells((DASH,) * len(GLANCE_COLUMNS))}</tr>'
+
+
+def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | None = None) -> str:
+    """The result of one results set in one table, above everything else of the set: one row per
+    graded rule and condition (sabotage setting, handoff, compaction setting), the broke-the-rule
+    counts of the ungated, block-only and gated arms and the exact test p. Nothing is added up
+    across rows. Empty for a results file without exact tests."""
+    if not has_exact_lines(results):
+        return ""
+    withheld = appendix is not None
+    rows = []
+    for cid in sorted(results["constraints"]):
+        body = results["constraints"][cid]
+        if not is_graded(body):
+            continue
+        mine = [
+            glance_row(cid, body, bid, setting, op, anchors, withheld)
+            for bid in sorted(body.get("boundaries", {}))
+            for setting, op in glance_conditions(body["boundaries"][bid])
+        ]
+        rows += mine or [glance_empty_row(cid, body, anchors, withheld)]
+    sid = "glance" if appendix is None else f"appendix-{appendix}-glance"
+    level = 2 if appendix is None else 3
+    table = (
+        '<table class="outcome glance"><colgroup><col style="width:31%"><col style="width:15%">'
+        '<col style="width:15%"><col style="width:15%"><col style="width:24%"></colgroup>'
+        '<thead><tr><th scope="col">Rule</th>'
+        + "".join(f'<th scope="col">{e(label)}</th>' for label in GLANCE_COLUMNS)
+        + "</tr></thead>"
+        + f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+    return (
+        f'<section class="ogroup glance" aria-labelledby="{sid}-h">'
+        f'<h{level} id="{sid}-h">At a glance</h{level}>'
+        + panels.tablewrap("At a glance: every graded rule, broke the rule by arm", table)
+        + f'<p class="note">{e(GLANCE_CAPTION)}</p></section>'
+    )
+
+
 def note_paragraphs(notes: str | None) -> list[str]:
     """Plain text split on blank lines, in order, empty paragraphs dropped."""
     return [
@@ -2330,7 +2484,8 @@ def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str
         f'<section class="appendix" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h2 id="{sid}-h">{e(appendix.title)}</h2>'
         f'<p class="note">{e(APPENDIX_INTRO)}</p>{paragraphs}'
-        f"{appendix_accounting(results)}{appendix_differences(main, results)}"
+        f"{render_glance(results, anchors, index)}{appendix_accounting(results)}"
+        f"{appendix_differences(main, results)}"
         f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
     )
 
@@ -2393,7 +2548,8 @@ def render(
     found = trace.found_by_rule if trace else None
     exact = has_exact_lines(results) or any(has_exact_lines(a.results) for a in appendices)
     body = (
-        f"{render_top(exact)}{outcomes}{render_notes(notes)}{render_key()}{render_fixes()}"
+        f"{render_top(exact, render_glance(results, anchors))}{outcomes}{render_notes(notes)}"
+        f"{render_key()}{render_fixes()}"
         f"{render_header(results, recalls)}"
         f"{panels.render_coverage(results, ledger, found, list(recalls))}"
         f"{graph_section}"
