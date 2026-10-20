@@ -1,0 +1,9 @@
+{
+  "matched": 5,
+  "total": 6,
+  "extra": 2,
+  "rows": [
+    {"rep": 0, "name": "made-up-case", "hit": true},
+    {"rep": 1, "name": "made-up-case", "hit": false}
+  ]
+}

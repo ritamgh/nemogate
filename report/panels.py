@@ -587,6 +587,67 @@ def render_patch_panel(repairs: list[RepairView] | None) -> str:
     return head + "".join(render_repair(r) for r in repairs) + "</section>"
 
 
+# --- extraction recall ------------------------------------------------------------------------
+
+RECALL_CAVEAT = (
+    "Not a clean held-out measure: the extraction prompts were tuned on a development set built "
+    "from the categories of the first measurement's misses, and the reference rules share its "
+    "shapes. A clean figure needs rules the extractor was never tuned on."
+)
+
+
+@dataclass(frozen=True)
+class RecallView:
+    name: str  # the file's stem: the label of the set
+    matched: int  # seeded rules the extractor found, summed over the repeats
+    total: int  # seeded rules asked for, summed over the repeats
+    extra: int  # checks it proposed that no seeded rule called for
+
+
+def whole(value: Any, path: Path, key: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f'{path}: "{key}" must be a whole number, 0 or more, got {value!r}')
+    return value
+
+
+def load_recall(paths: list[Path]) -> list[RecallView]:
+    """One recall measurement per file (`python -m ledger.recall` output: `matched`, `total`,
+    `extra`), in the order given. OSError or ValueError on anything that is not one."""
+    views = []
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}: not JSON: {exc}") from exc
+        if not isinstance(data, dict) or not {"matched", "total", "extra"} <= data.keys():
+            raise ValueError(f'{path}: expected a JSON object with "matched", "total" and "extra"')
+        matched, total, extra = (whole(data[k], path, k) for k in ("matched", "total", "extra"))
+        if total == 0 or matched > total:
+            raise ValueError(f"{path}: {matched} found of {total} asked for is not a recall")
+        views.append(RecallView(path.stem, matched, total, extra))
+    return views
+
+
+def recall_pct(v: RecallView) -> str:
+    return f"{int(math.floor(v.matched / v.total * 100 + 0.5 + 1e-9))}%"
+
+
+def render_recall_items(recalls: list[RecallView]) -> str:
+    """The honesty strip's entries for measured sets, one each."""
+    return "".join(
+        f'<li><span class="v">{e(v.matched)} of {e(v.total)}</span>'
+        f'<span class="k">extraction recall, {e(v.name)}: {e(recall_pct(v))}, with '
+        f"{e(v.extra)} extra checks proposed that no seeded rule called for</span></li>"
+        for v in recalls
+    )
+
+
+def render_recall_cell(recalls: list[RecallView]) -> str:
+    return "; ".join(
+        f"{e(v.name)} {e(v.matched)} of {e(v.total)} ({e(recall_pct(v))})" for v in recalls
+    )
+
+
 # --- the coverage panel -----------------------------------------------------------------------
 
 
@@ -628,17 +689,26 @@ def never_ran_note(count: int) -> str:
 
 
 def render_coverage(
-    results: dict[str, Any], ledger: Ledger | None, found: Mapping[str, int] | None = None
+    results: dict[str, Any],
+    ledger: Ledger | None,
+    found: Mapping[str, int] | None = None,
+    recalls: list[RecallView] | None = None,
 ) -> str:
     """`found` (run folders read per target rule, from `--runs`) says, for a rule that never
-    ran, whether its runs were in the folders at all. Without it no reason is given."""
+    ran, whether its runs were in the folders at all. Without it no reason is given. `recalls`
+    (from `--recall`) fill the recall row only when the results file has none."""
     honesty, constraints = results["honesty"], results["constraints"]
     total, checked = honesty.get("constraints_total", 0), honesty.get("constraints_with_check", 0)
     run_ids = exercised(constraints)
     run_and_checked = [c for c in run_ids if constraints[c].get("has_check")]
     recall = honesty.get("extraction_recall")
-    recall_text = (
-        "not measured" if recall is None else f"{int(math.floor(recall * 100 + 0.5 + 1e-9))}%"
+    files = recalls if recall is None and recalls else []
+    recall_cell = (
+        render_recall_cell(files)
+        if files
+        else e(
+            "not measured" if recall is None else f"{int(math.floor(recall * 100 + 0.5 + 1e-9))}%"
+        )
     )
     rows = [
         ("Declared in the ledger", f"{e(total)}"),
@@ -648,7 +718,7 @@ def render_coverage(
             "Exercised and checked: the only ones with a verdict",
             f"{e(len(run_and_checked))} of {e(total)}",
         ),
-        ("Extraction recall", e(recall_text)),
+        ("Extraction recall", recall_cell),
     ]
     table = tablewrap(
         "Coverage of the ledger",
@@ -683,10 +753,11 @@ def render_coverage(
             "exercised, and constraints that never ran are missing from the list above. Pass "
             "<code>--ledger</code> to list them.</p>"
         )
+    caveat = f'<p class="note">{e(RECALL_CAVEAT)}</p>' if files else ""
     return (
         '<section aria-labelledby="coverage-h"><h2 id="coverage-h">Coverage</h2>'
         '<p class="note">How much of the ledger these numbers speak for. A constraint without a '
         "compiled check cannot be graded; one that never came up in a run has no rate.</p>"
-        f"{table}{mismatch}<h3>Without a compiled check (cannot be graded)</h3>"
+        f"{table}{caveat}{mismatch}<h3>Without a compiled check (cannot be graded)</h3>"
         f"{rule_list(unchecked)}{never}</section>"
     )
