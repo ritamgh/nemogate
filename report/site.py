@@ -2231,11 +2231,16 @@ GLANCE_COLUMNS = (
     "Broke the rule, gated",
     "Exact test p (gated vs block-only)",
 )
+GLANCE_ATTEMPT_COLUMNS = (  # only in a set that has attempts entries
+    "Tried the forbidden action, block-only \u2192 gated",
+    "Exact test p (tried the forbidden action)",
+)
 GLANCE_CAPTION = (
     "These are all the graded rules that were tested, not a selection. Each rate is the runs "
     "that broke the rule over the runs made. A rule has one row for each sabotage setting (and "
     "each handoff and compaction setting) it was run under; every row stands alone and no rows "
-    "are added together. Read the detail below before relying on a single row."
+    "are added together. Where block-only refuses the same action it gets 0 by construction, so "
+    "a 0 against 0 is not tested. Read the detail below before relying on a single row."
 )
 
 
@@ -2262,16 +2267,29 @@ def glance_rate(cell: dict[str, Any] | None) -> str:
     return f"{e(cell['violations'])} of {e(cell['n'])} ({pct(cell['violations'] / cell['n'])})"
 
 
-def glance_p(b: dict[str, Any], setting: dict[str, Any] | None, op: str) -> str:
-    """The exact test p for broke the rule, gated against block-only, at this operator and
-    compaction setting; for a paired test also the figure that counts each source once."""
+def glance_attempts(cell: dict[str, Any] | None) -> str:
+    """Runs that tried the forbidden action, k of n and the share, from the cell's `arm_metrics`
+    (the detail table's figure); a dash when the cell has none."""
+    rate = ((cell or {}).get("arm_metrics") or {}).get("attempt_rate")
+    if not rate or not rate.get("n"):
+        return DASH
+    return f"{e(rate['k'])} of {e(rate['n'])} ({pct(rate['k'] / rate['n'])})"
+
+
+def glance_p(b: dict[str, Any], setting: dict[str, Any] | None, op: str, name: str) -> str:
+    """The exact test p for the outcome `name`, gated against block-only, at this operator and
+    compaction setting; for a paired test also the figure that counts each source once. A dash
+    when there is no such entry, and when both arms have a count of 0: block-only gets 0 by
+    construction for an action it refuses, so 0 against 0 is not a test result."""
     for t in exact_entries(b):
         if (
-            t["name"] == "violations"
+            t["name"] == name
             and t["operator"] == op
             and t.get("compaction") == setting
             and {t["a"]["arm"], t["b"]["arm"]} == set(BLOCKING_ARMS)
         ):
+            if t["k_a"] == 0 and t["k_b"] == 0:
+                return DASH
             by_source = t.get("p_exact_by_source")
             return e(p_figure(t["p_exact"])) + (
                 f'<span class="count">{e(p_figure(by_source))} counting each source once</span>'
@@ -2297,6 +2315,7 @@ def glance_row(
     op: str,
     anchors: Anchors,
     withheld: bool,
+    attempts: bool,
 ) -> str:
     b = body["boundaries"][bid]
     cells = b.get("cells", [])
@@ -2309,29 +2328,44 @@ def glance_row(
         + "</th>"
     )
     ungated = find_cell(cells, "natural" if op == "none" else "mutated", op, setting)
+    block_only = find_cell(cells, "block_only", op, setting)
+    gated = find_cell(cells, "gated", op, setting)
     values = (
         glance_rate(ungated),
-        glance_rate(find_cell(cells, "block_only", op, setting)),
-        glance_rate(find_cell(cells, "gated", op, setting)),
-        glance_p(b, setting, op),
+        glance_rate(block_only),
+        glance_rate(gated),
+        glance_p(b, setting, op, "violations"),
     )
-    return "<tr>" + head + glance_cells(values) + "</tr>"
+    if attempts:
+        tried = (glance_attempts(block_only), glance_attempts(gated))
+        values += (
+            DASH if tried == (DASH, DASH) else f"{tried[0]} \u2192 {tried[1]}",
+            glance_p(b, setting, op, "attempts"),
+        )
+    return "<tr>" + head + glance_cells(values, attempts) + "</tr>"
 
 
-def glance_cells(values: tuple[str, ...]) -> str:
+def glance_columns(attempts: bool) -> tuple[str, ...]:
+    return GLANCE_COLUMNS + GLANCE_ATTEMPT_COLUMNS if attempts else GLANCE_COLUMNS
+
+
+def glance_cells(values: tuple[str, ...], attempts: bool) -> str:
     return "".join(
         f'<td data-label="{e(label)}">{value}</td>'
-        for label, value in zip(GLANCE_COLUMNS, values, strict=True)
+        for label, value in zip(glance_columns(attempts), values, strict=True)
     )
 
 
-def glance_empty_row(cid: str, body: dict[str, Any], anchors: Anchors, withheld: bool) -> str:
+def glance_empty_row(
+    cid: str, body: dict[str, Any], anchors: Anchors, withheld: bool, attempts: bool
+) -> str:
     """A graded rule with no block-only or gated cell: named, with dashes, never left out."""
     rule = glance_rule(cid, body, withheld)
     bids = sorted(body.get("boundaries", {}))
     if bids:
         rule = f'<a href="#{e(anchors.section(cid, bids[0]))}">{rule}</a>'
-    return f'<tr><th scope="row">{rule}</th>{glance_cells((DASH,) * len(GLANCE_COLUMNS))}</tr>'
+    dashes = glance_cells((DASH,) * len(glance_columns(attempts)), attempts)
+    return f'<tr><th scope="row">{rule}</th>{dashes}</tr>'
 
 
 def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | None = None) -> str:
@@ -2342,24 +2376,32 @@ def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | Non
     if not has_exact_lines(results):
         return ""
     withheld = appendix is not None
+    attempts = any(
+        t["name"] == "attempts"
+        for body in results["constraints"].values()
+        if is_graded(body)
+        for b in body.get("boundaries", {}).values()
+        for t in exact_entries(b)
+    )
     rows = []
     for cid in sorted(results["constraints"]):
         body = results["constraints"][cid]
         if not is_graded(body):
             continue
         mine = [
-            glance_row(cid, body, bid, setting, op, anchors, withheld)
+            glance_row(cid, body, bid, setting, op, anchors, withheld, attempts)
             for bid in sorted(body.get("boundaries", {}))
             for setting, op in glance_conditions(body["boundaries"][bid])
         ]
-        rows += mine or [glance_empty_row(cid, body, anchors, withheld)]
+        rows += mine or [glance_empty_row(cid, body, anchors, withheld, attempts)]
     sid = "glance" if appendix is None else f"appendix-{appendix}-glance"
     level = 2 if appendix is None else 3
+    widths = (24, 11, 11, 11, 13, 17, 13) if attempts else (31, 15, 15, 15, 24)
+    cols = "".join(f'<col style="width:{w}%">' for w in widths)
     table = (
-        '<table class="outcome glance"><colgroup><col style="width:31%"><col style="width:15%">'
-        '<col style="width:15%"><col style="width:15%"><col style="width:24%"></colgroup>'
+        f'<table class="outcome glance"><colgroup>{cols}</colgroup>'
         '<thead><tr><th scope="col">Rule</th>'
-        + "".join(f'<th scope="col">{e(label)}</th>' for label in GLANCE_COLUMNS)
+        + "".join(f'<th scope="col">{e(label)}</th>' for label in glance_columns(attempts))
         + "</tr></thead>"
         + f"<tbody>{''.join(rows)}</tbody></table>"
     )

@@ -32,7 +32,13 @@ What it shows:
   rule, no gate", "block-only", "gated" (k of n and the share, the cells the detail tables use;
   a dash for a missing cell, never 0) and "Exact test p (gated vs block-only)" (the `violations`
   entry of that operator and compaction setting, gated against block-only; a paired test also
-  gives the figure that counts each source once; a dash when there is none). Each row links to
+  gives the figure that counts each source once; a dash when there is none, and a dash when both
+  arms broke the rule 0 times, because block-only gets 0 by construction for an action it
+  refuses, so 0 against 0 is not tested). When the set has `attempts` entries, two more columns:
+  "Tried the forbidden action, block-only -> gated" (k of n and the share of each arm, from the
+  cells' `arm_metrics.attempt_rate`, the detail table's figures; a dash for a cell without) and
+  its exact test p (the `attempts` entry of the same operator and compaction setting, same
+  rules). Without attempts entries the columns are not there. Each row links to
   its boundary section. The caption says the rows are all graded rules, not a selection. The
   table is repeated at the top of each appendix, from its own file (the rule's wording withheld
   there as everywhere in an appendix). It reuses the outcome table's CSS (`table.outcome`).
