@@ -601,7 +601,7 @@ class RecallView:
     name: str  # the file's stem: the label of the set
     matched: int  # seeded rules the extractor found, summed over the repeats
     total: int  # seeded rules asked for, summed over the repeats
-    extra: int  # checks it proposed that no seeded rule called for
+    extra: int  # checks it proposed beyond the rules asked for
 
 
 def whole(value: Any, path: Path, key: str) -> int:
@@ -637,7 +637,7 @@ def render_recall_items(recalls: list[RecallView]) -> str:
     return "".join(
         f'<li><span class="v">{e(v.matched)} of {e(v.total)}</span>'
         f'<span class="k">extraction recall, {e(v.name)}: {e(recall_pct(v))}, with '
-        f"{e(v.extra)} extra checks proposed that no seeded rule called for</span></li>"
+        f"{e(v.extra)} extra checks proposed beyond the rules asked for</span></li>"
         for v in recalls
     )
 
