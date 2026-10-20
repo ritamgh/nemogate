@@ -317,3 +317,10 @@ def test_the_numbers_on_the_page_equal_the_entries_of_a_stats_fixture():
         assert f"{entry['k_a']} of {entry['n_a']} gated runs" in text
         assert f"{entry['k_b']} of {entry['n_b']} block-only runs" in text
         assert site.p_text(entry["p_exact"]) in text
+
+
+def test_the_no_sabotage_operator_reads_as_words():
+    # Breaks if the natural-source operator prints as the bare word "none".
+    out = lines(site.render(page_data(fisher("violations", "none", 0, 4, 1, 2, 0.333333))))
+
+    assert out[0].startswith("Exact test (Fisher, independent runs; no sabotage):")

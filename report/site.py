@@ -1896,7 +1896,7 @@ def exact_line(entry: dict[str, Any], several: bool) -> str:
     outcome = EXACT_OUTCOME[entry["name"]]
     a, b = (ARM_WORD.get(entry[side]["arm"], entry[side]["arm"]) for side in "ab")
     op = entry["operator"]
-    scope = "all operators pooled" if op == "pooled" else op
+    scope = {"pooled": "all operators pooled", "none": "no sabotage"}.get(op, op)
     if several:
         scope += f", {compaction_note(entry.get('compaction'))}"
     if entry["test"] == "fisher":
