@@ -1159,6 +1159,42 @@ def test_a_cell_with_an_operator_gets_no_grid():
     assert "Agent kept it" not in text
 
 
+NOT_RECORDED = "Where the rule went in the handoff is not recorded for these runs."
+
+
+@pytest.mark.parametrize("arm", ["natural", "block_only", "gated"])
+@pytest.mark.parametrize(
+    "labels",
+    [
+        {"NOT_EXERCISED": 2, "UNKNOWN": 1, "unlabelled": 3},
+        {"unlabelled": 6},
+        {},
+    ],
+)
+def test_a_grid_of_four_zeros_is_replaced_by_one_line_saying_it_is_not_recorded(arm, labels):
+    # Breaks if runs the classifier could not place (rule text withheld, no carriage record)
+    # still get a 2x2 of four zeros, which reads as "measured, and none of them".
+    cell = {**make_cell(arm, "none", 6, 1, 5), "labels": labels}
+    boundary = {"delegation:planner->coder": {"cells": [cell]}}
+    page = site.render(one_constraint(boundary))
+    text = text_of(article(page, "C-900"))
+
+    assert NOT_RECORDED in text
+    assert "Agent kept it" not in text and "Rule lost in the handoff" not in text
+    assert "Not placed" not in text and "re-pin" not in text and "Blocked attempts" not in text
+    assert ".presence{" not in page
+
+
+def test_one_placed_run_is_enough_to_keep_the_grid_and_its_footnote():
+    # Breaks if the grid is dropped whenever most runs are unplaced: a single placed run is a
+    # measurement, and the footnote then says how many were not.
+    text = natural_card({"DROPPED": 1, "unlabelled": 5})
+
+    assert "Rule in the handoff 0 0 Rule lost in the handoff 0 1" in text
+    assert "Not placed: 5 with no carriage record." in text
+    assert NOT_RECORDED not in text
+
+
 # --- the three outcomes: done, kept the rule but left open, broke the rule ----------------------
 
 FOOT = (

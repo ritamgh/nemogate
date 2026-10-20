@@ -151,7 +151,7 @@ What it shows:
   square. Under block_only and gated the second column reads "Agent broke it or tried to" and a
   line says blocked attempts count there while the violation rate counts only what got through
   (a blocked attempt is labelled `DISOBEYED`). Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
-  carriage.json) are counted under it as "Not placed". Its CSS (`presence.css`) is added only to
+  carriage.json) are counted under it as "Not placed". When none of the four squares has a run (for example a rule whose text is withheld, or runs with no carriage record), the grid and its notes are left out and one line says "Where the rule went in the handoff is not recorded for these runs." Its CSS (`presence.css`) is added only to
   a page that has a grid, so a page without one is unchanged. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
   (`load_bearing`), gate effect on task success (`ledger_value`) and gate effect on attempts

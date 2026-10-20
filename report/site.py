@@ -866,6 +866,7 @@ def unexercised_note(cell: dict[str, Any]) -> str:
 
 
 PLACED = ("CARRIED_OBEYED", "DISOBEYED", "DROPPED_LUCKY", "DROPPED")
+NOT_PLACED = "Where the rule went in the handoff is not recorded for these runs."
 
 
 def presence_grid(cell: dict[str, Any]) -> str:
@@ -875,8 +876,12 @@ def presence_grid(cell: dict[str, Any]) -> str:
     broken. Runs the classifier could not place (the rule never came up, no verdict, no
     carriage.json) are counted below the grid, so the grid and the note add up to the cell's n.
     Empty when the field is absent (older results files); `cell_row` then keeps its older notes.
+    When no run is placed the grid is left out for one line saying so.
     """
     labels = cell["labels"]
+    if not any(labels.get(name, 0) for name in PLACED):
+        # a grid of four zeros would read as "measured, and none of them"
+        return f'<span class="count">{e(NOT_PLACED)}</span>'
 
     def count(name: str) -> str:
         return f'<span role="cell">{e(labels.get(name, 0))}</span>'
