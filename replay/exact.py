@@ -17,14 +17,11 @@ from collections import Counter
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
-TOLERANCE = 1e-9  # a table counts as "as probable as the observed" up to this relative slack
-
-
 def fisher_exact(a: int, n1: int, b: int, n2: int) -> float:
     """Two-sided exact p for `a` of `n1` against `b` of `n2` (Fisher's exact test).
 
     The sum of the probabilities of every 2x2 table with these margins whose probability is at
-    most the observed table's (with `TOLERANCE`), capped at 1. ValueError for an empty arm or a
+    most the observed table's, capped at 1. ValueError for an empty arm or a
     count outside its sample.
     """
     if n1 < 1 or n2 < 1:
@@ -38,8 +35,9 @@ def fisher_exact(a: int, n1: int, b: int, n2: int) -> float:
         x: math.comb(n1, x) * math.comb(n2, events - x)
         for x in range(max(0, events - n2), min(n1, events) + 1)
     }
-    limit = weight[a] * (1 + TOLERANCE)
-    extreme = sum(w for w in weight.values() if w <= limit)
+    # the weights are exact integers, so "as probable as observed" is an exact comparison
+    # (a float tolerance would overflow on large tables)
+    extreme = sum(w for w in weight.values() if w <= weight[a])
     return min(1.0, extreme / math.comb(n1 + n2, events))
 
 

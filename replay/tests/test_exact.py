@@ -300,3 +300,9 @@ def test_the_result_does_not_depend_on_the_order_of_the_observations():
     b = forks([False, True, False, False])
 
     assert compare_arms(a, b) == compare_arms(list(reversed(a)), list(reversed(b)))
+
+
+def test_fisher_does_not_overflow_on_a_large_table():
+    # Break caught: scaling an arbitrary-size integer weight by a float tolerance raised
+    # OverflowError for larger arms, so one big cell stopped the whole results file.
+    assert fisher_exact(260, 520, 260, 520) == 1.0
