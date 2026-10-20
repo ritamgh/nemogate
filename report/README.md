@@ -65,20 +65,21 @@ What it shows:
   rows below; "No comparison has enough runs yet" when there is none.
 - Exact tests (p-values), when a boundary of the results file has `exact_tests` (written by
   `replay/stats.py`; see `replay/README.md`, "Exact tests"). Under the gated-minus-block-only
-  attempt line of each boundary (main set and appendices alike) there is one plain line per
-  entry, built from the entry only: Fisher, "Exact test (Fisher, independent runs; drop): broke
-  the rule in k_a of n_a gated runs against k_b of n_b block-only runs, p = X."; McNemar, "Exact
-  test (McNemar, matched forks of the same sources; drop): in N matched pairs, only block-only
-  broke the rule in B, only gated in A, p = X over the pairs; counting each of S sources once,
-  p = Y (with S sources the smallest p possible is Z)." The arm names come from the entry's `a`
-  and `b`, the outcome words are "broke the rule", "tried the forbidden action" and "did the job
-  and kept the rule", the compaction setting is named when the boundary has several, and the
-  pooled entry (`operator: "pooled"`, "all operators pooled") comes once under the operators of
-  its outcome. The attempts line sits directly under its interval line; the other outcomes
-  follow. p has three significant figures, "p < 0.001" below that. Z is `2 * 0.5^S` (at most 1),
-  shown only for a paired entry whose source test dropped no ties. The interval lines stay. The
-  "How to read this" box gains one item (pairs, sources, the cautious source-level figure, no
-  correction for many comparisons) only when some line is shown; the page never says
+  attempt lines of each boundary (main set and appendices alike) there is one table, a row per
+  entry, built from the entries only. Columns: Outcome ("Broke the rule", "Tried the forbidden
+  action", "Did the job and kept the rule"), Operator ("Pooled over operators" for the pooled
+  entry, "no sabotage" for `none`, the compaction setting named under it when the boundary has
+  several), Gated, Block-only, Test ("Fisher, independent runs" or "McNemar, matched forks of the
+  same sources"), "p over runs or pairs" and "p counting each source once" (a dash for Fisher).
+  Fisher shows each arm's `k of n runs`; McNemar shows, per arm, the matched pairs where only that
+  arm had the outcome ("1 of 8 pairs (only this arm)"). The Gated and Block-only columns take the
+  entry's `a`/`b` by their `arm` (so a swapped entry still lines up); an entry of other arms keeps
+  its order and names each arm in its cell. Rows follow the order of the outcomes, then the
+  compaction setting, then the operators, the pooled entry last under its outcome. p has three
+  significant figures, "< 0.001" below that. Under the table one line gives the smallest p each
+  source count can reach, `2 * 0.5^S` (at most 1), for the paired rows whose source test dropped
+  no ties. The "How to read this" box gains one item (pairs, sources, the cautious source-level
+  figure, no correction for many comparisons) only when some table is shown; the page never says
   "significant". A results file without `exact_tests` renders byte for byte as before.
 - With `--notes FILE`, a section "Notes on these numbers" right after the results section (so
   after its verdict line, before the key): the file's paragraphs, split on blank lines, in order.
