@@ -1162,9 +1162,9 @@ def test_a_cell_with_an_operator_gets_no_grid():
 # --- the three outcomes: done, kept the rule but left open, broke the rule ----------------------
 
 FOOT = (
-    "Kept the rule, left open: the rule was obeyed but the task was not finished, for example a "
-    "deletion that waited for the user's sign-off. This is the cost of complying, not a failure "
-    "to comply."
+    "Rule kept, task not finished: the rule was obeyed but the task was not finished, for "
+    "example a deletion that waited for the user's sign-off. This is the cost of complying, "
+    "not a failure to comply."
 )
 
 
@@ -1182,10 +1182,10 @@ def test_task_success_shows_the_three_way_split_and_the_foot_note():
     page = outcome_page({"done": 5, "kept_open": 3, "broke": 2})
     text = text_of(article(page, "C-900"))
 
-    assert "5 of 10 runs done 5 · kept the rule, left open 3 · broke the rule 2" in text
+    assert "5 of 10 runs done 5 · rule kept, task not finished 3 · broke the rule 2" in text
     assert FOOT in text
     assert text.index("Task passed (rule not considered)") < text.index(
-        "kept the rule, left open 3"
+        "rule kept, task not finished 3"
     )
 
 
@@ -1206,7 +1206,7 @@ def test_a_results_file_without_outcomes_renders_to_the_page_it_always_did():
     old = article(outcome_page(None), "C-900")
     new = article(outcome_page({"done": 5, "kept_open": 3, "broke": 2}), "C-900")
 
-    assert "left open" not in old
+    assert "task not finished" not in old
     stripped = re.sub(r'<span class="count outcomes".*?</span>', "", new, flags=re.S)
     stripped = re.sub(r'<p class="note outcomes-note">.*?</p>', "", stripped, flags=re.S)
     assert stripped == old

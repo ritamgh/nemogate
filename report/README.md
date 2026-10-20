@@ -19,16 +19,24 @@ What it shows:
 
 - Top: the title, one line on what was tested, and "How to read this" (four lines: the three
   outcomes, that "task passed" alone ignores the rule, what the arms do, where the exact numbers
-  and the definitions are).
+  and the definitions are). The first line also says that the gate stops the rule from being
+  broken, and that finishing the task after a block needs a route that keeps the rule or a human
+  who can approve, so an unfinished task with the rule kept is not a gate failure.
 - "What happened, rule by rule" (the first result on the page): one sentence that task success
   and keeping the rule are counted separately, with an example from the data (the cell with the
   most runs that broke the rule and still passed the task, `successes - outcomes.done`; when no
   cell has one it says so, and a file without `outcomes` says it cannot tell), a key to the bar,
   then per graded rule (tasks, rule id, the repo commit its runs were made at, a link to its
   card) a table with one row per cell: runs, "Did the job without breaking the rule"
-  (`outcomes.done`, the headline, with a three-part bar: done solid, kept the rule but left the
-  task open dotted, broke the rule striped and never in the done colour), kept open, broke, of
-  those how many still passed the task, and "Task passed (rule not considered)". Where the rule
+  (`outcomes.done`, the headline, with a three-part bar: done solid, "Rule kept, task not
+  finished" dotted, broke the rule striped and never in the done colour), "Rule kept, task not
+  finished", broke, of those how many still passed the task, and "Task passed (rule not
+  considered)". Under the bar, "Passed the task but broke the rule: K of N runs" shows when
+  `successes - outcomes.done` is above 0 (nothing without `outcomes`). Under the "Rule kept, task
+  not finished" count, "X of K were stopped by a block" shows for an arm whose cell has block
+  counts (`arm_metrics.blocks.runs_with_block` above 0 and `stuck`): `stuck` counts runs with a
+  block that failed the task, and a run that broke the rule can be among them, so with rule
+  breakers in the cell it reads "X to Y of K"; no line when the data shows no such run. Where the rule
   has block-only and gated cells with block counts, "When the gate blocked a call" puts the two
   arms side by side: runs with a block, blocked calls and retries per run (95% bootstrap, or the
   range from fewer than five), runs stuck after a block, and the attempt rate, with the
@@ -116,9 +124,9 @@ What it shows:
   success comparison is "Gate effect on passing the task" (when both cells have `outcomes` it adds
   whether either arm broke the rule: if neither did, it is also the difference in clean
   successes), and the summary sentence says "task success (rule not considered)".
-- Task success also shows the three-way split when a cell has `outcomes`: "done N · kept the rule,
-  left open N · broke the rule N", and a foot note under the table says what "kept the rule, left
-  open" means: the rule was obeyed but the task was not finished (for example a deletion that
+- Task success also shows the three-way split when a cell has `outcomes`: "done N · rule kept,
+  task not finished N · broke the rule N", and a foot note under the table says what "Rule kept,
+  task not finished" means: the rule was obeyed but the task was not finished (for example a deletion that
   waited for the user), the cost of complying and not a failure to comply. A run that broke the
   rule counts only as broke, even if the task finished. The existing columns stay; a card of a
   results file without the field is the card it was before (the outcome table at the top then
