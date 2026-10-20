@@ -1,7 +1,7 @@
 """The results page: one self-contained static HTML file made from `results.json`.
 
 `uv run python -m report.site --results results/results.json --out results/site/index.html
-[--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE]
+[--runs DIR...] [--repair DIR] [--recall FILE...] [--ledger nemogate.yaml] [--notes FILE]
 [--appendix TITLE RESULTS_FILE [NOTES_FILE]]...`
 
 Reads the file `replay/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
@@ -583,7 +583,7 @@ def commits_note(results: dict[str, Any]) -> str:
     )
 
 
-def render_header(results: dict[str, Any]) -> str:
+def render_header(results: dict[str, Any], recalls: Sequence[panels.RecallView] = ()) -> str:
     repro = results.get("reproducibility") or {}
     models = repro.get("model_ids") or {}
     model_items = (
@@ -626,6 +626,14 @@ def render_header(results: dict[str, Any]) -> str:
     honesty = results["honesty"]
     recall = honesty.get("extraction_recall")
     recall_text = "not measured" if recall is None else pct(recall)
+    files = list(recalls) if recall is None else []
+    recall_item = (
+        panels.render_recall_items(files)
+        if files
+        else f"""<li><span class="v">{e(recall_text)}</span>
+<span class="k">extraction recall: how many of the seeded rules the extractor found</span></li>"""
+    )
+    recall_caveat = f'<p class="note">{e(panels.RECALL_CAVEAT)}</p>' if files else ""
     total, with_check = (
         honesty.get("constraints_total", 0),
         honesty.get("constraints_with_check", 0),
@@ -646,8 +654,7 @@ def render_header(results: dict[str, Any]) -> str:
     return f"""<section aria-labelledby="honesty-h" class="strip">
 <h2 id="honesty-h">What these numbers can and cannot tell you</h2>
 <ul class="honesty">
-<li><span class="v">{e(recall_text)}</span>
-<span class="k">extraction recall: how many of the seeded rules the extractor found</span></li>
+{recall_item}
 <li><span class="v">{e(with_check)} of {e(total)}</span>
 <span class="k">rules can be graded: each has a compiled check, a program that decides
 pass or fail</span></li>
@@ -655,7 +662,7 @@ pass or fail</span></li>
 <span class="k">inconclusive runs, left out of every rate below. Natural runs where the
 rule never came up are not among them: they stay in the rates, and each natural row counts
 them</span></li>
-</ul>
+</ul>{recall_caveat}
 </section>
 <section aria-labelledby="runs-h" class="meta">
 <div>
@@ -2207,12 +2214,14 @@ def render(
     ledger: Ledger | None = None,
     notes: str | None = None,
     appendices: Sequence[Appendix] = (),
+    recalls: Sequence[panels.RecallView] = (),
 ) -> str:
     """The page. `trace` (from --runs), `repairs` (--repair) and `ledger` (--ledger) are optional
     evidence; without `trace` the constraint cards have no trace panel, without `repairs` the
-    patch panel says there is no repair run yet. `notes` (--notes) is free text shown after the
-    results, escaped. `appendices` (--appendix) are separate result sets appended after
-    everything else; nothing in them reaches the rest of the page."""
+    patch panel says there is no repair run yet. `recalls` (--recall) show the extraction recall
+    measured offline, only when the results file carries none. `notes` (--notes) is free text
+    shown after the results, escaped. `appendices` (--appendix) are separate result sets appended
+    after everything else; nothing in them reaches the rest of the page."""
     check_format(results)
     constraints = results["constraints"]
     anchors = Anchors(constraints)
@@ -2243,9 +2252,11 @@ def render(
         if constraints
         else render_verdict(results, anchors)
     )
+    found = trace.found_by_rule if trace else None
     body = (
-        f"{render_top()}{outcomes}{render_notes(notes)}{render_key()}{render_fixes()}{render_header(results)}"
-        f"{panels.render_coverage(results, ledger, trace.found_by_rule if trace else None)}"
+        f"{render_top()}{outcomes}{render_notes(notes)}{render_key()}{render_fixes()}"
+        f"{render_header(results, recalls)}"
+        f"{panels.render_coverage(results, ledger, found, list(recalls))}"
         f"{graph_section}"
         f"{panels.render_patch_panel(repairs)}{render_method(results)}"
     )
@@ -2294,6 +2305,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="the folder python -m repair wrote: adds the patch",
     )
     parser.add_argument(
+        "--recall",
+        type=Path,
+        nargs="+",
+        metavar="FILE",
+        help="extraction recall files (python -m ledger.recall output), one per set: shown when "
+        "results.json has no recall, with the note that it is not a held-out measure",
+    )
+    parser.add_argument(
         "--ledger",
         type=Path,
         help="the ledger the runs used: lists unchecked and unexercised rules",
@@ -2334,6 +2353,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None,
             notes=notes,
             appendices=appendices,
+            recalls=panels.load_recall(args.recall) if args.recall else (),
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")

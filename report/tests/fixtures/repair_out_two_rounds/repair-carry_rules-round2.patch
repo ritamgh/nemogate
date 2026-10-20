@@ -1,0 +1,6 @@
+--- a/app/prompts.py
++++ b/app/prompts.py
+@@ -2,3 +2,4 @@
+ You plan the work.
+ Delegate to the coder.
++Copy every rule the user stated into each task you hand to another agent.
