@@ -32,6 +32,7 @@ replay/
   carriage.py   did the target rule survive the planner's handoff; compaction evidence
   stats.py      Wilson and Newcombe intervals, pooling of finished runs, results.json; `python -m replay.stats`
   intervals.py  Wilson interval, seeded bootstrap of a mean, rounding (used by stats and arm_metrics)
+  exact.py      Fisher's and McNemar's exact tests and `compare_arms` (used by stats, see "Exact tests")
   blocks.py     the six block metrics of one run, from its trace
   arm_metrics.py  per-cell cost, wall time, attempt rate and block numbers with their intervals
   sweep_status.py  what a runs dir holds per (task, arm, operator, group), the top-up shortfall;
@@ -649,6 +650,50 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   about a tool or path), and carries `n_a` and `n_b`, the traced runs on each side, which can be
   fewer than the cells' `n`. Intervals: 95% Wilson (z = 1.96) for rates, Newcombe method 10 for
   differences.
+- **Exact tests (`exact_tests`, optional).** The comparisons above are intervals: a description of
+  a difference, not a test. For `gated` against `block_only` (same operator, same compaction
+  setting) a boundary also has `exact_tests`, one entry per outcome and operator, written only
+  when there is such a pair of cells (a file with none has no key, as before). The outcomes, in
+  this order: `violations` (broke the rule), `attempts` (made at least one call at the forbidden
+  action, from the run's own trace; left out when a side has no readable trace or the rule is not
+  about a tool or path) and `done` (finished the task and kept the rule: the `done` bucket of
+  `outcomes`). Which test an entry gets depends on where the two cells' runs came from
+  (`replay.exact.compare_arms`):
+  - **Paired: McNemar.** If both cells hold forks of the same natural source (`fork.json`
+    `source_run_id`), the two arms saw the same prefix, so the unit is a matched pair, not a run.
+    Each arm's forks are matched on (source, operator); a match is one 2x2 observation, and
+    the test is the two-sided exact binomial (1/2) on the discordant pairs (only gated had the
+    outcome, `a_only`, against only block_only had it, `b_only`). p is 1 when none disagree. A fork
+    that has no partner (the other arm errored or was never forked for that source), a pair
+    where an outcome cannot be read, and a source with two forks of one arm under one operator
+    (the run folder records no seed to tell them apart, so any pairing would be a guess) are left
+    out; `n_unmatched` counts the runs left out and `n_pairs` the pairs tested. Plain runs in a
+    cell that also has shared forks are left out the same way.
+  - **Independent: Fisher.** Cells with no source in common (every run its own sample, or forks of
+    different sources in each arm) are tested as two samples: Fisher's exact test on the two
+    counts, two-sided (the sum over every 2x2 table with these margins whose probability is at most
+    the observed one's, with a relative slack of 1e-9). `n_pairs`, `n_unmatched`, `discordant`,
+    `n_sources`, `by_source` and `p_exact_by_source` are null.
+  - **A shared source never gets Fisher and an independent one never gets McNemar.** Treating
+    paired forks as two samples throws away the pairing (and, with the large margins these cells
+    have, can overstate the evidence); treating independent runs as pairs has nothing to match.
+  - **Clustering.** One source can supply several pairs (the same source forked under two
+    operators), and those pairs are not independent of each other. Pooling the operators of a
+    boundary is therefore reported twice: `p_exact` counts every pair, and `p_exact_by_source` is a
+    sign test over sources: each source collapses to the arm that had the outcome in more of its
+    pairs (`by_source`: `a_only`, `b_only`, and `ties`, which are dropped), then the same exact
+    McNemar test runs on those counts. `n_sources` is the number of sources with a pair. Read
+    `p_exact_by_source` when sources repeat; within one operator each source has one pair and the
+    two p-values agree. A `pooled` entry (`operator: "pooled"`) exists for each outcome and
+    compaction setting when at least two operators were tested as pairs; it pools only those.
+  - Each entry: `name`, `operator`, `compaction`, `a` and `b` (`{"arm", "operator"}`), `test`
+    (`"fisher"` or `"mcnemar"`), `k_a`/`n_a`/`k_b`/`n_b` (runs with the outcome over runs read;
+    for McNemar, over the matched pairs), `p_exact` and `p_exact_by_source`, rounded to 6
+    decimals (not 4: a p of 0.0001 must stay visible). Nothing in a run folder, a cell or a
+    comparison changes; it is the same data, tested. A p-value says how surprising the counts
+    would be if the two arms did the same thing; with few pairs the smallest p a paired test can
+    give is 2 * 0.5^n (0.0625 for 5 pairs all one way), so a small paired sample cannot reach
+    0.05 however clean it looks.
 - **Honesty block.** `check_share` is constraints with a check over constraints declared in the
   ledger (`null` for an empty ledger); `extraction_recall` is the `recall` in the
   `--extraction-recall` JSON file (`{"recall": 0.83}`, in [0, 1]), `null` when not measured;
@@ -687,6 +732,13 @@ Shape (every `inconclusive` reason is always present; `n == 0` cells are not wri
      "comparisons": [{"name", "operator", "compaction", "a": {"arm", "operator"}, "b": {"arm", "operator"},
                       "metric": "cvr" | "success" | "attempt_rate", "diff", "lo", "hi",
                       "n_a", "n_b"  # attempt_reduction only
+                     }],
+     "exact_tests": [{"name": "violations" | "attempts" | "done", "operator": <op> | "pooled",  # optional key
+                      "compaction", "a": {"arm", "operator"}, "b": {"arm", "operator"},
+                      "test": "fisher" | "mcnemar", "k_a", "n_a", "k_b", "n_b", "p_exact",
+                      # McNemar only, null for Fisher:
+                      "n_pairs", "n_unmatched", "discordant": {"a_only", "b_only"}, "n_sources",
+                      "by_source": {"a_only", "b_only", "ties"}, "p_exact_by_source"
                      }]}}}}}
 ```
 
