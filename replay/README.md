@@ -36,6 +36,8 @@ replay/
   arm_metrics.py  per-cell cost, wall time, attempt rate and block numbers with their intervals
   sweep_status.py  what a runs dir holds per (task, arm, operator, group), the top-up shortfall;
                 `python -m replay.sweep_status`
+  audit.py      scores saved run folders again from their own files and compares with their
+                records; `python -m replay.audit`
 refapp/app.py   the reference app's App (owned by refapp, listed here because the runner uses it)
 ```
 
@@ -424,6 +426,47 @@ row; a legend below the table spells each group out. Then the orphans (run folde
 file, or with an unusable one) by name, and the number of fork folders, which no row counts.
 Offline, files only; exit 2 if DIR is not a directory. `scan(runs_dir)` and
 `top_up_plan(...)` in the same module are what `--top-up` uses.
+
+## Auditing a saved run
+
+`uv run python -m replay.audit RUN_DIR [RUN_DIR ...] [--json]` re-derives the verdict of saved
+runs from their own files and says whether it is the one recorded. Offline, files only: no key,
+no network, no model, no sandbox. It checks the scoring, not the model: it never runs an agent
+again, so it says nothing about whether the agents would behave the same way twice. `examples/`
+holds three saved runs to try it on.
+
+- **Input.** A RUN_DIR holds `record.json`, `trace.jsonl`, `fs_diff.json`, `ledger.yaml` and
+  `violations.json`; a fork also holds `fork.json` and `prefix.jsonl`, and may hold
+  `inherited_violations.json`. A RUN_DIR with no `record.json` of its own is a parent: each child
+  folder that holds one is audited, sorted by name (one level). Nothing else is read, so a run
+  folder can be copied without `checkpoints.sqlite` or the sandbox images.
+- **What is recomputed.** `oracle.evaluate(scoped ledger, trace, fs_diff)` with the run's own
+  `ledger.yaml` scoped to the record's `constraint_id` (`record.scoped_ledger`, as the runner
+  did) and the trace as the runner scored it (`carriage.fork_trace`: a fork's prefix first, its
+  own steps numbered on from the prefix). A fork keeps the violations `carriage.fork_scored`
+  keeps (step at or after the fork point, or no step), the cut the runner makes too.
+- **Fork file changes.** The runner scored a fork's file changes against the fork-point image,
+  which is not saved; `fs_diff.json` is from the base image. The audit evaluates the base diff and
+  drops what `inherited_violations.json` lists (the changes the fork point already held), as the
+  runner did. Not recoverable from the saved files: a path the source changed and the fork put
+  back to its base content has no `fs_diff.json` entry, so a violation recorded for it reads as a
+  difference. A fork from before 2026-10-18 has no `inherited_violations.json` and was scored
+  with the source's own earlier violations; it reads as a difference when it recorded one.
+- **Compared.** The recomputed rule ids against `record.json`'s `violations` and against
+  `violations.json` (ids only: the target rule's verdict is `broke` if its id is in the list), and
+  `record.ledger_hash(ledger.yaml)` against the record's `ledger_hash`. A run matches when all
+  three lists are the same and the hash checks.
+- **Output.** One table row per run: short id (the part after the last `-`), task, arm, operator,
+  target rule id, recorded verdict, recomputed verdict, hash (`ok` or `BAD`), match (`yes` or
+  `NO`); a `differs:` line per disagreement, in ids and hashes only; a blank line; then
+  `N runs, M match, K differ`. Rule text is never printed. Output carries no timestamp and the
+  runs keep the order of the arguments (a parent's children by name), so the same input gives the
+  same bytes. `--json` prints `{"runs": [...], "summary": {"runs", "match", "differ"}}` with the
+  same fields per run (`run_id` in full, `match` a boolean) plus the three id lists, keys always in
+  the order of the table.
+- **Exit code.** 0 every run matches and every hash checks; 1 a run differs; 2 a folder cannot be
+  read: a missing or damaged file is named (`<folder>: missing prefix.jsonl`), nothing else is
+  printed to stdout, and there is no traceback.
 
 ## budget.py
 
