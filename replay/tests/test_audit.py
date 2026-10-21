@@ -6,6 +6,7 @@ obeyed (its delete was blocked), 7faf86 a natural run that broke its rule.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -153,6 +154,76 @@ def test_a_missing_file_exits_2_and_names_it(tmp_path, capsys, name, missing):
     assert out == ""
     assert f"{run}: missing {missing}" in err
     assert "Traceback" not in err
+
+
+def rewrite_trace(run, change):
+    lines = [json.loads(line) for line in (run / "trace.jsonl").read_text().splitlines()]
+    for line in lines:
+        change(line)
+    (run / "trace.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+
+
+def test_an_empty_trace_exits_2_it_never_matches(tmp_path, capsys):
+    """An empty trace scores zero violations, so it would "match" a run that recorded none."""
+    run = copy_run(tmp_path, OBEYED_GATED)
+    (run / "trace.jsonl").write_text("")
+    code, out, err = run_audit(capsys, run)
+    assert (code, out) == (2, "")
+    assert f"trace file {run / 'trace.jsonl'} has no events" in err
+    assert len(err.splitlines()) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("run_id", "r-other"), ("ledger_hash", "000000000000"), ("safe_config_hash", "000000000000")],
+)
+def test_a_trace_from_another_run_or_ledger_exits_2(tmp_path, capsys, field, value):
+    run = copy_run(tmp_path, BROKE)
+    rewrite_trace(run, lambda line: line.update({field: value}))
+    code, out, err = run_audit(capsys, run)
+    assert (code, out) == (2, "")
+    assert f"trace {run / 'trace.jsonl'}: {field} is '{value}' at step 0" in err
+    assert len(err.splitlines()) == 1
+
+
+def test_a_forks_prefix_may_carry_the_source_run_id(capsys):
+    """The check covers the fork's own events; the prefix is the source's, with its own id."""
+    assert run_audit(capsys, EXAMPLES / FORK)[0] == 0
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any file")
+def test_a_file_that_cannot_be_opened_exits_2_with_one_line(tmp_path, capsys):
+    run = copy_run(tmp_path, BROKE)
+    (run / "trace.jsonl").chmod(0)
+    code, out, err = run_audit(capsys, run)
+    assert (code, out) == (2, "")
+    assert f"{run}: cannot read trace.jsonl: " in err
+    assert "Traceback" not in err and len(err.splitlines()) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any folder")
+def test_a_folder_that_cannot_be_listed_exits_2_with_one_line(tmp_path, capsys):
+    copy_run(tmp_path, BROKE)
+    try:
+        tmp_path.chmod(0)
+        code, out, err = run_audit(capsys, tmp_path)
+    finally:
+        tmp_path.chmod(0o700)
+    assert (code, out) == (2, "")
+    assert "Traceback" not in err and len(err.splitlines()) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any folder")
+def test_a_run_folder_that_cannot_be_listed_exits_2_with_one_line(tmp_path, capsys):
+    run = copy_run(tmp_path, BROKE)
+    try:
+        run.chmod(0)
+        code, out, err = run_audit(capsys, run)
+    finally:
+        run.chmod(0o700)
+    assert (code, out) == (2, "")
+    assert f"{run}: cannot read folder: " in err
+    assert "Traceback" not in err and len(err.splitlines()) == 1
 
 
 def test_an_unreadable_file_exits_2_without_a_traceback(tmp_path, capsys):

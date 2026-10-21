@@ -37,6 +37,7 @@ from replay.boundaries import (
     crossings_of,
 )
 from replay.carriage import (
+    check_trace,
     classify,
     compaction_evidence,
     fork_scored,
@@ -503,24 +504,13 @@ class Runner:
                 "trace would report zero violations"
             )
         trace = parse_trace_jsonl(trace_path.read_text(encoding="utf-8"))
-        if not trace:
-            raise RuntimeError(
-                f"trace file {trace_path} has no events: the gate did not run, and evaluating an "
-                "empty trace would report zero violations"
-            )
-        expected = {
-            "run_id": run_config.run_id,
-            "ledger_hash": ledger_hash,
-            "safe_config_hash": safe_config_hash,
-        }
-        for event in trace:
-            for field, want in expected.items():
-                got = getattr(event, field)
-                if got != want:
-                    raise RuntimeError(
-                        f"trace {trace_path}: {field} is {got!r} at step {event.step}, but the "
-                        f"run record carries {want!r}"
-                    )
+        check_trace(
+            trace,
+            trace_path,
+            run_id=run_config.run_id,
+            ledger_hash=ledger_hash,
+            safe_config_hash=safe_config_hash,
+        )
         return trace
 
     async def _invoke(

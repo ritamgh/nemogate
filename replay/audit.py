@@ -18,7 +18,7 @@ from pydantic import TypeAdapter
 
 from oracle import evaluate
 from replay import record
-from replay.carriage import fork_scored, fork_trace
+from replay.carriage import check_trace, fork_scored, fork_trace
 from schemas.ledger import load_ledger_yaml
 from schemas.run import FS_DIFF, RunRecord, Violation
 from schemas.trace import parse_trace_jsonl
@@ -132,13 +132,20 @@ def _ids(ids: Iterable[str]) -> str:
 
 def _read(run_dir: Path, name: str, parse: Callable[[str], Any]) -> Any:
     path = run_dir / name
-    if not path.is_file():
+    try:
+        text = path.read_text(encoding="utf-8") if path.is_file() else None
+    except OSError as exc:
+        raise Unreadable(f"{run_dir}: cannot read {name}: {_reason(exc)}") from exc
+    if text is None:
         raise Unreadable(f"{run_dir}: missing {name}")
     try:
-        return parse(path.read_text(encoding="utf-8"))
+        return parse(text)
     except Exception as exc:  # a damaged file is the user's to fix: name it, never a traceback
-        reason = (str(exc).splitlines() or [type(exc).__name__])[0]
-        raise Unreadable(f"{run_dir}: cannot read {name}: {reason}") from exc
+        raise Unreadable(f"{run_dir}: cannot read {name}: {_reason(exc)}") from exc
+
+
+def _reason(exc: Exception) -> str:
+    return (str(exc).splitlines() or [type(exc).__name__])[0]
 
 
 def audit_run(run_dir: Path) -> Audit:
@@ -146,6 +153,16 @@ def audit_run(run_dir: Path) -> Audit:
     saved = _read(run_dir, RECORD, RunRecord.model_validate_json)
     ledger = _read(run_dir, "ledger.yaml", load_ledger_yaml)
     trace = _read(run_dir, "trace.jsonl", parse_trace_jsonl)
+    try:
+        check_trace(
+            trace,
+            run_dir / "trace.jsonl",
+            run_id=saved.run_id,
+            ledger_hash=saved.ledger_hash,
+            safe_config_hash=saved.safe_config_hash,
+        )
+    except RuntimeError as exc:  # the runner's own check: an empty or foreign trace is no evidence
+        raise Unreadable(str(exc)) from None
     fs_diff = _read(run_dir, "fs_diff.json", FS_DIFF.validate_json)
     in_file = _read(run_dir, "violations.json", VIOLATIONS.validate_json)
     try:
@@ -196,14 +213,17 @@ def run_folders(paths: Iterable[Path]) -> list[Path]:
             raise Unreadable(f"{path}: no such folder")
         if not path.is_dir():
             raise Unreadable(f"{path}: not a folder")
-        if (path / RECORD).is_file():
-            found = [path]
-        else:
-            found = sorted(
-                (c for c in path.iterdir() if (c / RECORD).is_file()), key=lambda c: c.name
-            )
-            if not found:
-                raise Unreadable(f"{path}: missing {RECORD}")
+        try:
+            if (path / RECORD).is_file():
+                found = [path]
+            else:
+                found = sorted(
+                    (c for c in path.iterdir() if (c / RECORD).is_file()), key=lambda c: c.name
+                )
+        except OSError as exc:
+            raise Unreadable(f"{path}: cannot read folder: {_reason(exc)}") from exc
+        if not found:
+            raise Unreadable(f"{path}: missing {RECORD}")
         folders += [f for f in found if f not in folders]
     return folders
 
@@ -240,6 +260,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             audits.append(audit_run(folder))
         except Unreadable as exc:
             errors.append(str(exc))
+        except OSError as exc:  # a folder that went unreadable mid-audit, whatever the file
+            errors.append(f"{folder}: cannot read folder: {_reason(exc)}")
     if errors:
         print("\n".join(f"audit: {e}" for e in errors), file=sys.stderr)
         return 2

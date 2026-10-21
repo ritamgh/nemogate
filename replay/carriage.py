@@ -482,6 +482,29 @@ def fork_trace(prefix: Sequence[Any], own: Sequence[Any]) -> list[Any]:
     return [*prefix, *(e.model_copy(update={"step": e.step + n}) for e in own)]
 
 
+def check_trace(
+    trace: Sequence[Any], path: Path, *, run_id: str, ledger_hash: str, safe_config_hash: str
+) -> None:
+    """RuntimeError unless `trace` (read from `path`) has events and every one carries the run's
+    id and the hashes its record carries. An empty trace would score zero violations, and a
+    trace of another run or ledger says nothing about this one. The runner checks the trace it
+    just wrote with this, and `replay.audit` the one it is given."""
+    if not trace:
+        raise RuntimeError(
+            f"trace file {path} has no events: the gate did not run, and evaluating an "
+            "empty trace would report zero violations"
+        )
+    expected = {"run_id": run_id, "ledger_hash": ledger_hash, "safe_config_hash": safe_config_hash}
+    for event in trace:
+        for field, want in expected.items():
+            got = getattr(event, field)
+            if got != want:
+                raise RuntimeError(
+                    f"trace {path}: {field} is {got!r} at step {event.step}, but the "
+                    f"run record carries {want!r}"
+                )
+
+
 def fork_scored(violations: Sequence[Violation], n: int) -> list[Violation]:
     """The violations a fork is scored on: those at step n or later (its own events) or with no
     step (a file-diff check, a missing reply). A step before n is the source's. The runner and

@@ -452,6 +452,14 @@ holds three saved runs to try it on.
   back to its base content has no `fs_diff.json` entry, so a violation recorded for it reads as a
   difference. A fork from before 2026-10-18 has no `inherited_violations.json` and was scored
   with the source's own earlier violations; it reads as a difference when it recorded one.
+  A whitespace-only change to a file an emptied-file rule (`approval_before` with `also_empty`)
+  covers can likewise score differently from the runner, which compared against the fork-point
+  image. Not fixed.
+- **Trust.** The audit runs the saved ledger's regular expressions through the oracle, so an
+  untrusted ledger with a pathological pattern can stall it: audit only runs you trust.
+- **Trace check.** The trace must pass the runner's own check (`carriage.check_trace`): it has
+  events, and each carries the record's run id, ledger hash and safe-config hash. A fork's prefix
+  is the source's and is not checked.
 - **Compared.** The recomputed rule ids against `record.json`'s `violations` and against
   `violations.json` (ids only: the target rule's verdict is `broke` if its id is in the list), and
   `record.ledger_hash(ledger.yaml)` against the record's `ledger_hash`. A run matches when all
@@ -465,8 +473,9 @@ holds three saved runs to try it on.
   same fields per run (`run_id` in full, `match` a boolean) plus the three id lists, keys always in
   the order of the table.
 - **Exit code.** 0 every run matches and every hash checks; 1 a run differs; 2 a folder cannot be
-  read: a missing or damaged file is named (`<folder>: missing prefix.jsonl`), nothing else is
-  printed to stdout, and there is no traceback.
+  read: a missing, damaged or unreadable file (permissions included) or a trace that fails the
+  check above is named in one line (`<folder>: missing prefix.jsonl`), nothing is printed to
+  stdout, and there is no traceback.
 
 ## budget.py
 
