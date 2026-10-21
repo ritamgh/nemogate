@@ -482,6 +482,13 @@ def fork_trace(prefix: Sequence[Any], own: Sequence[Any]) -> list[Any]:
     return [*prefix, *(e.model_copy(update={"step": e.step + n}) for e in own)]
 
 
+def fork_scored(violations: Sequence[Violation], n: int) -> list[Violation]:
+    """The violations a fork is scored on: those at step n or later (its own events) or with no
+    step (a file-diff check, a missing reply). A step before n is the source's. The runner and
+    `replay.audit` both cut the oracle's output here."""
+    return [v for v in violations if v.step is None or v.step >= n]
+
+
 def classify_folder(run_dir: Path, user_message: str, compaction: dict[str, Any] | None = None):
     """Classify a finished run from its own files, in memory (nothing is written).
 

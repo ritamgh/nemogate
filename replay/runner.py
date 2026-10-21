@@ -36,7 +36,13 @@ from replay.boundaries import (
     copy_checkpoints,
     crossings_of,
 )
-from replay.carriage import classify, compaction_evidence, fork_trace, write_carriage
+from replay.carriage import (
+    classify,
+    compaction_evidence,
+    fork_scored,
+    fork_trace,
+    write_carriage,
+)
 from replay.fsdiff import diff, snapshot
 from replay.step_cap import StepCap
 from schemas.config import AppConfig, load_config
@@ -445,9 +451,7 @@ class Runner:
             n = len(fork.prefix)
             trace = fork_trace(fork.prefix, trace)
             since = diff(await snapshot(client, start, self.app.repo_root), after)
-            violations = [
-                v for v in self.evaluate(scoped, trace, since) if v.step is None or v.step >= n
-            ]
+            violations = fork_scored(self.evaluate(scoped, trace, since), n)
             # A path changed since the fork point is the fork's, counted above (a file added
             # before it and modified after reads "modified" there and "added" against the base),
             # so the base diff leaves it out rather than list it twice.
