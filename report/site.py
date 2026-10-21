@@ -2670,12 +2670,28 @@ def render(
     )
 
 
+def read_notes(notes_file: str | Path) -> str:
+    """Read a notes file (`--notes`, or an appendix's). Every number on the page comes from the
+    results file, so notes are words only: a digit of any script is a ValueError naming the file
+    and the first line it is on. The message never holds the line, because appendix notes can sit
+    next to withheld rule text. There is no allowance (no date or id form): write numbers out as
+    words, or leave them to the tables."""
+    text = Path(notes_file).read_text(encoding="utf-8")
+    for number, line in enumerate(text.split("\n"), 1):
+        if any(ch.isdigit() for ch in line):
+            raise ValueError(
+                f"{notes_file}: line {number} has a digit; notes are words only, "
+                "every number on the page comes from the results file"
+            )
+    return text
+
+
 def load_appendix(title: str, results_file: str, notes_file: str | None = None) -> Appendix:
     """Read an appendix's results (and notes) file. OSError or ValueError on anything unusable."""
     results = json.loads(Path(results_file).read_text(encoding="utf-8"))
     if not isinstance(results, dict):
         raise ValueError(f"appendix {title!r}: {results_file} is not a results object")
-    notes = Path(notes_file).read_text(encoding="utf-8") if notes_file else None
+    notes = read_notes(notes_file) if notes_file else None
     return Appendix(title, results, notes)
 
 
@@ -2731,7 +2747,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not 2 <= len(values) <= 3:
             parser.error("--appendix takes TITLE RESULTS_FILE [NOTES_FILE]")
     try:
-        notes = args.notes.read_text(encoding="utf-8") if args.notes else None
+        notes = read_notes(args.notes) if args.notes else None
         appendices = [load_appendix(*values) for values in args.appendix]
         results = json.loads(args.results.read_text(encoding="utf-8"))
         page = render(

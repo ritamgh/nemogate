@@ -3,6 +3,8 @@ in a file given on the command line, never in the code. Fixture text here is mad
 
 import re
 
+import pytest
+
 from report import site
 from report.tests.test_site import FIXTURES, load, text_of
 
@@ -80,12 +82,12 @@ def test_notes_on_a_page_with_no_constraints_still_follow_the_results_part(tmp_p
 def test_markup_in_the_notes_is_escaped_not_injected(tmp_path):
     # Breaks if the note text is put in the page raw: a <script> would run, a tag would render.
     section = notes_section(
-        build(tmp_path, 'Look <script>alert(1)</script> & <b>bold</b> "q".').decode()
+        build(tmp_path, 'Look <script>alert(x)</script> & <b>bold</b> "q".').decode()
     )
 
     assert "<script" not in section
     assert "<b>" not in section
-    assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; &lt;b&gt;bold&lt;/b&gt;" in section
+    assert "&lt;script&gt;alert(x)&lt;/script&gt; &amp; &lt;b&gt;bold&lt;/b&gt;" in section
 
 
 def test_a_missing_notes_file_exits_2_with_a_message_and_writes_nothing(tmp_path, capsys):
@@ -119,3 +121,82 @@ def test_the_page_with_notes_has_no_script_and_no_external_url(tmp_path):
 def test_the_same_notes_render_the_same_bytes(tmp_path):
     # Breaks if the notes bring a clock or an unordered set into the page.
     assert build(tmp_path, NOTES) == build(tmp_path, NOTES)
+
+
+SECRET = "withheld wording zzqx"
+
+
+def run_main(tmp_path, notes_text: str, where: str, capsys) -> tuple[int, str, object]:
+    """Build once with `notes_text` as the main notes ("main") or as an appendix's notes
+    ("appendix"); return the exit code, stderr and the output path."""
+    out = tmp_path / "index.html"
+    notes = tmp_path / "words.txt"
+    notes.write_text(notes_text, encoding="utf-8")
+    argv = ["--results", str(FIXTURES / "results_rich.json"), "--out", str(out)]
+    if where == "main":
+        argv += ["--notes", str(notes)]
+    else:
+        argv += ["--appendix", "Second set", str(FIXTURES / "results_rich.json"), str(notes)]
+    code = site.main(argv)
+    return code, capsys.readouterr().err, out
+
+
+@pytest.mark.parametrize("where", ["main", "appendix"])
+def test_a_digit_in_any_notes_file_fails_naming_file_and_line(tmp_path, capsys, where):
+    # Breaks if a hand-typed number can reach the page through --notes or an appendix's notes
+    # file, or if the message does not say which file and which line to fix.
+    text = f"Words only here.\n\nThe second line {SECRET} says 42 runs.\n"
+    code, err, out = run_main(tmp_path, text, where, capsys)
+
+    assert code == 2
+    assert err.count("\n") == 1
+    assert err.startswith("report.site: ")
+    assert str(tmp_path / "words.txt") in err
+    assert "line 3" in err
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("where", ["main", "appendix"])
+def test_the_digit_error_never_contains_the_text_of_the_line(tmp_path, capsys, where):
+    # Breaks if the error echoes the offending line: appendix notes can sit next to withheld rule
+    # text, and the digit itself would repeat the number.
+    code, err, _ = run_main(tmp_path, f"{SECRET} 4721 more words\n", where, capsys)
+
+    assert code == 2
+    assert "zzqx" not in err
+    assert "withheld" not in err
+    assert "4721" not in err
+
+
+@pytest.mark.parametrize("where", ["main", "appendix"])
+def test_the_error_names_the_first_digit_line_even_after_blank_and_crlf_lines(
+    tmp_path, capsys, where
+):
+    # Breaks if line numbers drift on blank lines or Windows line ends, so the author looks at
+    # the wrong line.
+    text = "One.\r\n\r\nTwo.\r\n\r\nThree has 7.\r\nFour has 8.\r\n"
+    code, err, _ = run_main(tmp_path, text, where, capsys)
+
+    assert code == 2
+    assert "line 5" in err
+    assert "line 6" not in err
+
+
+@pytest.mark.parametrize("digit", ["5", "٥", "５"])
+def test_digits_of_other_scripts_count_too(tmp_path, capsys, digit):
+    # Breaks if only ASCII 0-9 is caught, so Arabic-Indic or full-width digits pass.
+    code, err, _ = run_main(tmp_path, f"a number {digit} here\n", "main", capsys)
+
+    assert code == 2
+    assert "line 1" in err
+
+
+def test_a_number_written_in_words_builds_and_the_page_holds_it_as_typed(tmp_path):
+    # Breaks if the guard also rejects words-only notes (ordinals, spelled-out numbers, symbols),
+    # or if it changes the bytes of a page whose notes pass.
+    words = "The third rule, one of two, was kept; roughly half. See the next paragraph (below).\n"
+    page = build(tmp_path, words).decode()
+
+    assert "The third rule, one of two, was kept; roughly half." in notes_section(page)
+    assert build(tmp_path, words) == build(tmp_path, words)
+    assert build(tmp_path, "") == (FIXTURES / "golden_results_rich.html").read_bytes()

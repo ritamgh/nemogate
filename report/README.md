@@ -92,7 +92,9 @@ What it shows:
   It is for a re-grade or a caveat that is not in the results file; the text stays in the file,
   never in code. It is plain text and escaped, so markup shows as typed. Without the option, or
   with an empty file, nothing is added and the page is byte-identical to one built without it. A
-  missing or unreadable file is exit code 2 and no page is written.
+  missing or unreadable file is exit code 2 and no page is written. Notes are words only: a digit
+  in any notes file (this one or an appendix's) is exit code 2 with one line naming the file and
+  the line number, never the line, so every number on the page comes from the results file.
 - With `--appendix TITLE RESULTS_FILE [NOTES_FILE]` (repeatable), a separately labelled result
   set after everything else on the page, for runs that must be reported but not pooled with the
   main set. Each is drawn from its own results file only: its title, a line "Counts are small;
