@@ -2674,7 +2674,12 @@ def numbers_in(text: str) -> list[str]:
     """The number tokens of `text`, in order: a maximal run of digits (of any script, as
     `str.isdigit` sees them) with an optional decimal part, a "." followed by more digits. A full
     stop after a number is not a decimal point. Tokens are compared as typed, so 66 is not 660 and
-    the Arabic-Indic five is not 5."""
+    the Arabic-Indic five is not 5.
+
+    The one allowance: a digit run directly after a letter, or after a letter and a hyphen, is
+    part of an identifier (a label, never a statistic) and is left out, decimal part included.
+    It knows nothing of what any identifier means. The same rule applies to the page's text, so
+    the digits of a hash fragment on the page do not vouch for a number either."""
     found, i, n = [], 0, len(text)
     while i < n:
         if not text[i].isdigit():
@@ -2687,7 +2692,9 @@ def numbers_in(text: str) -> list[str]:
             j += 1
             while j < n and text[j].isdigit():
                 j += 1
-        found.append(text[i:j])
+        before = text[max(i - 2, 0) : i]
+        if not (before[-1:].isalpha() or (before[-1:] == "-" and before[:-1].isalpha())):
+            found.append(text[i:j])
         i = j
     return found
 

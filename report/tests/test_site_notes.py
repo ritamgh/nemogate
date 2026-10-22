@@ -206,6 +206,25 @@ def test_a_number_is_matched_whole_and_a_decimal_as_one_number(tmp_path, capsys)
     assert (code, err) == (0, [])
 
 
+def test_digits_inside_an_identifier_are_labels_not_numbers(tmp_path, capsys):
+    # Breaks if a label such as T7, C-008 or v2 has to be matched against the tables, which would
+    # force a note to leave out the name of the thing it is about.
+    ids = "See T424242, C-008424242, r-424242, abc424242 and v424242.5 for that.\n"
+    code, err, _ = run_main(tmp_path, capsys, ids, [ids])
+
+    assert (code, err) == (0, [])
+
+
+def test_a_plain_number_next_to_an_identifier_still_needs_a_match(tmp_path, capsys):
+    # Breaks if the identifier rule swallows plain numbers: one preceded by a space, a hyphen with
+    # no letter before it, or a digit run that only follows a number.
+    code, err, _ = run_main(tmp_path, capsys, "T31337 had 424242 runs.\nAlso -424243, 5-424244.\n")
+
+    assert code == 2
+    assert "(line 1: 424242; line 2: 424243, 424244)" in err[0]
+    assert "31337" not in err[0]
+
+
 def test_the_numbers_are_those_of_the_set_the_notes_belong_to(tmp_path, capsys):
     # Breaks if every set is checked against one pool: the main notes would pass on a number only
     # an appendix shows, and an appendix's on a number only the main page shows.

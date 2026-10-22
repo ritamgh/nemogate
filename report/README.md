@@ -94,7 +94,8 @@ What it shows:
   with an empty file, nothing is added and the page is byte-identical to one built without it. A
   missing or unreadable file is exit code 2 and no page is written. A note may only repeat a
   number the page shows: each number in a notes file (a digit run with an optional decimal part,
-  compared as typed) must be in the visible text of its own set, the page built with no notes at
+  compared as typed; a run right after a letter, or a letter and a hyphen, is part of an
+  identifier such as a task or rule id and is not a number) must be in the visible text of its own set, the page built with no notes at
   all (main part for `--notes`, the appendix's own section for its file). Otherwise exit code 2,
   one line per file naming it and, per line, the unmatched numbers, never the line's text.
 - With `--appendix TITLE RESULTS_FILE [NOTES_FILE]` (repeatable), a separately labelled result
