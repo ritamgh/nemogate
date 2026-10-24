@@ -2531,6 +2531,96 @@ def appendix_accounting(results: dict[str, Any]) -> str:
     )
 
 
+ACCOUNTING_NOTE = (
+    "Each rule's row counts only the runs that were counted: the results file holds no record of "
+    "a run that errored or was left out for a single rule, arm or sabotage setting, so those "
+    "runs are shown for the whole set only, in the first table and under “Left out, by "
+    "reason”. A dash means the file has no figure there."
+)
+
+
+def count_or_dash(value: Any) -> int | None:
+    """A whole count from the file, or None for a missing or malformed one (shown as a dash)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def accounting_totals(runs: dict[str, Any]) -> str:
+    """Found, counted and the difference, each only if the file supports it."""
+    found, counted = count_or_dash(runs.get("found")), count_or_dash(runs.get("pooled"))
+    left = found - counted if found is not None and counted is not None else None
+    if left is not None and left < 0:
+        left = None
+    if found is None and counted is None:
+        return ""
+    body = "".join(
+        f'<tr><th scope="row">{e(label)}</th>'
+        f'<td data-label="Runs">{DASH if value is None else e(value)}</td></tr>'
+        for label, value in (
+            ("Run folders found", found),
+            ("Finished and counted in the rates", counted),
+            ("Found but not counted", left),
+        )
+    )
+    table = (
+        '<table class="outcome"><colgroup><col style="width:70%"><col style="width:30%">'
+        '</colgroup><thead><tr><th scope="col">Whole set</th><th scope="col">Runs</th></tr>'
+        f"</thead><tbody>{body}</tbody></table>"
+    )
+    return panels.tablewrap("Run accounting: found, counted and not counted", table)
+
+
+def accounting_by_arm(results: dict[str, Any]) -> str:
+    """The counted runs of each rule and sabotage setting by arm, from the cells (a run is in one
+    cell, so sums over boundaries and compaction settings count no run twice). An arm with no cell
+    is a dash."""
+    counts: dict[tuple[str, str, str], int] = {}
+    for cid, body in results.get("constraints", {}).items():
+        for b in body.get("boundaries", {}).values():
+            for cell in b.get("cells", []):
+                key = (cid, cell["operator"], cell["arm"])
+                counts[key] = counts.get(key, 0) + cell["n"]
+    rule_ops = sorted({k[:2] for k in counts}, key=lambda k: (k[0], k[1] != "none", k[1]))
+    if not rule_ops:
+        return ""
+    labels = [ARM_LABEL[arm] for arm in ARM_ORDER] + ["All arms"]
+    body = ""
+    for cid, op in rule_ops:
+        per_arm = [counts.get((cid, op, arm)) for arm in ARM_ORDER]
+        total = sum(n for (c, o, _), n in counts.items() if (c, o) == (cid, op))
+        values = per_arm + [total]
+        body += (
+            f'<tr><th scope="row"><code>{e(cid)}</code> {e(op_row(op))}</th>'
+            + "".join(
+                f'<td data-label="{e(label)}">{DASH if v is None else e(v)}</td>'
+                for label, v in zip(labels, values, strict=True)
+            )
+            + "</tr>"
+        )
+    cols = "".join(f'<col style="width:{w}%">' for w in (30, 14, 14, 14, 14, 14))
+    table = (
+        f'<table class="outcome"><colgroup>{cols}</colgroup><thead><tr>'
+        '<th scope="col">Rule and sabotage setting</th>'
+        + "".join(f'<th scope="col">{e(label)}</th>' for label in labels)
+        + f"</tr></thead><tbody>{body}</tbody></table>"
+    )
+    return panels.tablewrap("Run accounting: counted runs by rule, sabotage setting and arm", table)
+
+
+def run_accounting(results: dict[str, Any], index: int) -> str:
+    """The set's run accounting as tables, every figure computed from its own results file: what
+    was found, counted and not counted, and the counted runs by rule, sabotage setting and arm.
+    Nothing a file does not carry is shown (a dash), and a file with none of it gets no section."""
+    inner = accounting_totals(results.get("runs") or {}) + accounting_by_arm(results)
+    if not inner:
+        return ""
+    sid = f"appendix-{index}-accounting"
+    return (
+        f'<section class="ogroup accounting" aria-labelledby="{sid}-h">'
+        f'<h3 id="{sid}-h">Run accounting</h3>{inner}'
+        f'<p class="note">{e(ACCOUNTING_NOTE)}</p></section>'
+    )
+
+
 def appendix_rule(cid: str, body: dict[str, Any], anchors: Anchors, explain: bool) -> str:
     """One rule of an appendix: its id, kind and counts. The rule's wording is never printed."""
     graded = is_graded(body)
@@ -2584,7 +2674,7 @@ def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str
         f'<h2 id="{sid}-h">{e(appendix.title)}</h2>'
         f'<p class="note">{e(APPENDIX_INTRO)}</p>{paragraphs}'
         f"{render_glance(results, anchors, index)}{appendix_accounting(results)}"
-        f"{appendix_differences(main, results)}"
+        f"{run_accounting(results, index)}{appendix_differences(main, results)}"
         f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
     )
 
