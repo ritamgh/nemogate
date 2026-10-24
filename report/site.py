@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from report import panels
+from report import cost, panels
 from schemas.ledger import Ledger, load_ledger_yaml
 
 FORMAT_VERSION = 2
@@ -2413,6 +2413,41 @@ def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | Non
     )
 
 
+def render_cost(results: dict[str, Any], anchors: Anchors, appendix: int | None = None) -> str:
+    """The "Cost of prevention" table (report/cost.py), right under "At a glance" and under the
+    same condition: nothing for a results file without exact tests, and nothing where no cell
+    carries the cost figures."""
+    if not has_exact_lines(results):
+        return ""
+    items, skipped = [], 0
+    for cid in sorted(results["constraints"]):
+        body = results["constraints"][cid]
+        if not is_graded(body):
+            continue
+        for bid in sorted(body.get("boundaries", {})):
+            b = body["boundaries"][bid]
+            for setting, op in glance_conditions(b):
+                found, left_out = cost.price_condition(b.get("cells", []), setting, op)
+                items += [((cid, bid, setting, op), row) for row in found]
+                skipped += left_out
+
+    def head(where: tuple, row: cost.PriceRow) -> str:
+        cid, bid, setting, op = where
+        body = results["constraints"][cid]
+        note = row_note(body, bid, {"compaction": setting})
+        return (
+            f'<a href="#{e(anchors.section(cid, bid))}">'
+            f"{glance_rule(cid, body, appendix is not None)}</a> "
+            f'<span class="op">{e(op_row(op))}</span>'
+            + (f'<span class="count">{e(note)}</span>' if note else "")
+        )
+
+    sid = "cost" if appendix is None else f"appendix-{appendix}-cost"
+    return cost.render_section(
+        items, skipped, head, sid, 2 if appendix is None else 3, panels.tablewrap
+    )
+
+
 def note_paragraphs(notes: str | None) -> list[str]:
     """Plain text split on blank lines, in order, empty paragraphs dropped."""
     return [
@@ -2531,6 +2566,96 @@ def appendix_accounting(results: dict[str, Any]) -> str:
     )
 
 
+ACCOUNTING_NOTE = (
+    "Each rule's row counts only the runs that were counted: the results file holds no record of "
+    "a run that errored or was left out for a single rule, arm or sabotage setting, so those "
+    "runs are shown for the whole set only, in the first table and under “Left out, by "
+    "reason”. A dash means the file has no figure there."
+)
+
+
+def count_or_dash(value: Any) -> int | None:
+    """A whole count from the file, or None for a missing or malformed one (shown as a dash)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def accounting_totals(runs: dict[str, Any]) -> str:
+    """Found, counted and the difference, each only if the file supports it."""
+    found, counted = count_or_dash(runs.get("found")), count_or_dash(runs.get("pooled"))
+    left = found - counted if found is not None and counted is not None else None
+    if left is not None and left < 0:
+        left = None
+    if found is None and counted is None:
+        return ""
+    body = "".join(
+        f'<tr><th scope="row">{e(label)}</th>'
+        f'<td data-label="Runs">{DASH if value is None else e(value)}</td></tr>'
+        for label, value in (
+            ("Run folders found", found),
+            ("Finished and counted in the rates", counted),
+            ("Found but not counted", left),
+        )
+    )
+    table = (
+        '<table class="outcome"><colgroup><col style="width:70%"><col style="width:30%">'
+        '</colgroup><thead><tr><th scope="col">Whole set</th><th scope="col">Runs</th></tr>'
+        f"</thead><tbody>{body}</tbody></table>"
+    )
+    return panels.tablewrap("Run accounting: found, counted and not counted", table)
+
+
+def accounting_by_arm(results: dict[str, Any]) -> str:
+    """The counted runs of each rule and sabotage setting by arm, from the cells (a run is in one
+    cell, so sums over boundaries and compaction settings count no run twice). An arm with no cell
+    is a dash."""
+    counts: dict[tuple[str, str, str], int] = {}
+    for cid, body in results.get("constraints", {}).items():
+        for b in body.get("boundaries", {}).values():
+            for cell in b.get("cells", []):
+                key = (cid, cell["operator"], cell["arm"])
+                counts[key] = counts.get(key, 0) + cell["n"]
+    rule_ops = sorted({k[:2] for k in counts}, key=lambda k: (k[0], k[1] != "none", k[1]))
+    if not rule_ops:
+        return ""
+    labels = [ARM_LABEL[arm] for arm in ARM_ORDER] + ["All arms"]
+    body = ""
+    for cid, op in rule_ops:
+        per_arm = [counts.get((cid, op, arm)) for arm in ARM_ORDER]
+        total = sum(n for (c, o, _), n in counts.items() if (c, o) == (cid, op))
+        values = per_arm + [total]
+        body += (
+            f'<tr><th scope="row"><code>{e(cid)}</code> {e(op_row(op))}</th>'
+            + "".join(
+                f'<td data-label="{e(label)}">{DASH if v is None else e(v)}</td>'
+                for label, v in zip(labels, values, strict=True)
+            )
+            + "</tr>"
+        )
+    cols = "".join(f'<col style="width:{w}%">' for w in (30, 14, 14, 14, 14, 14))
+    table = (
+        f'<table class="outcome"><colgroup>{cols}</colgroup><thead><tr>'
+        '<th scope="col">Rule and sabotage setting</th>'
+        + "".join(f'<th scope="col">{e(label)}</th>' for label in labels)
+        + f"</tr></thead><tbody>{body}</tbody></table>"
+    )
+    return panels.tablewrap("Run accounting: counted runs by rule, sabotage setting and arm", table)
+
+
+def run_accounting(results: dict[str, Any], index: int) -> str:
+    """The set's run accounting as tables, every figure computed from its own results file: what
+    was found, counted and not counted, and the counted runs by rule, sabotage setting and arm.
+    Nothing a file does not carry is shown (a dash), and a file with none of it gets no section."""
+    inner = accounting_totals(results.get("runs") or {}) + accounting_by_arm(results)
+    if not inner:
+        return ""
+    sid = f"appendix-{index}-accounting"
+    return (
+        f'<section class="ogroup accounting" aria-labelledby="{sid}-h">'
+        f'<h3 id="{sid}-h">Run accounting</h3>{inner}'
+        f'<p class="note">{e(ACCOUNTING_NOTE)}</p></section>'
+    )
+
+
 def appendix_rule(cid: str, body: dict[str, Any], anchors: Anchors, explain: bool) -> str:
     """One rule of an appendix: its id, kind and counts. The rule's wording is never printed."""
     graded = is_graded(body)
@@ -2583,8 +2708,9 @@ def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str
         f'<section class="appendix" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h2 id="{sid}-h">{e(appendix.title)}</h2>'
         f'<p class="note">{e(APPENDIX_INTRO)}</p>{paragraphs}'
-        f"{render_glance(results, anchors, index)}{appendix_accounting(results)}"
-        f"{appendix_differences(main, results)}"
+        f"{render_glance(results, anchors, index)}{render_cost(results, anchors, index)}"
+        f"{appendix_accounting(results)}"
+        f"{run_accounting(results, index)}{appendix_differences(main, results)}"
         f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
     )
 
@@ -2647,7 +2773,8 @@ def render(
     found = trace.found_by_rule if trace else None
     exact = has_exact_lines(results) or any(has_exact_lines(a.results) for a in appendices)
     body = (
-        f"{render_top(exact, render_glance(results, anchors))}{outcomes}{render_notes(notes)}"
+        f"{render_top(exact, render_glance(results, anchors) + render_cost(results, anchors))}"
+        f"{outcomes}{render_notes(notes)}"
         f"{render_key()}{render_fixes()}"
         f"{render_header(results, recalls)}"
         f"{panels.render_coverage(results, ledger, found, list(recalls))}"
@@ -2668,6 +2795,82 @@ def render(
         "<title>NemoGate: rule survival across handoffs</title>"
         f"<style>{css}</style></head><body><main>{body}</main></body></html>\n"
     )
+
+
+def numbers_in(text: str) -> list[str]:
+    """The number tokens of `text`, in order: a maximal run of digits (of any script, as
+    `str.isdigit` sees them) with an optional decimal part, a "." followed by more digits. A full
+    stop after a number is not a decimal point. Tokens are compared as typed, so 66 is not 660 and
+    the Arabic-Indic five is not 5.
+
+    The one allowance: a digit run directly after a letter, or after a letter and a hyphen, is
+    part of an identifier (a label, never a statistic) and is left out, decimal part included.
+    It knows nothing of what any identifier means. The same rule applies to the page's text, so
+    the digits of a hash fragment on the page do not vouch for a number either."""
+    found, i, n = [], 0, len(text)
+    while i < n:
+        if not text[i].isdigit():
+            i += 1
+            continue
+        j = i
+        while j < n and text[j].isdigit():
+            j += 1
+        if j + 1 < n and text[j] == "." and text[j + 1].isdigit():
+            j += 1
+            while j < n and text[j].isdigit():
+                j += 1
+        before = text[max(i - 2, 0) : i]
+        if not (before[-1:].isalpha() or (before[-1:] == "-" and before[:-1].isalpha())):
+            found.append(text[i:j])
+        i = j
+    return found
+
+
+def visible_numbers(markup: str) -> set[str]:
+    """The numbers in the text a reader sees: tags and style dropped, entities decoded."""
+    markup = re.sub(r"<style>.*?</style>", " ", markup, flags=re.S)
+    return set(numbers_in(html.unescape(re.sub(r"<[^>]+>", " ", markup))))
+
+
+def notes_problems(
+    results: dict[str, Any],
+    appendices: Sequence[Appendix],
+    files: Sequence[tuple[Any, str | None]],
+    **evidence: Any,
+) -> list[str]:
+    """One message per notes file that holds a number the page does not show. Every number on the
+    page comes from the results file, so a note may only repeat one. `files` is (path, text) for
+    the main notes, then one per appendix, in order (path None: no notes). The numbers a note is
+    held to are those of its own set, read off the page as built with no notes at all: the main
+    part for `--notes`, the appendix's own section for its notes, so a note cannot vouch for
+    itself or borrow a number from another set. A message names the file and, per line, the
+    unmatched numbers; never the line, because appendix notes can sit next to withheld rule text."""
+    if not any(path and text for path, text in files):
+        return []
+    page = render(
+        results,
+        notes=None,
+        appendices=[Appendix(a.title, a.results) for a in appendices],
+        **evidence,
+    )
+    body = page[page.index("<body>") :]
+    parts = re.split(r'(?=<section class="appendix" id="appendix-)', body)
+    problems = []
+    for (path, text), part in zip(files, parts, strict=True):
+        if not path or not text:
+            continue
+        shown = visible_numbers(part)
+        bad = []
+        for number, line in enumerate(text.split("\n"), 1):
+            missing = [n for n in dict.fromkeys(numbers_in(line)) if n not in shown]
+            if missing:
+                bad.append(f"line {number}: {', '.join(missing)}")
+        if bad:
+            problems.append(
+                f"{path}: numbers the results do not hold ({'; '.join(bad)}); "
+                "a note may only repeat a number the page shows"
+            )
+    return problems
 
 
 def load_appendix(title: str, results_file: str, notes_file: str | None = None) -> Appendix:
@@ -2734,21 +2937,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         notes = args.notes.read_text(encoding="utf-8") if args.notes else None
         appendices = [load_appendix(*values) for values in args.appendix]
         results = json.loads(args.results.read_text(encoding="utf-8"))
-        page = render(
-            results,
-            trace=panels.load_trace_evidence(
+        evidence = {
+            "trace": panels.load_trace_evidence(
                 args.runs, results.get("reproducibility"), rule_groups(results)
             )
             if args.runs
             else None,
-            repairs=panels.load_repairs(args.repair) if args.repair else None,
-            ledger=load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
+            "repairs": panels.load_repairs(args.repair) if args.repair else None,
+            "ledger": load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
             if args.ledger
             else None,
-            notes=notes,
-            appendices=appendices,
-            recalls=panels.load_recall(args.recall) if args.recall else (),
+            "recalls": panels.load_recall(args.recall) if args.recall else (),
+        }
+        problems = notes_problems(
+            results,
+            appendices,
+            [(args.notes, notes)]
+            + [
+                (v[2] if len(v) == 3 else None, a.notes)
+                for v, a in zip(args.appendix, appendices, strict=True)
+            ],
+            **evidence,
         )
+        if problems:
+            for problem in problems:
+                print(f"report.site: {problem}", file=sys.stderr)
+            return 2
+        page = render(results, notes=notes, appendices=appendices, **evidence)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")
     except (OSError, ValueError) as exc:
