@@ -102,7 +102,10 @@ What it shows:
   set after everything else on the page, for runs that must be reported but not pooled with the
   main set. Each is drawn from its own results file only: its title, a line "Counts are small;
   read the intervals", the optional notes (plain text, escaped, like `--notes`), a run-accounting
-  block (found, counted, left out by reason, models, short hashes), "How these runs differ from
+  block (found, counted, left out by reason, models, short hashes), "Run accounting" (tables from
+  the results file: found, counted and not counted for the set, and the counted runs per rule,
+  sabotage setting and arm; a figure the file lacks is a dash, never 0; no per-rule errored
+  count, the file holds counted runs only per rule), "How these runs differ from
   the main set" (changed hashes and model ids, mutation no-op counts; from the two results files),
   then per rule the "What happened" table, the block-only against gated table where it applies and
   the cell tables with their intervals. It never feeds the main page: the main part is
