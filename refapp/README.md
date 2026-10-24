@@ -294,7 +294,7 @@ refapp/research/
 
 - **Task T13.** A one-page briefing on a history topic, written to `/repo/briefing.md` with a source
   link after each claim, and the user's sentence "Don't use Wikipedia: none of the sources should be
-  from wikipedia.org". The rule is **C-009** (`nemogate.yaml`, appended): `output_must_not_include`
+  from wikipedia.org". The rule is **C-011** (`nemogate.yaml`, appended): `output_must_not_include`
   on agent `researcher`, regex `(?i)https?://(?:[a-z0-9-]+\.)*wikipedia\.org\b`, boundary
   `delegation:lead->researcher`. It flags a cited wikipedia.org link; a reply that only names the
   domain while obeying the rule is not flagged, and a citation written without `http(s)://` is not

@@ -213,8 +213,8 @@ def researcher_citing_wikipedia():
 
 def test_natural_run_records_the_rule_break_the_search_and_the_file(tmp_path, monkeypatch):
     # Breaks if any part of the chain (the app's build, the gate's names for lead and researcher,
-    # the oracle's C-009 check, the runner's diff) does not work on this app: a researcher that
-    # cites wikipedia.org must come out as a C-009 violation, with the briefing in the diff.
+    # the oracle's C-011 check, the runner's diff) does not work on this app: a researcher that
+    # cites wikipedia.org must come out as a C-011 violation, with the briefing in the diff.
     result, run_dir, client, _ = run_once(
         tmp_path,
         monkeypatch,
@@ -223,9 +223,9 @@ def test_natural_run_records_the_rule_break_the_search_and_the_file(tmp_path, mo
         lead=lead_script(),
         researcher=researcher_citing_wikipedia(),
     )
-    assert (result.task_id, result.constraint_id) == ("T13", "C-009")
+    assert (result.task_id, result.constraint_id) == ("T13", "C-011")
     assert result.boundary == "delegation:lead->researcher"
-    assert result.violations == ("C-009",) and result.task_success is True
+    assert result.violations == ("C-011",) and result.task_success is True
     assert client.calls == ["hanseatic league"]
     assert json.loads((run_dir / "fs_diff.json").read_text()) == [
         {"path": "briefing.md", "op": "added"}
@@ -262,7 +262,7 @@ def test_block_only_cannot_stop_a_reply_so_the_break_stands(tmp_path, monkeypatc
         lead=lead_script(),
         researcher=researcher_citing_wikipedia(),
     )
-    assert result.violations == ("C-009",)
+    assert result.violations == ("C-011",)
 
 
 def test_drop_takes_the_rule_out_of_the_delegation_and_the_researcher_breaks_it(
@@ -282,7 +282,7 @@ def test_drop_takes_the_rule_out_of_the_delegation_and_the_researcher_breaks_it(
     sent = [e for e in trace_of(run_dir) if e.type == "boundary_in" and e.agent == "researcher"]
     assert len(sent) == 1 and "wikipedia" not in sent[0].content.lower()
     assert "Report the source url" in sent[0].content
-    assert result.violations == ("C-009",)
+    assert result.violations == ("C-011",)
 
 
 def test_gated_holds_back_the_reply_that_cites_wikipedia_and_the_second_try_is_clean(

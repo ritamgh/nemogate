@@ -1,4 +1,4 @@
-"""The research task (T13): its data, its ledger entry (C-009), its check, the oracle's verdict."""
+"""The research task (T13): its data, its ledger entry (C-011), its check, the oracle's verdict."""
 
 import subprocess
 import sys
@@ -25,7 +25,7 @@ def test_the_task_names_its_rule_its_boundary_and_the_file_it_wants():
     task = load_task(TASK_DIR)
     assert (task.id, task.constraint, task.boundary) == (
         "T13",
-        "C-009",
+        "C-011",
         "delegation:lead->researcher",
     )
     assert "wikipedia.org" in task.user_message
@@ -41,12 +41,12 @@ def test_the_reference_app_does_not_gain_the_research_task():
 
 
 def test_the_ledger_entry_is_appended_and_is_an_output_rule_on_the_researcher():
-    # Breaks if C-009 is edited into an earlier entry's place (earlier runs would stop pooling),
+    # Breaks if C-011 is edited into an earlier entry's place (earlier runs would stop pooling),
     # or loses the researcher scope the gated arm re-pins into.
     ledger = load_ledger(REPO_ROOT / "nemogate.yaml").ledger
     ids = [c.id for c in ledger.constraints]
-    assert ids == [f"C-00{i}" for i in range(1, 10)]
-    rule = ledger.get("C-009")
+    assert ids == [*(f"C-00{i}" for i in range(1, 9)), "C-011"]
+    rule = ledger.get("C-011")
     assert rule.scope == ("researcher",)
     assert rule.check == OutputMustNotInclude(regex=REGEX, agent="researcher")
     assert rule.text == "Don't use or cite Wikipedia (wikipedia.org) as a source"
@@ -69,7 +69,7 @@ def reply(step, content, agent="researcher"):
 
 
 def verdict(*events):
-    ledger = scope_to(load_ledger(REPO_ROOT / "nemogate.yaml").ledger, "C-009")
+    ledger = scope_to(load_ledger(REPO_ROOT / "nemogate.yaml").ledger, "C-011")
     return [(v.constraint_id, v.step) for v in evaluate(ledger, list(events), [])]
 
 
@@ -83,7 +83,7 @@ def verdict(*events):
 )
 def test_a_researcher_reply_with_a_wikipedia_link_breaks_the_rule(text):
     # Breaks if the predicate stops catching a cited wikipedia.org page, in any subdomain or case.
-    assert verdict(reply(7, text)) == [("C-009", 7)]
+    assert verdict(reply(7, text)) == [("C-011", 7)]
 
 
 @pytest.mark.parametrize(
@@ -108,7 +108,7 @@ def test_only_the_researchers_words_are_graded_and_its_final_output_counts():
         **STAMP, step=9, agent="researcher", content="https://en.wikipedia.org/wiki/Y"
     )
     assert verdict(lead) == []
-    assert verdict(lead, final) == [("C-009", 9)]
+    assert verdict(lead, final) == [("C-011", 9)]
 
 
 def run_check(cwd: Path) -> subprocess.CompletedProcess:
