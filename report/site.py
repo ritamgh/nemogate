@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from report import panels
+from report import cost, panels
 from schemas.ledger import Ledger, load_ledger_yaml
 
 FORMAT_VERSION = 2
@@ -2413,6 +2413,41 @@ def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | Non
     )
 
 
+def render_cost(results: dict[str, Any], anchors: Anchors, appendix: int | None = None) -> str:
+    """The "Cost of prevention" table (report/cost.py), right under "At a glance" and under the
+    same condition: nothing for a results file without exact tests, and nothing where no cell
+    carries the cost figures."""
+    if not has_exact_lines(results):
+        return ""
+    items, skipped = [], 0
+    for cid in sorted(results["constraints"]):
+        body = results["constraints"][cid]
+        if not is_graded(body):
+            continue
+        for bid in sorted(body.get("boundaries", {})):
+            b = body["boundaries"][bid]
+            for setting, op in glance_conditions(b):
+                found, left_out = cost.price_condition(b.get("cells", []), setting, op)
+                items += [((cid, bid, setting, op), row) for row in found]
+                skipped += left_out
+
+    def head(where: tuple, row: cost.PriceRow) -> str:
+        cid, bid, setting, op = where
+        body = results["constraints"][cid]
+        note = row_note(body, bid, {"compaction": setting})
+        return (
+            f'<a href="#{e(anchors.section(cid, bid))}">'
+            f"{glance_rule(cid, body, appendix is not None)}</a> "
+            f'<span class="op">{e(op_row(op))}</span>'
+            + (f'<span class="count">{e(note)}</span>' if note else "")
+        )
+
+    sid = "cost" if appendix is None else f"appendix-{appendix}-cost"
+    return cost.render_section(
+        items, skipped, head, sid, 2 if appendix is None else 3, panels.tablewrap
+    )
+
+
 def note_paragraphs(notes: str | None) -> list[str]:
     """Plain text split on blank lines, in order, empty paragraphs dropped."""
     return [
@@ -2673,7 +2708,8 @@ def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str
         f'<section class="appendix" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h2 id="{sid}-h">{e(appendix.title)}</h2>'
         f'<p class="note">{e(APPENDIX_INTRO)}</p>{paragraphs}'
-        f"{render_glance(results, anchors, index)}{appendix_accounting(results)}"
+        f"{render_glance(results, anchors, index)}{render_cost(results, anchors, index)}"
+        f"{appendix_accounting(results)}"
         f"{run_accounting(results, index)}{appendix_differences(main, results)}"
         f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
     )
@@ -2737,7 +2773,8 @@ def render(
     found = trace.found_by_rule if trace else None
     exact = has_exact_lines(results) or any(has_exact_lines(a.results) for a in appendices)
     body = (
-        f"{render_top(exact, render_glance(results, anchors))}{outcomes}{render_notes(notes)}"
+        f"{render_top(exact, render_glance(results, anchors) + render_cost(results, anchors))}"
+        f"{outcomes}{render_notes(notes)}"
         f"{render_key()}{render_fixes()}"
         f"{render_header(results, recalls)}"
         f"{panels.render_coverage(results, ledger, found, list(recalls))}"
