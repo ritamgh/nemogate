@@ -56,7 +56,7 @@ def test_app_has_every_protocol_member_with_the_same_sync_or_async_kind():
 
 def test_tasks_are_the_research_tasks_only():
     # Breaks if the research app starts serving the coding app's tasks (or none).
-    assert [t.id for t in APP.tasks()] == ["T13"]
+    assert [t.id for t in APP.tasks()] == ["T13", "T14"]
 
 
 def test_the_selector_finds_this_app(monkeypatch):
@@ -162,7 +162,7 @@ class StubbedApp(ResearchApp):
         return True, ""
 
 
-def run_once(tmp_path, monkeypatch, *, arm, operator, lead, researcher, helper=None):
+def run_once(tmp_path, monkeypatch, *, arm, operator, lead, researcher, helper=None, task_id="T13"):
     monkeypatch.setenv("NEMOGATE_SPEND_LOG", str(tmp_path / "spend.jsonl"))
     monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
     (tmp_path / "repo").mkdir()
@@ -194,7 +194,8 @@ def run_once(tmp_path, monkeypatch, *, arm, operator, lead, researcher, helper=N
         backend_factory=backend_for,
         allow_dirty=True,
     )
-    result = asyncio.run(runner.run_one(app.tasks()[0], arm, operator, seed=0, repo_ref="HEAD"))
+    by_id = {t.id: t for t in app.tasks()}
+    result = asyncio.run(runner.run_one(by_id[task_id], arm, operator, seed=0, repo_ref="HEAD"))
     (run_dir,) = (tmp_path / "runs").iterdir()
     return result, run_dir, client, tmp_path
 
@@ -315,9 +316,81 @@ def test_gated_holds_back_the_reply_that_cites_wikipedia_and_the_second_try_is_c
 
 
 def test_the_task_is_not_refused_in_any_arm_with_the_built_operators():
-    # Breaks if T13's cells are refused (a boundary the gate would not mutate): the pilot and the
-    # full arms must plan every cell.
+    # Breaks if the cells of T13 or T14 are refused (a boundary the gate would not mutate): the
+    # pilot and the full arms must plan every cell.
     ledger = load_ledger(REPO_ROOT / "nemogate.yaml").ledger
     arms = [Arm.natural, Arm.mutated, Arm.block_only, Arm.gated]
     operators = [Operator.none, Operator.drop]
-    assert refusals(APP, ledger, ["T13"], arms, operators) == []
+    assert refusals(APP, ledger, ["T13", "T14"], arms, operators) == []
+
+
+def cited_briefing_call():
+    """The lead's file for T14: a claim with its url in parentheses and a Sources list."""
+    text = f"Found in 1901 ({GOOD}).\n\nSources\n- {GOOD}\n"
+    return call("write_file", "w1", file_path="/repo/briefing.md", content=text)
+
+
+def test_t14_natural_run_goes_through_the_runner_and_the_rule_break_is_scored(
+    tmp_path, monkeypatch
+):
+    # Breaks if T14 cannot run through the real runner, gate and oracle like T13 (its task id, the
+    # shared C-011 and the boundary must resolve), or if a researcher that prints a wikipedia.org
+    # url in parentheses, as T14's message requires of every claim, is not scored as a violation.
+    reply = f"Found in 1901 (https://en.wikipedia.org/wiki/Antikythera_mechanism). Also ({GOOD})."
+    result, run_dir, *_ = run_once(
+        tmp_path,
+        monkeypatch,
+        arm=Arm.natural,
+        operator=Operator.none,
+        lead=[task_call("t1"), cited_briefing_call(), AIMessage(content="Briefing written.")],
+        researcher=[search_call("s1"), AIMessage(content=reply)],
+        task_id="T14",
+    )
+    assert (result.task_id, result.constraint_id) == ("T14", "C-011")
+    assert result.boundary == "delegation:lead->researcher"
+    assert result.violations == ("C-011",) and result.task_success is True
+    assert json.loads((run_dir / "fs_diff.json").read_text()) == [
+        {"path": "briefing.md", "op": "added"}
+    ]
+
+
+def test_t14_drop_and_gated_run_on_the_real_runner(tmp_path, monkeypatch):
+    # Breaks if `drop` finds nothing to remove in T14's delegation, or if gated stops holding
+    # back the reply that prints a wikipedia.org url.
+    wiki_reply = f"Found in 1901 (https://en.wikipedia.org/wiki/Antikythera_mechanism). ({GOOD})."
+    (tmp_path / "drop").mkdir()
+    (tmp_path / "gated").mkdir()
+    dropped, run_dir, *_ = run_once(
+        tmp_path / "drop",
+        monkeypatch,
+        arm=Arm.mutated,
+        operator=Operator.drop,
+        lead=[task_call("t1"), cited_briefing_call(), AIMessage(content="Briefing written.")],
+        researcher=[search_call("s1"), AIMessage(content=wiki_reply)],
+        helper=[picks(2)],
+        task_id="T14",
+    )
+    sent = [e for e in trace_of(run_dir) if e.type == "boundary_in" and e.agent == "researcher"]
+    assert "wikipedia" not in sent[0].content.lower()
+    assert dropped.violations == ("C-011",)
+
+    gated, gated_dir, *_ = run_once(
+        tmp_path / "gated",
+        monkeypatch,
+        arm=Arm.gated,
+        operator=Operator.none,
+        lead=[
+            task_call("t1"),
+            task_call("t2"),
+            cited_briefing_call(),
+            AIMessage(content="Briefing written."),
+        ],
+        researcher=[
+            search_call("s1"),
+            AIMessage(content=wiki_reply),
+            AIMessage(content=f"Found in 1901 ({GOOD})."),
+        ],
+        task_id="T14",
+    )
+    held = [e for e in trace_of(gated_dir) if e.type == "gate_block" and e.tool is None]
+    assert len(held) == 1 and gated.violations == ()

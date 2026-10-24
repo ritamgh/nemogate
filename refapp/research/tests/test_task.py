@@ -37,7 +37,7 @@ def test_the_reference_app_does_not_gain_the_research_task():
     # Breaks if the research task lands in refapp/tasks/, where the default sweep would run it
     # with the coding team.
     assert "T13" not in [t.id for t in load_tasks()]
-    assert [t.id for t in load_tasks(RESEARCH / "tasks")] == ["T13"]
+    assert [t.id for t in load_tasks(RESEARCH / "tasks")] == ["T13", "T14"]
 
 
 def test_the_ledger_entry_is_appended_and_is_an_output_rule_on_the_researcher():
