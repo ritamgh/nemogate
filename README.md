@@ -16,6 +16,8 @@ Every model call goes through **Nebius Token Factory** (`https://api.tokenfactor
 
 The system under test and every forked arm run inside **Nebius Sandboxes** (Contree): each run starts a fresh session from the same seed image, and a filesystem diff of the final image shows exactly what the agents changed. Unit tests, helper-model work (rule extraction, mutation, picking where to fork), scoring and the report run outside the sandboxes, and scoring is deterministic, so it can be re-checked offline from the saved trace and diff. `common/llm.py` is the only place a model client is built. It keeps a running spend total, refuses calls past the cap, and stamps a hash of the serving settings onto every trace line.
 
+**Where Token Factory and Sandboxes sped us up.** One OpenAI-compatible endpoint serves all three Nemotron sizes under one key, so each job gets the cheapest model that can do it and changing a model is a config change (`get_model(role)`). `GET /v1/models` lists each model's price and rate limits, which the budget check reads. At $0.06 to $3.00 per million tokens a full three-agent coding run costs about $0.12 to $0.19, so a study of several hundred live runs, each one re-run from the same point under four conditions, cost about $23 of credit on one account. Sandboxes make the re-running cheap: a fork is a new session on a snapshot, 1.3 s at the median. What was hard on these platforms, with evidence, is in [`docs/submission/FEEDBACK.md`](docs/submission/FEEDBACK.md).
+
 ## How it works
 
 ```
@@ -40,12 +42,14 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
 
   Operators run on delegation boundaries (planner → subagent) and on return boundaries (subagent → planner).
 - **Replay** (`replay/`): the runner writes the run config, starts the team from the seed image with the gate, computes the filesystem diff and the task check, calls the oracle, and writes a run record. The record carries the model ids, the safe-config hash, the ledger hash, the repo commit and the lockfile hash, so only runs made under identical conditions are ever pooled.
+- **Which subagent mode.** Deep Agents' default subagent is isolated: it sees only the description the planner writes for it. An experimental `fork` mode lets a subagent continue the parent's conversation instead. Every result in this repository is for the default mode; we have not measured `fork`.
 - **Reference app** (`refapp/`): a small Flask + sqlite3 task tracker and a Deep Agents coding team (planner, coder, reviewer). It's test data: nothing in the pipeline names it, and adding a task is a data-only change.
 
 ## Related work
 
 - **[Lost in Context Compaction](https://arxiv.org/abs/2608.11242)** (arXiv 2608.11242) is the closest work. It measures what happens to a user's standing instructions ("side constraints") when an agent compacts its own context. The compactors it tests kept 17% of injected constraints on average. In its inbox agent, deleting emails without approval went from 0 of 100 sessions before compaction to 30 of 100 after. Its fix is an extractor that appends the constraints to the compacted context, and restating the constraint cut the inbox violations to 13 of 100, not to zero. It studies one agent's own context, not handoffs between agents.
   NemoGate looks at the other place a rule can be lost: the delegation and return boundaries of a multi-agent team. It proves a loss with forked runs, grades obedience with a deterministic oracle over tool calls, agent replies and the filesystem diff, and re-pins the rule at the handoff in the `gated` arm. The mechanism is similar to theirs, so the new part is where it runs and how it is graded.
+- **[NVIDIA NeMo Guardrails](https://docs.nvidia.com/nemo/guardrails/latest/introduction.html)** puts rails around a model: it checks inputs and outputs, validates tool calls, and has a LangGraph integration for multi-agent workflows. NemoGate asks a different question of a Deep Agents team: did this user instruction survive this handoff, and does carrying it across help? The two fit together, since a rail could enforce what NemoGate shows is being lost. We did not integrate with NeMo Guardrails and say nothing about it beyond its documentation.
 - **[MAST](https://arxiv.org/abs/2503.13657)** (arXiv 2503.13657) labels failures in over 1,600 multi-agent traces with 14 failure modes, including "disobey task specification". It labels traces after the fact. NemoGate tests one failure, rule loss at a handoff, by changing the handoff and re-running.
 - **[Who&When](https://arxiv.org/abs/2505.00212)** (arXiv 2505.00212) asks which agent and which step caused a failure in a multi-agent trace. It attributes failures. It does not test whether a given rule was lost at a handoff.
 
