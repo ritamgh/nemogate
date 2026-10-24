@@ -1,7 +1,7 @@
-"""report/site.py: the exact-test lines. `replay.stats` writes an optional `exact_tests` list per
-boundary; the page prints one plain line per entry beside the gated-minus-block-only interval
-lines, taking every number and arm name from the entry. Fixture entries are hand-built; every
-expected number below was checked by hand (McNemar: 2 * P(X <= 1 | n = 6, 1/2) = 14/64)."""
+"""report/site.py: the exact tests. `replay.stats` writes an optional `exact_tests` list per
+boundary; the page prints one table per boundary, a row per entry, under the gated-minus-block-only
+interval lines, taking every number and arm name from the entry. Fixture entries are hand-built;
+every expected number below was checked by hand (McNemar: 2 * P(X <= 1 | n = 6, 1/2) = 14/64)."""
 
 import copy
 import re
@@ -74,49 +74,112 @@ def page_data(*entries: dict) -> dict:
     return data
 
 
-def lines(page: str, cid: str = "C-900") -> list[str]:
-    """The text of every exact-test paragraph of one rule's group, in page order."""
+def tables(page: str, cid: str = "C-900") -> list[str]:
+    """Every exact-test table of one rule's group, in page order."""
+    return re.findall(r'<table class="blocks exact">.*?</table>', group(page, cid), flags=re.S)
+
+
+def rows(page: str, cid: str = "C-900") -> list[list[str]]:
+    """The body rows of the rule's exact-test table as the text of their seven cells, in page
+    order: outcome, operator, gated, block-only, test, p over runs or pairs, p by source."""
+    (table,) = tables(page, cid)
+    body = table.split("<tbody>")[1]
+    return [
+        [text_of(c).strip() for c in re.findall(r"<t[hd][ >].*?</t[hd]>", row, flags=re.S)]
+        for row in re.findall(r"<tr>.*?</tr>", body, flags=re.S)
+    ]
+
+
+def footnote(page: str, cid: str = "C-900") -> str:
+    """The text of the paragraphs under the exact-test table."""
     block = group(page, cid)
-    paras = re.findall(r'<p class="note exact">(.*?)</p>', block, flags=re.S)
-    return [text_of(p).strip() for p in paras]
+    table = tables(page, cid)[0]
+    after = block[block.index(table) + len(table) :]
+    return " ".join(
+        text_of(p).strip()
+        for p in re.findall(r'<p class="note exact">(.*?)</p>', after, flags=re.S)
+    )
 
 
-# --- the lines ----------------------------------------------------------------------------------
+DASH = "\u2014"
 
 
-def test_fisher_line_has_the_outcome_both_counts_and_p_from_the_entry():
-    # Breaks if the independent-runs line is hand-typed, drops a count, or swaps the arms.
-    out = lines(site.render(page_data(FISHER_V)))
+# --- the table ----------------------------------------------------------------------------------
+
+
+def test_a_fisher_row_has_the_outcome_both_counts_and_p_from_the_entry():
+    # Breaks if the independent-runs row is hand-typed, drops a count, swaps the arms or shows a
+    # by-source figure a Fisher test does not have.
+    out = rows(site.render(page_data(FISHER_V)))
 
     assert out == [
-        "Exact test (Fisher, independent runs; drop): broke the rule in 0 of 4 gated runs "
-        "against 1 of 2 block-only runs, p = 0.333."
+        [
+            "Broke the rule",
+            "drop",
+            "0 of 4 runs",
+            "1 of 2 runs",
+            "Fisher, independent runs",
+            "0.333",
+            DASH,
+        ]
     ]
 
 
-def test_mcnemar_line_has_the_pairs_both_p_values_and_the_source_floor():
-    # Breaks if the paired line shows only one p, mixes up whose count is whose, or leaves out
-    # the smallest p 4 sources can reach (2 * 0.5^4 = 0.125).
-    out = lines(site.render(page_data(MCNEMAR_V)))
+def test_a_mcnemar_row_has_the_pairs_both_p_values_and_the_sources():
+    # Breaks if the paired row shows only one p, mixes up whose count is whose, or leaves out the
+    # sources the cautious figure counts (8 pairs: 5 only block-only, 1 only gated; 4 sources).
+    out = rows(site.render(page_data(MCNEMAR_V)))
 
     assert out == [
-        "Exact test (McNemar, matched forks of the same sources; drop): in 8 matched pairs, "
-        "only block-only broke the rule in 5, only gated in 1, p = 0.219 over the pairs; "
-        "counting each of 4 sources once, p = 0.625 (with 4 sources the smallest p possible "
-        "is 0.125)."
+        [
+            "Broke the rule",
+            "drop",
+            "1 of 8 pairs (only this arm)",
+            "5 of 8 pairs (only this arm)",
+            "McNemar, matched forks of the same sources",
+            "0.219",
+            "0.625 (4 sources)",
+        ]
     ]
 
 
-def test_swapping_a_and_b_swaps_who_is_who_in_both_kinds_of_line():
-    # Breaks if the code assumes `a` is gated: the entry names its own arms.
+def test_each_boundary_has_one_table_however_many_entries_it_has():
+    # Breaks if the entries are printed as separate tables or paragraphs again.
+    page = site.render(page_data(FISHER_V, MCNEMAR_V, fisher("done", "drop", 4, 4, 1, 2, 0.06)))
+
+    assert len(tables(page)) == 1
+    assert len(rows(page)) == 3
+    assert 'class="tablewrap"' in group(page, "C-900")
+    assert 'class="note exact">Exact test' not in page
+
+
+def test_the_table_head_names_its_seven_columns():
+    # Breaks if a column is unnamed, or a figure sits under the wrong name.
+    (table,) = tables(site.render(page_data(FISHER_V)))
+    head = re.findall(r'<th scope="col">(.*?)</th>', table)
+
+    assert head == [
+        "Outcome",
+        "Operator",
+        "Gated",
+        "Block-only",
+        "Test",
+        "p over runs or pairs",
+        "p counting each source once",
+    ]
+
+
+def test_swapping_a_and_b_swaps_who_is_who_in_both_kinds_of_row():
+    # Breaks if the code assumes `a` is gated: the entry names its own arms, so the counts of
+    # the gated arm stay in the Gated column when it is `b`.
     swapped_f = fisher("violations", "drop", 1, 2, 0, 4, 0.333333, a="block_only", b="gated")
     swapped_m = mcnemar(
         "violations", "drop", 5, 1, 0.21875, 4, 0, 3, 1, 0.625, a="block_only", b="gated"
     )
-    out = lines(site.render(page_data(swapped_f, swapped_m)))
+    out = rows(site.render(page_data(swapped_f, swapped_m)))
 
-    assert "broke the rule in 1 of 2 block-only runs against 0 of 4 gated runs" in out[0]
-    assert "only gated broke the rule in 1, only block-only in 5" in out[1]
+    assert out[0][2:4] == ["0 of 4 runs", "1 of 2 runs"]
+    assert out[1][2:4] == ["1 of 8 pairs (only this arm)", "5 of 8 pairs (only this arm)"]
 
 
 def test_outcome_words_for_attempts_and_done():
@@ -127,11 +190,17 @@ def test_outcome_words_for_attempts_and_done():
             fisher("done", "drop", 4, 4, 1, 2, 0.060606),
         )
     )
-    out = lines(page)
+    out = rows(page)
 
-    assert "tried the forbidden action in 0 of 4 gated runs against 1 of 2 block-only" in out[0]
-    assert "did the job and kept the rule in 4 of 4 gated runs against 1 of 2 block-only" in out[1]
-    assert "p = 0.0606" in out[1]
+    assert out[0][0] == "Tried the forbidden action" and out[0][2:4] == [
+        "0 of 4 runs",
+        "1 of 2 runs",
+    ]
+    assert out[1][0] == "Did the job and kept the rule" and out[1][2:4] == [
+        "4 of 4 runs",
+        "1 of 2 runs",
+    ]
+    assert out[1][5] == "0.0606"
 
 
 @pytest.mark.parametrize(
@@ -153,60 +222,67 @@ def test_p_values_use_three_significant_figures_and_small_ones_read_below_0_001(
     assert site.p_text(p) == text
 
 
-def test_the_source_floor_is_shown_only_for_mcnemar_and_only_without_ties():
-    # Breaks if the floor is printed for a Fisher entry, or for a source test that dropped ties
-    # (then the sources tested are fewer than n_sources and 2 * 0.5^n_sources would be wrong).
-    with_ties = mcnemar("violations", "drop", 1, 5, 0.21875, 4, 1, 1, 2, 0.625)
-    out = lines(site.render(page_data(FISHER_V, MCNEMAR_V, with_ties)))
+def test_a_tiny_p_reads_below_0_001_in_both_p_columns():
+    # Breaks if a p under 0.001 prints as "0" or "1e-05" in the table, or the cautious column
+    # keeps the exact figure.
+    tiny = mcnemar("violations", "drop", 0, 12, 0.000488, 12, 0, 0, 12, 0.000488)
+    (row,) = rows(site.render(page_data(tiny)))
 
-    assert "smallest p possible" not in out[0]
-    assert "smallest p possible is 0.125" in out[1]
-    assert "counting each of 4 sources once, p = 0.625." in out[2]
-    assert "smallest p" not in out[2]
+    assert row[5:] == ["< 0.001", "< 0.001 (12 sources)"]
+
+
+def test_the_source_floor_is_noted_only_for_mcnemar_and_only_without_ties():
+    # Breaks if the floor is printed for a Fisher entry alone, or for a source test that dropped
+    # ties (then the sources tested are fewer than n_sources and 2 * 0.5^n_sources would be wrong).
+    with_ties = mcnemar("violations", "hedge", 1, 5, 0.21875, 4, 1, 1, 2, 0.625)
+    only_fisher = site.render(page_data(FISHER_V))
+    paired = site.render(page_data(FISHER_V, MCNEMAR_V, with_ties))
+
+    assert "smallest p" not in footnote(only_fisher)
+    assert footnote(paired).count("the smallest p possible is") == 1
+    assert "with 4 sources the smallest p possible is 0.125" in footnote(paired)
+    assert rows(paired)[2][6] == "0.625 (4 sources)"  # the tied entry keeps its figure, no floor
 
 
 def test_the_floor_is_computed_from_the_source_count_and_capped_at_1():
     # Breaks if the floor is a constant or can exceed 1 (1 source: 2 * 0.5 = 1).
     one = mcnemar("violations", "drop", 1, 0, 1.0, 1, 0, 1, 0, 1.0)
-    ten = mcnemar("violations", "drop", 0, 10, 0.001953, 10, 0, 0, 10, 0.001953)
-    out = lines(site.render(page_data(one, ten)))
+    ten = mcnemar("violations", "hedge", 0, 10, 0.001953, 10, 0, 0, 10, 0.001953)
+    page = site.render(page_data(one, ten))
 
-    assert "each of 1 source once, p = 1 (with 1 source the smallest p possible is 1)" in out[0]
-    assert "smallest p possible is 0.00195)" in out[1]
+    assert "with 1 source the smallest p possible is 1;" in footnote(page)
+    assert "with 10 sources the smallest p possible is 0.00195" in footnote(page)
+    assert rows(page)[0][6] == "1 (1 source)"
 
 
-def test_the_pooled_entry_appears_once_under_the_per_operator_lines():
+def test_the_pooled_entry_is_one_row_named_for_what_it_pools_and_comes_last():
     # Breaks if the pooled entry is repeated per operator or printed above the operators.
     drop = mcnemar("violations", "drop", 1, 5, 0.21875, 4, 0, 1, 3, 0.625)
     hedge = mcnemar("violations", "hedge", 0, 4, 0.125, 3, 0, 0, 3, 0.25)
     pooled = mcnemar("violations", "pooled", 1, 9, 0.021484, 4, 0, 1, 3, 0.625)
-    out = lines(site.render(page_data(pooled, hedge, drop)))
+    out = rows(site.render(page_data(pooled, hedge, drop)))
 
-    assert len(out) == 3
-    assert "; drop)" in out[0] and "; hedge)" in out[1]
-    assert sum("all operators pooled" in t for t in out) == 1
-    assert "all operators pooled" in out[2]
-    assert "p = 0.0215 over the pairs" in out[2]
+    assert [r[1] for r in out] == ["drop", "hedge", "Pooled over operators"]
+    assert out[2][5] == "0.0215"
 
 
-def test_a_line_sits_directly_under_the_interval_line_for_the_same_outcome_and_operator():
-    # Breaks if the attempts exact line is detached from the Newcombe line it belongs to.
+def test_the_table_follows_the_interval_line_and_holds_the_attempts_row_too():
+    # Breaks if the exact tests are detached from the interval lines of their boundary, or the
+    # attempts entry (once printed under its interval line) is lost from the table.
     page = site.render(page_data(fisher("attempts", "drop", 0, 4, 1, 2, 0.333333)))
     block = group(page, "C-900")
     i = block.index("Gated minus block-only, runs that tried")
-    j = block.index("Exact test (Fisher")
 
-    assert i < j
-    assert "<p" not in block[block.index("</p>", i) + 4 : j].replace('<p class="note exact">', "")
+    assert i < block.index('<table class="blocks exact">')
+    assert rows(page)[0][0] == "Tried the forbidden action"
 
 
 def test_compaction_setting_is_named_when_a_boundary_has_several():
-    # Breaks if two lines for the same operator under different compaction settings look alike.
+    # Breaks if two rows for the same operator under different compaction settings look alike.
     data = page_with_two_settings()
-    out = lines(site.render(data))
+    out = [r[1] for r in rows(site.render(data))]
 
-    assert any("compaction off" in t for t in out)
-    assert any("compaction at 4000 tokens" in t for t in out)
+    assert out == ["drop compaction off", "drop compaction at 4000 tokens, keep 3"]
 
 
 def page_with_two_settings() -> dict:
@@ -240,11 +316,19 @@ def test_without_exact_tests_the_page_has_no_exact_line_and_the_old_howto_box():
     assert box.count("<li>") == 4
 
 
-def test_the_exact_lines_are_the_only_new_text_in_the_main_part():
-    # Breaks if adding entries changes anything but the lines and the reading box.
+def test_the_exact_table_is_the_only_new_text_in_the_main_part():
+    # Breaks if adding entries changes anything but the table and its footnote, the headline
+    # block at the top (which needs the entries) and the reading box.
     plain = site.render(blocks_page())
     withx = site.render(page_data(FISHER_V))
-    stripped = re.sub(r'<p class="note exact">.*?</p>', "", withx, flags=re.S)
+    stripped = re.sub(
+        r'<div class="tablewrap"[^>]*><table class="blocks exact">.*?</table></div>',
+        "",
+        withx,
+        flags=re.S,
+    )
+    stripped = re.sub(r'<p class="note exact">.*?</p>', "", stripped, flags=re.S)
+    stripped = re.sub(r'<section class="ogroup glance".*?</section>', "", stripped, flags=re.S)
     stripped = re.sub(r'<li class="exact-howto">.*?</li>', "", stripped, flags=re.S)
 
     assert stripped == plain
@@ -277,6 +361,8 @@ def test_entries_are_escaped_and_the_page_stays_script_and_url_free():
 
     assert "<b>x</b>" not in page and "<i>g</i>" not in page
     assert "&lt;b&gt;x&lt;/b&gt;" in page
+    # arms that are not gated and block-only are printed with their own names, escaped
+    assert rows(page)[0][2:4] == ["<i>g</i>: 0 of 4 runs", "block-only: 1 of 2 runs"]
     assert "<script" not in page.lower()
     assert not re.search(r"(?:https?:)?//[a-z0-9]", page, flags=re.I)
 
@@ -288,15 +374,19 @@ def test_identical_input_gives_identical_bytes():
     )
 
 
-def test_an_appendix_gets_the_lines_too():
+def test_an_appendix_gets_the_table_too():
     # Breaks if the held-out result sets show intervals but no exact test.
     main = blocks_page()
     appendix = site.Appendix("Second set", page_data(FISHER_V, MCNEMAR_V))
     page = site.render(main, appendices=[appendix])
     part = page[page.index("<!--appendices-->") :]
 
-    assert part.count("Exact test (") == 2
-    assert page[: page.index("<!--appendices-->")].count("Exact test (") == 0
+    assert part.count('<table class="blocks exact">') == 1
+    assert (
+        len(re.findall(r"<tr>", part.split('<table class="blocks exact">')[1].split("</table>")[0]))
+        == 3
+    )
+    assert '<table class="blocks exact">' not in page[: page.index("<!--appendices-->")]
     assert "Many comparisons are shown" in page
 
 
@@ -304,23 +394,23 @@ def test_the_numbers_on_the_page_equal_the_entries_of_a_stats_fixture():
     # Breaks if a printed count or p differs from the entry it came from.
     data = load("results_runs.json")
     entries = data["constraints"]["C-001"]["boundaries"][BID]["exact_tests"]
-    out = lines(site.render(data), "C-001")
+    out = rows(site.render(data), "C-001")
 
     assert len(out) == len(entries) == 3
     words = {
-        "violations": "broke the rule",
-        "attempts": "tried the forbidden action",
-        "done": "did the job and kept the rule",
+        "violations": "Broke the rule",
+        "attempts": "Tried the forbidden action",
+        "done": "Did the job and kept the rule",
     }
     for entry in entries:
-        (text,) = [t for t in out if words[entry["name"]] in t]
-        assert f"{entry['k_a']} of {entry['n_a']} gated runs" in text
-        assert f"{entry['k_b']} of {entry['n_b']} block-only runs" in text
-        assert site.p_text(entry["p_exact"]) in text
+        (row,) = [r for r in out if r[0] == words[entry["name"]]]
+        assert row[2] == f"{entry['k_a']} of {entry['n_a']} runs"
+        assert row[3] == f"{entry['k_b']} of {entry['n_b']} runs"
+        assert row[5] == site.p_figure(entry["p_exact"])
 
 
 def test_the_no_sabotage_operator_reads_as_words():
     # Breaks if the natural-source operator prints as the bare word "none".
-    out = lines(site.render(page_data(fisher("violations", "none", 0, 4, 1, 2, 0.333333))))
+    out = rows(site.render(page_data(fisher("violations", "none", 0, 4, 1, 2, 0.333333))))
 
-    assert out[0].startswith("Exact test (Fisher, independent runs; no sabotage):")
+    assert out[0][1] == "no sabotage"

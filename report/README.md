@@ -22,6 +22,26 @@ What it shows:
   and the definitions are). The first line also says that the gate stops the rule from being
   broken, and that finishing the task after a block needs a route that keeps the rule or a human
   who can approve, so an unfinished task with the rule kept is not a gate failure.
+- "At a glance", above "How to read this", only when the results set has exact tests (a results
+  file without `exact_tests` renders byte for byte as before): one table of every graded rule,
+  from the results file only. One row per rule and condition, because the arms of one rule do
+  not always share their operators (the ungated arm is natural at "no sabotage" and mutated at
+  an operator), so nothing is added up across rows: sabotage setting, plus handoff and
+  compaction setting where the rule has several. Only conditions with a block-only or gated
+  cell get a row; a graded rule with none still gets one row of dashes. Columns: "Broke the
+  rule, no gate", "block-only", "gated" (k of n and the share, the cells the detail tables use;
+  a dash for a missing cell, never 0) and "Exact test p (gated vs block-only)" (the `violations`
+  entry of that operator and compaction setting, gated against block-only; a paired test also
+  gives the figure that counts each source once; a dash when there is none, and a dash when both
+  arms broke the rule 0 times, because block-only gets 0 by construction for an action it
+  refuses, so 0 against 0 is not tested). When the set has `attempts` entries, two more columns:
+  "Tried the forbidden action, block-only -> gated" (k of n and the share of each arm, from the
+  cells' `arm_metrics.attempt_rate`, the detail table's figures; a dash for a cell without) and
+  its exact test p (the `attempts` entry of the same operator and compaction setting, same
+  rules). Without attempts entries the columns are not there. Each row links to
+  its boundary section. The caption says the rows are all graded rules, not a selection. The
+  table is repeated at the top of each appendix, from its own file (the rule's wording withheld
+  there as everywhere in an appendix). It reuses the outcome table's CSS (`table.outcome`).
 - "What happened, rule by rule" (the first result on the page): one sentence that task success
   and keeping the rule are counted separately, with an example from the data (the cell with the
   most runs that broke the rule and still passed the task, `successes - outcomes.done`; when no
@@ -51,20 +71,21 @@ What it shows:
   rows below; "No comparison has enough runs yet" when there is none.
 - Exact tests (p-values), when a boundary of the results file has `exact_tests` (written by
   `replay/stats.py`; see `replay/README.md`, "Exact tests"). Under the gated-minus-block-only
-  attempt line of each boundary (main set and appendices alike) there is one plain line per
-  entry, built from the entry only: Fisher, "Exact test (Fisher, independent runs; drop): broke
-  the rule in k_a of n_a gated runs against k_b of n_b block-only runs, p = X."; McNemar, "Exact
-  test (McNemar, matched forks of the same sources; drop): in N matched pairs, only block-only
-  broke the rule in B, only gated in A, p = X over the pairs; counting each of S sources once,
-  p = Y (with S sources the smallest p possible is Z)." The arm names come from the entry's `a`
-  and `b`, the outcome words are "broke the rule", "tried the forbidden action" and "did the job
-  and kept the rule", the compaction setting is named when the boundary has several, and the
-  pooled entry (`operator: "pooled"`, "all operators pooled") comes once under the operators of
-  its outcome. The attempts line sits directly under its interval line; the other outcomes
-  follow. p has three significant figures, "p < 0.001" below that. Z is `2 * 0.5^S` (at most 1),
-  shown only for a paired entry whose source test dropped no ties. The interval lines stay. The
-  "How to read this" box gains one item (pairs, sources, the cautious source-level figure, no
-  correction for many comparisons) only when some line is shown; the page never says
+  attempt lines of each boundary (main set and appendices alike) there is one table, a row per
+  entry, built from the entries only. Columns: Outcome ("Broke the rule", "Tried the forbidden
+  action", "Did the job and kept the rule"), Operator ("Pooled over operators" for the pooled
+  entry, "no sabotage" for `none`, the compaction setting named under it when the boundary has
+  several), Gated, Block-only, Test ("Fisher, independent runs" or "McNemar, matched forks of the
+  same sources"), "p over runs or pairs" and "p counting each source once" (a dash for Fisher).
+  Fisher shows each arm's `k of n runs`; McNemar shows, per arm, the matched pairs where only that
+  arm had the outcome ("1 of 8 pairs (only this arm)"). The Gated and Block-only columns take the
+  entry's `a`/`b` by their `arm` (so a swapped entry still lines up); an entry of other arms keeps
+  its order and names each arm in its cell. Rows follow the order of the outcomes, then the
+  compaction setting, then the operators, the pooled entry last under its outcome. p has three
+  significant figures, "< 0.001" below that. Under the table one line gives the smallest p each
+  source count can reach, `2 * 0.5^S` (at most 1), for the paired rows whose source test dropped
+  no ties. The "How to read this" box gains one item (pairs, sources, the cautious source-level
+  figure, no correction for many comparisons) only when some table is shown; the page never says
   "significant". A results file without `exact_tests` renders byte for byte as before.
 - With `--notes FILE`, a section "Notes on these numbers" right after the results section (so
   after its verdict line, before the key): the file's paragraphs, split on blank lines, in order.
@@ -136,7 +157,7 @@ What it shows:
   square. Under block_only and gated the second column reads "Agent broke it or tried to" and a
   line says blocked attempts count there while the violation rate counts only what got through
   (a blocked attempt is labelled `DISOBEYED`). Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
-  carriage.json) are counted under it as "Not placed". Its CSS (`presence.css`) is added only to
+  carriage.json) are counted under it as "Not placed". When none of the four squares has a run (for example a rule whose text is withheld, or runs with no carriage record), the grid and its notes are left out and one line says "Where the rule went in the handoff is not recorded for these runs." Its CSS (`presence.css`) is added only to
   a page that has a grid, so a page without one is unchanged. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
   (`load_bearing`), gate effect on task success (`ledger_value`) and gate effect on attempts

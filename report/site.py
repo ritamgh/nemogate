@@ -684,13 +684,13 @@ them</span></li>
 </section>"""
 
 
-def render_top(exact: bool = False) -> str:
+def render_top(exact: bool = False, glance: str = "") -> str:
     return f"""<header class="top">
 <h1>NemoGate results</h1>
 <p class="lead">Do rules survive the handoffs between agents? Each rule was given to a team of
 agents, with and without sabotaging the handoff and with and without the NemoGate gate, and every
 run was checked against it.</p>
-{render_howto(exact)}
+{glance}{render_howto(exact)}
 </header>"""
 
 
@@ -866,6 +866,7 @@ def unexercised_note(cell: dict[str, Any]) -> str:
 
 
 PLACED = ("CARRIED_OBEYED", "DISOBEYED", "DROPPED_LUCKY", "DROPPED")
+NOT_PLACED = "Where the rule went in the handoff is not recorded for these runs."
 
 
 def presence_grid(cell: dict[str, Any]) -> str:
@@ -875,8 +876,12 @@ def presence_grid(cell: dict[str, Any]) -> str:
     broken. Runs the classifier could not place (the rule never came up, no verdict, no
     carriage.json) are counted below the grid, so the grid and the note add up to the cell's n.
     Empty when the field is absent (older results files); `cell_row` then keeps its older notes.
+    When no run is placed the grid is left out for one line saying so.
     """
     labels = cell["labels"]
+    if not any(labels.get(name, 0) for name in PLACED):
+        # a grid of four zeros would read as "measured, and none of them"
+        return f'<span class="count">{e(NOT_PLACED)}</span>'
 
     def count(name: str) -> str:
         return f'<span role="cell">{e(labels.get(name, 0))}</span>'
@@ -1876,6 +1881,11 @@ EXACT_OUTCOME = {
 EXACT_TESTS = ("fisher", "mcnemar")
 
 
+def p_figure(p: float) -> str:
+    """The figure of a p-value: three significant figures, "< 0.001" below that."""
+    return "< 0.001" if p < 0.001 else f"{p:.3g}"
+
+
 def p_text(p: float) -> str:
     """ "p = 0.333" with three significant figures; "p < 0.001" below that."""
     return "p < 0.001" if p < 0.001 else f"p = {p:.3g}"
@@ -1891,38 +1901,106 @@ def source_floor(n_sources: int) -> str:
     return "< 0.001" if floor < 0.001 else f"{floor:.3g}"
 
 
-def exact_line(entry: dict[str, Any], several: bool) -> str:
-    """One plain sentence for an `exact_tests` entry; every number and arm name is the entry's."""
-    outcome = EXACT_OUTCOME[entry["name"]]
-    a, b = (ARM_WORD.get(entry[side]["arm"], entry[side]["arm"]) for side in "ab")
-    op = entry["operator"]
-    scope = {"pooled": "all operators pooled", "none": "no sabotage"}.get(op, op)
-    if several:
-        scope += f", {compaction_note(entry.get('compaction'))}"
+EXACT_COLUMNS = (
+    "Outcome",
+    "Operator",
+    "Gated",
+    "Block-only",
+    "Test",
+    "p over runs or pairs",
+    "p counting each source once",
+)
+EXACT_TEST_WORD = {
+    "fisher": "Fisher, independent runs",
+    "mcnemar": "McNemar, matched forks of the same sources",
+}
+
+
+def exact_sides(entry: dict[str, Any]) -> list[tuple[str, str]]:
+    """(side of the entry, prefix) for the Gated and the Block-only column. The entry says which of
+    its sides `a` and `b` is which arm. An entry of other arms keeps its own order and names
+    each arm in its cell, so nothing is printed under the wrong heading."""
+    arm = {side: entry[side]["arm"] for side in "ab"}
+    if set(arm.values()) == set(BLOCKING_ARMS) and arm["a"] != arm["b"]:
+        side_of = {name: side for side, name in arm.items()}
+        return [(side_of["gated"], ""), (side_of["block_only"], "")]
+    return [(side, f"{ARM_WORD.get(arm[side], arm[side])}: ") for side in "ab"]
+
+
+def exact_count(entry: dict[str, Any], side: str, prefix: str) -> str:
+    """One arm's count: runs for independent runs, the pairs only that arm had the outcome in
+    for matched forks."""
     if entry["test"] == "fisher":
-        head = "Fisher, independent runs"
-        body = (
-            f"{outcome} in {entry['k_a']} of {entry['n_a']} {a} runs against "
-            f"{entry['k_b']} of {entry['n_b']} {b} runs, {p_text(entry['p_exact'])}."
-        )
+        text = f"{entry['k_' + side]} of {entry['n_' + side]} runs"
     else:
-        head = "McNemar, matched forks of the same sources"
-        d = entry["discordant"]
-        body = (
-            f"in {entry['n_pairs']} matched pairs, only {b} {outcome} in {d['b_only']}, "
-            f"only {a} in {d['a_only']}, {p_text(entry['p_exact'])} over the pairs"
+        text = f"{entry['discordant'][side + '_only']} of {entry['n_pairs']} pairs (only this arm)"
+    return e(prefix + text)
+
+
+def exact_row(entry: dict[str, Any], several: bool) -> str:
+    """One table row for an `exact_tests` entry; every number and arm name is the entry's."""
+    outcome = EXACT_OUTCOME[entry["name"]]
+    op = entry["operator"]
+    scope = e({"pooled": "Pooled over operators", "none": "no sabotage"}.get(op, op))
+    if several:
+        scope += f'<span class="count">{e(compaction_note(entry.get("compaction")))}</span>'
+    by_source = entry.get("p_exact_by_source")
+    by_source_text = (
+        e(f"{p_figure(by_source)} ({sources_text(entry['n_sources'])})")
+        if by_source is not None
+        else DASH
+    )
+    gated, block_only = (exact_count(entry, side, prefix) for side, prefix in exact_sides(entry))
+    values = (
+        scope,
+        gated,
+        block_only,
+        e(EXACT_TEST_WORD[entry["test"]]),
+        e(p_figure(entry["p_exact"])),
+        by_source_text,
+    )
+    return (
+        f'<tr><th scope="row">{e(outcome[0].upper() + outcome[1:])}</th>'
+        + "".join(
+            f'<td data-label="{e(label)}">{value}</td>'
+            for label, value in zip(EXACT_COLUMNS[1:], values, strict=True)
         )
-        by_source = entry.get("p_exact_by_source")
-        if by_source is not None:
-            n_src = entry["n_sources"]
-            body += f"; counting each of {sources_text(n_src)} once, {p_text(by_source)}"
-            if entry["by_source"]["ties"] == 0 and n_src >= 1:
-                body += (
-                    f" (with {sources_text(n_src)} the smallest p possible is "
-                    f"{source_floor(n_src)})"
-                )
-        body += "."
-    return e(f"Exact test ({head}; {scope}): {body}")
+        + "</tr>"
+    )
+
+
+def exact_footnote(entries: list[dict[str, Any]]) -> str:
+    """For the paired entries whose source test dropped no ties: the smallest p each number of
+    sources can give, 2 * 0.5^n (at most 1). Empty when there is none."""
+    sources = sorted(
+        {
+            t["n_sources"]
+            for t in entries
+            if t["test"] == "mcnemar"
+            and t.get("p_exact_by_source") is not None
+            and t["by_source"]["ties"] == 0
+            and t["n_sources"] >= 1
+        }
+    )
+    if not sources:
+        return ""
+    floors = "; ".join(
+        f"with {sources_text(n)} the smallest p possible is {source_floor(n)}" for n in sources
+    )
+    return f'<p class="note exact">{e(f"Counting each source once, {floors}.")}</p>'
+
+
+def exact_table(cid: str, bid: str, entries: list[dict[str, Any]], several: bool) -> str:
+    """The exact tests of one boundary as one table, a row per entry in the order given."""
+    widths = (17, 13, 14, 14, 16, 12, 14)
+    cols = "".join(f'<col style="width:{w}%">' for w in widths)
+    head = "".join(f'<th scope="col">{e(label)}</th>' for label in EXACT_COLUMNS)
+    rows = "".join(exact_row(t, several) for t in entries)
+    table = (
+        f'<table class="blocks exact"><colgroup>{cols}</colgroup><thead><tr>{head}</tr></thead>'
+        f"<tbody>{rows}</tbody></table>"
+    )
+    return panels.tablewrap(f"Exact tests of {cid} at {bid}", table) + exact_footnote(entries)
 
 
 def exact_entries(b: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1945,31 +2023,15 @@ def exact_entries(b: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
-def boundary_lines(body: dict[str, Any], bid: str) -> str:
-    """The interval lines for the attempts and the exact-test lines of one boundary, as
-    paragraphs. An attempts exact line follows the interval line of its own operator and
-    compaction setting; the other entries follow, per outcome, the pooled one under its
-    operators."""
+def boundary_lines(cid: str, body: dict[str, Any], bid: str) -> str:
+    """The gated-minus-block-only interval lines of one boundary, as paragraphs, then its exact
+    tests as one table (by outcome, the pooled entry last under its operators)."""
     b = body["boundaries"][bid]
     several = len(compaction_settings(b.get("cells", []))) > 1
-    left = exact_entries(b)
-    out = []
-    for comp, text in attempt_lines(body, bid):
-        out.append(f'<p class="note">{text}</p>')
-        mine = next(
-            (
-                t
-                for t in left
-                if t["name"] == "attempts"
-                and t["operator"] == comp.get("operator")
-                and t.get("compaction") == comp.get("compaction")
-            ),
-            None,
-        )
-        if mine is not None:
-            left.remove(mine)
-            out.append(f'<p class="note exact">{exact_line(mine, several)}</p>')
-    out.extend(f'<p class="note exact">{exact_line(t, several)}</p>' for t in left)
+    entries = exact_entries(b)
+    out = [f'<p class="note">{text}</p>' for _, text in attempt_lines(body, bid)]
+    if entries:
+        out.append(exact_table(cid, bid, entries, several))
     return "".join(out)
 
 
@@ -1987,7 +2049,7 @@ def block_table(cid: str, body: dict[str, Any]) -> str:
                 where = f" at <code>{e(bid)}</code>" if len(body["boundaries"]) > 1 else ""
                 tables.append(
                     f"<h4>Block-only against gated, exact tests{where}</h4>"
-                    + boundary_lines(body, bid)
+                    + boundary_lines(cid, body, bid)
                 )
             continue
         rows = "".join(
@@ -2003,7 +2065,7 @@ def block_table(cid: str, body: dict[str, Any]) -> str:
             '<th scope="col">Tried the forbidden action</th></tr></thead>'
             f"<tbody>{rows}</tbody></table>"
         )
-        lines = boundary_lines(body, bid)
+        lines = boundary_lines(cid, body, bid)
         where = f" at <code>{e(bid)}</code>" if len(body["boundaries"]) > 1 else ""
         tables.append(
             f"<h4>When the gate blocked a call{where}: block-only against gated</h4>"
@@ -2157,6 +2219,197 @@ def render_howto(exact: bool = False) -> str:
     return (
         '<aside class="howto" aria-labelledby="howto-h"><h2 id="howto-h">How to read this</h2>'
         f"<ol>{items}</ol></aside>"
+    )
+
+
+# --- at a glance: the result at the top of a results set ----------------------------------------
+
+DASH = "&mdash;"
+GLANCE_COLUMNS = (
+    "Broke the rule, no gate",
+    "Broke the rule, block-only",
+    "Broke the rule, gated",
+    "Exact test p (gated vs block-only)",
+)
+GLANCE_ATTEMPT_COLUMNS = (  # only in a set that has attempts entries
+    "Tried the forbidden action, block-only \u2192 gated",
+    "Exact test p (tried the forbidden action)",
+)
+GLANCE_CAPTION = (
+    "These are all the graded rules that were tested, not a selection. Each rate is the runs "
+    "that broke the rule over the runs made. A rule has one row for each sabotage setting (and "
+    "each handoff and compaction setting) it was run under; every row stands alone and no rows "
+    "are added together. Where block-only refuses the same action it gets 0 by construction, so "
+    "a 0 against 0 is not tested. Read the detail below before relying on a single row."
+)
+
+
+def glance_conditions(b: dict[str, Any]) -> list[tuple[dict[str, Any] | None, str]]:
+    """The (compaction setting, operator) pairs of a boundary that have a block-only or gated
+    cell: one row each. No sabotage first, then the operators by name."""
+    cells = b.get("cells", [])
+    out = []
+    for setting in compaction_settings(cells):
+        ops = {c["operator"] for c in cells if c.get("compaction") == setting}
+        blocking = {
+            c["operator"]
+            for c in cells
+            if c.get("compaction") == setting and c["arm"] in BLOCKING_ARMS
+        }
+        out += [(setting, op) for op in sorted(ops & blocking, key=lambda o: (o != "none", o))]
+    return out
+
+
+def glance_rate(cell: dict[str, Any] | None) -> str:
+    """k of n and the share, from the cell the detail tables use; a dash when there is no cell."""
+    if not cell or not cell.get("n"):
+        return DASH
+    return f"{e(cell['violations'])} of {e(cell['n'])} ({pct(cell['violations'] / cell['n'])})"
+
+
+def glance_attempts(cell: dict[str, Any] | None) -> str:
+    """Runs that tried the forbidden action, k of n and the share, from the cell's `arm_metrics`
+    (the detail table's figure); a dash when the cell has none."""
+    rate = ((cell or {}).get("arm_metrics") or {}).get("attempt_rate")
+    if not rate or not rate.get("n"):
+        return DASH
+    return f"{e(rate['k'])} of {e(rate['n'])} ({pct(rate['k'] / rate['n'])})"
+
+
+def glance_p(b: dict[str, Any], setting: dict[str, Any] | None, op: str, name: str) -> str:
+    """The exact test p for the outcome `name`, gated against block-only, at this operator and
+    compaction setting; for a paired test also the figure that counts each source once. A dash
+    when there is no such entry, and when both arms have a count of 0: block-only gets 0 by
+    construction for an action it refuses, so 0 against 0 is not a test result."""
+    for t in exact_entries(b):
+        if (
+            t["name"] == name
+            and t["operator"] == op
+            and t.get("compaction") == setting
+            and {t["a"]["arm"], t["b"]["arm"]} == set(BLOCKING_ARMS)
+        ):
+            if t["k_a"] == 0 and t["k_b"] == 0:
+                return DASH
+            by_source = t.get("p_exact_by_source")
+            return e(p_figure(t["p_exact"])) + (
+                f'<span class="count">{e(p_figure(by_source))} counting each source once</span>'
+                if by_source is not None
+                else ""
+            )
+    return DASH
+
+
+def glance_rule(cid: str, body: dict[str, Any], withheld: bool) -> str:
+    """The rule as the page shows it: its text, or where the text is withheld its id and the
+    withheld wording."""
+    if withheld:
+        return f'<code>{e(cid)}</code> <span class="notrun">{e(WITHHELD)}</span>'
+    return e(body.get("text", ""))
+
+
+def glance_row(
+    cid: str,
+    body: dict[str, Any],
+    bid: str,
+    setting: dict[str, Any] | None,
+    op: str,
+    anchors: Anchors,
+    withheld: bool,
+    attempts: bool,
+) -> str:
+    b = body["boundaries"][bid]
+    cells = b.get("cells", [])
+    note = row_note(body, bid, {"compaction": setting})
+    head = (
+        f'<th scope="row"><a href="#{e(anchors.section(cid, bid))}">'
+        f"{glance_rule(cid, body, withheld)}</a> "
+        f'<span class="op">{e(op_row(op))}</span>'
+        + (f'<span class="count">{e(note)}</span>' if note else "")
+        + "</th>"
+    )
+    ungated = find_cell(cells, "natural" if op == "none" else "mutated", op, setting)
+    block_only = find_cell(cells, "block_only", op, setting)
+    gated = find_cell(cells, "gated", op, setting)
+    values = (
+        glance_rate(ungated),
+        glance_rate(block_only),
+        glance_rate(gated),
+        glance_p(b, setting, op, "violations"),
+    )
+    if attempts:
+        tried = (glance_attempts(block_only), glance_attempts(gated))
+        values += (
+            DASH if tried == (DASH, DASH) else f"{tried[0]} \u2192 {tried[1]}",
+            glance_p(b, setting, op, "attempts"),
+        )
+    return "<tr>" + head + glance_cells(values, attempts) + "</tr>"
+
+
+def glance_columns(attempts: bool) -> tuple[str, ...]:
+    return GLANCE_COLUMNS + GLANCE_ATTEMPT_COLUMNS if attempts else GLANCE_COLUMNS
+
+
+def glance_cells(values: tuple[str, ...], attempts: bool) -> str:
+    return "".join(
+        f'<td data-label="{e(label)}">{value}</td>'
+        for label, value in zip(glance_columns(attempts), values, strict=True)
+    )
+
+
+def glance_empty_row(
+    cid: str, body: dict[str, Any], anchors: Anchors, withheld: bool, attempts: bool
+) -> str:
+    """A graded rule with no block-only or gated cell: named, with dashes, never left out."""
+    rule = glance_rule(cid, body, withheld)
+    bids = sorted(body.get("boundaries", {}))
+    if bids:
+        rule = f'<a href="#{e(anchors.section(cid, bids[0]))}">{rule}</a>'
+    dashes = glance_cells((DASH,) * len(glance_columns(attempts)), attempts)
+    return f'<tr><th scope="row">{rule}</th>{dashes}</tr>'
+
+
+def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | None = None) -> str:
+    """The result of one results set in one table, above everything else of the set: one row per
+    graded rule and condition (sabotage setting, handoff, compaction setting), the broke-the-rule
+    counts of the ungated, block-only and gated arms and the exact test p. Nothing is added up
+    across rows. Empty for a results file without exact tests."""
+    if not has_exact_lines(results):
+        return ""
+    withheld = appendix is not None
+    attempts = any(
+        t["name"] == "attempts"
+        for body in results["constraints"].values()
+        if is_graded(body)
+        for b in body.get("boundaries", {}).values()
+        for t in exact_entries(b)
+    )
+    rows = []
+    for cid in sorted(results["constraints"]):
+        body = results["constraints"][cid]
+        if not is_graded(body):
+            continue
+        mine = [
+            glance_row(cid, body, bid, setting, op, anchors, withheld, attempts)
+            for bid in sorted(body.get("boundaries", {}))
+            for setting, op in glance_conditions(body["boundaries"][bid])
+        ]
+        rows += mine or [glance_empty_row(cid, body, anchors, withheld, attempts)]
+    sid = "glance" if appendix is None else f"appendix-{appendix}-glance"
+    level = 2 if appendix is None else 3
+    widths = (24, 11, 11, 11, 13, 17, 13) if attempts else (31, 15, 15, 15, 24)
+    cols = "".join(f'<col style="width:{w}%">' for w in widths)
+    table = (
+        f'<table class="outcome glance"><colgroup>{cols}</colgroup>'
+        '<thead><tr><th scope="col">Rule</th>'
+        + "".join(f'<th scope="col">{e(label)}</th>' for label in glance_columns(attempts))
+        + "</tr></thead>"
+        + f"<tbody>{''.join(rows)}</tbody></table>"
+    )
+    return (
+        f'<section class="ogroup glance" aria-labelledby="{sid}-h">'
+        f'<h{level} id="{sid}-h">At a glance</h{level}>'
+        + panels.tablewrap("At a glance: every graded rule, broke the rule by arm", table)
+        + f'<p class="note">{e(GLANCE_CAPTION)}</p></section>'
     )
 
 
@@ -2330,7 +2583,8 @@ def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str
         f'<section class="appendix" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h2 id="{sid}-h">{e(appendix.title)}</h2>'
         f'<p class="note">{e(APPENDIX_INTRO)}</p>{paragraphs}'
-        f"{appendix_accounting(results)}{appendix_differences(main, results)}"
+        f"{render_glance(results, anchors, index)}{appendix_accounting(results)}"
+        f"{appendix_differences(main, results)}"
         f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
     )
 
@@ -2393,7 +2647,8 @@ def render(
     found = trace.found_by_rule if trace else None
     exact = has_exact_lines(results) or any(has_exact_lines(a.results) for a in appendices)
     body = (
-        f"{render_top(exact)}{outcomes}{render_notes(notes)}{render_key()}{render_fixes()}"
+        f"{render_top(exact, render_glance(results, anchors))}{outcomes}{render_notes(notes)}"
+        f"{render_key()}{render_fixes()}"
         f"{render_header(results, recalls)}"
         f"{panels.render_coverage(results, ledger, found, list(recalls))}"
         f"{graph_section}"
