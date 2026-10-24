@@ -2760,6 +2760,82 @@ def render(
     )
 
 
+def numbers_in(text: str) -> list[str]:
+    """The number tokens of `text`, in order: a maximal run of digits (of any script, as
+    `str.isdigit` sees them) with an optional decimal part, a "." followed by more digits. A full
+    stop after a number is not a decimal point. Tokens are compared as typed, so 66 is not 660 and
+    the Arabic-Indic five is not 5.
+
+    The one allowance: a digit run directly after a letter, or after a letter and a hyphen, is
+    part of an identifier (a label, never a statistic) and is left out, decimal part included.
+    It knows nothing of what any identifier means. The same rule applies to the page's text, so
+    the digits of a hash fragment on the page do not vouch for a number either."""
+    found, i, n = [], 0, len(text)
+    while i < n:
+        if not text[i].isdigit():
+            i += 1
+            continue
+        j = i
+        while j < n and text[j].isdigit():
+            j += 1
+        if j + 1 < n and text[j] == "." and text[j + 1].isdigit():
+            j += 1
+            while j < n and text[j].isdigit():
+                j += 1
+        before = text[max(i - 2, 0) : i]
+        if not (before[-1:].isalpha() or (before[-1:] == "-" and before[:-1].isalpha())):
+            found.append(text[i:j])
+        i = j
+    return found
+
+
+def visible_numbers(markup: str) -> set[str]:
+    """The numbers in the text a reader sees: tags and style dropped, entities decoded."""
+    markup = re.sub(r"<style>.*?</style>", " ", markup, flags=re.S)
+    return set(numbers_in(html.unescape(re.sub(r"<[^>]+>", " ", markup))))
+
+
+def notes_problems(
+    results: dict[str, Any],
+    appendices: Sequence[Appendix],
+    files: Sequence[tuple[Any, str | None]],
+    **evidence: Any,
+) -> list[str]:
+    """One message per notes file that holds a number the page does not show. Every number on the
+    page comes from the results file, so a note may only repeat one. `files` is (path, text) for
+    the main notes, then one per appendix, in order (path None: no notes). The numbers a note is
+    held to are those of its own set, read off the page as built with no notes at all: the main
+    part for `--notes`, the appendix's own section for its notes, so a note cannot vouch for
+    itself or borrow a number from another set. A message names the file and, per line, the
+    unmatched numbers; never the line, because appendix notes can sit next to withheld rule text."""
+    if not any(path and text for path, text in files):
+        return []
+    page = render(
+        results,
+        notes=None,
+        appendices=[Appendix(a.title, a.results) for a in appendices],
+        **evidence,
+    )
+    body = page[page.index("<body>") :]
+    parts = re.split(r'(?=<section class="appendix" id="appendix-)', body)
+    problems = []
+    for (path, text), part in zip(files, parts, strict=True):
+        if not path or not text:
+            continue
+        shown = visible_numbers(part)
+        bad = []
+        for number, line in enumerate(text.split("\n"), 1):
+            missing = [n for n in dict.fromkeys(numbers_in(line)) if n not in shown]
+            if missing:
+                bad.append(f"line {number}: {', '.join(missing)}")
+        if bad:
+            problems.append(
+                f"{path}: numbers the results do not hold ({'; '.join(bad)}); "
+                "a note may only repeat a number the page shows"
+            )
+    return problems
+
+
 def load_appendix(title: str, results_file: str, notes_file: str | None = None) -> Appendix:
     """Read an appendix's results (and notes) file. OSError or ValueError on anything unusable."""
     results = json.loads(Path(results_file).read_text(encoding="utf-8"))
@@ -2824,21 +2900,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         notes = args.notes.read_text(encoding="utf-8") if args.notes else None
         appendices = [load_appendix(*values) for values in args.appendix]
         results = json.loads(args.results.read_text(encoding="utf-8"))
-        page = render(
-            results,
-            trace=panels.load_trace_evidence(
+        evidence = {
+            "trace": panels.load_trace_evidence(
                 args.runs, results.get("reproducibility"), rule_groups(results)
             )
             if args.runs
             else None,
-            repairs=panels.load_repairs(args.repair) if args.repair else None,
-            ledger=load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
+            "repairs": panels.load_repairs(args.repair) if args.repair else None,
+            "ledger": load_ledger_yaml(args.ledger.read_text(encoding="utf-8"))
             if args.ledger
             else None,
-            notes=notes,
-            appendices=appendices,
-            recalls=panels.load_recall(args.recall) if args.recall else (),
+            "recalls": panels.load_recall(args.recall) if args.recall else (),
+        }
+        problems = notes_problems(
+            results,
+            appendices,
+            [(args.notes, notes)]
+            + [
+                (v[2] if len(v) == 3 else None, a.notes)
+                for v, a in zip(args.appendix, appendices, strict=True)
+            ],
+            **evidence,
         )
+        if problems:
+            for problem in problems:
+                print(f"report.site: {problem}", file=sys.stderr)
+            return 2
+        page = render(results, notes=notes, appendices=appendices, **evidence)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")
     except (OSError, ValueError) as exc:
