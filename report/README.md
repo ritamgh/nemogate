@@ -6,7 +6,7 @@ Two pages, both generated offline from run data. Neither calls a model.
 
 ```
 uv run python -m report.site --results results/results.json --out results/site/index.html \
-    [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE] \
+    [--runs DIR...] [--repair DIR] [--recall FILE...] [--ledger nemogate.yaml] [--notes FILE] \
     [--appendix TITLE RESULTS_FILE [NOTES_FILE]]...
 ```
 
@@ -49,6 +49,23 @@ What it shows:
   for any other rule it adds nothing of the kind; when that handoff was run under more than one
   compaction setting, the sentence names the setting it quotes and says the others have their own
   rows below; "No comparison has enough runs yet" when there is none.
+- Exact tests (p-values), when a boundary of the results file has `exact_tests` (written by
+  `replay/stats.py`; see `replay/README.md`, "Exact tests"). Under the gated-minus-block-only
+  attempt line of each boundary (main set and appendices alike) there is one plain line per
+  entry, built from the entry only: Fisher, "Exact test (Fisher, independent runs; drop): broke
+  the rule in k_a of n_a gated runs against k_b of n_b block-only runs, p = X."; McNemar, "Exact
+  test (McNemar, matched forks of the same sources; drop): in N matched pairs, only block-only
+  broke the rule in B, only gated in A, p = X over the pairs; counting each of S sources once,
+  p = Y (with S sources the smallest p possible is Z)." The arm names come from the entry's `a`
+  and `b`, the outcome words are "broke the rule", "tried the forbidden action" and "did the job
+  and kept the rule", the compaction setting is named when the boundary has several, and the
+  pooled entry (`operator: "pooled"`, "all operators pooled") comes once under the operators of
+  its outcome. The attempts line sits directly under its interval line; the other outcomes
+  follow. p has three significant figures, "p < 0.001" below that. Z is `2 * 0.5^S` (at most 1),
+  shown only for a paired entry whose source test dropped no ties. The interval lines stay. The
+  "How to read this" box gains one item (pairs, sources, the cautious source-level figure, no
+  correction for many comparisons) only when some line is shown; the page never says
+  "significant". A results file without `exact_tests` renders byte for byte as before.
 - With `--notes FILE`, a section "Notes on these numbers" right after the results section (so
   after its verdict line, before the key): the file's paragraphs, split on blank lines, in order.
   It is for a re-grade or a caveat that is not in the results file; the text stays in the file,
@@ -86,7 +103,14 @@ What it shows:
   it says each rule's own group is in its section, lists every commit with its rules, and labels
   the commit "largest group"), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
-  The strip is always shown, including when nothing was pooled.
+  The strip is always shown, including when nothing was pooled. With `--recall FILE...` (the
+  `ledger.recall` output, e.g. `results/recall/dev.json reference.json`) and no recall in
+  `results.json`, the recall entry is one per file: "matched of total", the percentage, the extra
+  checks proposed, labelled with the file's name, plus the note that this is not a clean held-out
+  measure (the extraction prompts were tuned on the development set, FACTS section 6). A recall
+  already in `results.json` is kept and the files are ignored. A file that is not a recall
+  measurement (not JSON, a missing `matched`/`total`/`extra`, a fraction or negative count, more
+  found than asked, none asked) exits 2.
 - Boundary graph: agents are parsed from the `delegation:<from>-><to>` and
   `return:<from>-><to>` boundary ids found in the data; nothing is hard-coded. A
   `compaction:<agent>` boundary is a marker on its agent. Each edge is coloured by the pooled
@@ -171,7 +195,8 @@ outcome-first section is tested in `test_site_outcome_first.py`.
 
 - **Coverage** (always): from the honesty block, the pooled constraints and, with `--ledger`, the
   full ledger. Declared, with a compiled check, exercised (at least one pooled run), exercised and
-  checked, extraction recall ("not measured" when null), and the unchecked and never-exercised
+  checked, extraction recall ("not measured" when null; the `--recall` figures and the same note
+  when given), and the unchecked and never-exercised
   rules by id and text. Without `--ledger` only constraints that had pooled runs can be named.
   With `--runs` as well, each never-exercised rule says whether the run folders held any of its
   runs ("No run of this rule is in the run folders this page read", or how many there are and
@@ -193,7 +218,9 @@ outcome-first section is tested in `test_site_outcome_first.py`.
   or the gate withheld every one) and the page says that.
   The comparison side says "No such call" when it never made the call. Trace text is escaped.
 - **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
-  `.patch` beside it. Without `--repair` it says "No repair run yet". `repair` writes no
+  `.patch` beside it, one block per summary in file-name order (a folder can hold several rounds:
+  the verdict, the reason a refused patch was refused, the judged numbers and the diff each
+  show). Without `--repair` it says "No repair run yet". `repair` writes no
   structured result, so the numbers are parsed from the `Result:` line `write_report` writes. If the summary has more than one line starting `- Result:` (a model's
   rationale, or a file name quoted in a guard's reason, can forge one) the result is ambiguous:
   no numbers table, the raw text is shown escaped. The

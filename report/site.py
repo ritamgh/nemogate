@@ -1,7 +1,7 @@
 """The results page: one self-contained static HTML file made from `results.json`.
 
 `uv run python -m report.site --results results/results.json --out results/site/index.html
-[--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE]
+[--runs DIR...] [--repair DIR] [--recall FILE...] [--ledger nemogate.yaml] [--notes FILE]
 [--appendix TITLE RESULTS_FILE [NOTES_FILE]]...`
 
 Reads the file `replay/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
@@ -583,7 +583,7 @@ def commits_note(results: dict[str, Any]) -> str:
     )
 
 
-def render_header(results: dict[str, Any]) -> str:
+def render_header(results: dict[str, Any], recalls: Sequence[panels.RecallView] = ()) -> str:
     repro = results.get("reproducibility") or {}
     models = repro.get("model_ids") or {}
     model_items = (
@@ -626,6 +626,14 @@ def render_header(results: dict[str, Any]) -> str:
     honesty = results["honesty"]
     recall = honesty.get("extraction_recall")
     recall_text = "not measured" if recall is None else pct(recall)
+    files = list(recalls) if recall is None else []
+    recall_item = (
+        panels.render_recall_items(files)
+        if files
+        else f"""<li><span class="v">{e(recall_text)}</span>
+<span class="k">extraction recall: how many of the seeded rules the extractor found</span></li>"""
+    )
+    recall_caveat = f'<p class="note">{e(panels.RECALL_CAVEAT)}</p>' if files else ""
     total, with_check = (
         honesty.get("constraints_total", 0),
         honesty.get("constraints_with_check", 0),
@@ -646,8 +654,7 @@ def render_header(results: dict[str, Any]) -> str:
     return f"""<section aria-labelledby="honesty-h" class="strip">
 <h2 id="honesty-h">What these numbers can and cannot tell you</h2>
 <ul class="honesty">
-<li><span class="v">{e(recall_text)}</span>
-<span class="k">extraction recall: how many of the seeded rules the extractor found</span></li>
+{recall_item}
 <li><span class="v">{e(with_check)} of {e(total)}</span>
 <span class="k">rules can be graded: each has a compiled check, a program that decides
 pass or fail</span></li>
@@ -655,7 +662,7 @@ pass or fail</span></li>
 <span class="k">inconclusive runs, left out of every rate below. Natural runs where the
 rule never came up are not among them: they stay in the rates, and each natural row counts
 them</span></li>
-</ul>
+</ul>{recall_caveat}
 </section>
 <section aria-labelledby="runs-h" class="meta">
 <div>
@@ -677,13 +684,13 @@ them</span></li>
 </section>"""
 
 
-def render_top() -> str:
+def render_top(exact: bool = False) -> str:
     return f"""<header class="top">
 <h1>NemoGate results</h1>
 <p class="lead">Do rules survive the handoffs between agents? Each rule was given to a team of
 agents, with and without sabotaging the handoff and with and without the NemoGate gate, and every
 run was checked against it.</p>
-{render_howto()}
+{render_howto(exact)}
 </header>"""
 
 
@@ -1835,8 +1842,9 @@ def block_row(body: dict[str, Any], bid: str, cell: dict[str, Any]) -> str:
     )
 
 
-def attempt_lines(body: dict[str, Any], bid: str) -> list[str]:
-    """The gated minus block-only attempt rate, per operator (and compaction setting)."""
+def attempt_lines(body: dict[str, Any], bid: str) -> list[tuple[dict[str, Any], str]]:
+    """The gated minus block-only attempt rate, per operator (and compaction setting), each with
+    the comparison it was written from."""
     b = body["boundaries"][bid]
     cells = b.get("cells", [])
     several = len(compaction_settings(cells)) > 1
@@ -1848,11 +1856,121 @@ def attempt_lines(body: dict[str, Any], bid: str) -> list[str]:
         crosses = comp["lo"] <= 0 <= comp["hi"]
         tail = f", {indistinct(comp, cells)}" if crosses else "; the interval excludes 0"
         out.append(
-            "Gated minus block-only, runs that tried the forbidden action "
-            f"({e(comp.get('operator'))}{e(under)}): {e(pp(comp['diff']))} (95% interval "
-            f"{e(pp(comp['lo']))} to {e(pp(comp['hi']))}){e(tail)}."
+            (
+                comp,
+                "Gated minus block-only, runs that tried the forbidden action "
+                f"({e(comp.get('operator'))}{e(under)}): {e(pp(comp['diff']))} (95% interval "
+                f"{e(pp(comp['lo']))} to {e(pp(comp['hi']))}){e(tail)}.",
+            )
         )
     return out
+
+
+# --- exact tests (p-values), from `exact_tests` of a boundary ------------------------------------
+
+EXACT_OUTCOME = {
+    "violations": "broke the rule",
+    "attempts": "tried the forbidden action",
+    "done": "did the job and kept the rule",
+}
+EXACT_TESTS = ("fisher", "mcnemar")
+
+
+def p_text(p: float) -> str:
+    """ "p = 0.333" with three significant figures; "p < 0.001" below that."""
+    return "p < 0.001" if p < 0.001 else f"p = {p:.3g}"
+
+
+def sources_text(n: int) -> str:
+    return f"{n} source" + ("" if n == 1 else "s")
+
+
+def source_floor(n_sources: int) -> str:
+    """The smallest p the exact test on `n_sources` sources can give: 2 * 0.5^n, at most 1."""
+    floor = min(1.0, 2 * 0.5**n_sources)
+    return "< 0.001" if floor < 0.001 else f"{floor:.3g}"
+
+
+def exact_line(entry: dict[str, Any], several: bool) -> str:
+    """One plain sentence for an `exact_tests` entry; every number and arm name is the entry's."""
+    outcome = EXACT_OUTCOME[entry["name"]]
+    a, b = (ARM_WORD.get(entry[side]["arm"], entry[side]["arm"]) for side in "ab")
+    op = entry["operator"]
+    scope = {"pooled": "all operators pooled", "none": "no sabotage"}.get(op, op)
+    if several:
+        scope += f", {compaction_note(entry.get('compaction'))}"
+    if entry["test"] == "fisher":
+        head = "Fisher, independent runs"
+        body = (
+            f"{outcome} in {entry['k_a']} of {entry['n_a']} {a} runs against "
+            f"{entry['k_b']} of {entry['n_b']} {b} runs, {p_text(entry['p_exact'])}."
+        )
+    else:
+        head = "McNemar, matched forks of the same sources"
+        d = entry["discordant"]
+        body = (
+            f"in {entry['n_pairs']} matched pairs, only {b} {outcome} in {d['b_only']}, "
+            f"only {a} in {d['a_only']}, {p_text(entry['p_exact'])} over the pairs"
+        )
+        by_source = entry.get("p_exact_by_source")
+        if by_source is not None:
+            n_src = entry["n_sources"]
+            body += f"; counting each of {sources_text(n_src)} once, {p_text(by_source)}"
+            if entry["by_source"]["ties"] == 0 and n_src >= 1:
+                body += (
+                    f" (with {sources_text(n_src)} the smallest p possible is "
+                    f"{source_floor(n_src)})"
+                )
+        body += "."
+    return e(f"Exact test ({head}; {scope}): {body}")
+
+
+def exact_entries(b: dict[str, Any]) -> list[dict[str, Any]]:
+    """The boundary's entries that the page can print, in page order: by outcome, then the
+    compaction setting, then each operator, the pooled entry last."""
+    entries = [
+        t
+        for t in b.get("exact_tests") or []
+        if t.get("name") in EXACT_OUTCOME and t.get("test") in EXACT_TESTS
+    ]
+    settings = compaction_settings([{"compaction": t.get("compaction")} for t in entries])
+    return sorted(
+        entries,
+        key=lambda t: (
+            tuple(EXACT_OUTCOME).index(t["name"]),
+            settings.index(t.get("compaction")),
+            t["operator"] == "pooled",
+            t["operator"],
+        ),
+    )
+
+
+def boundary_lines(body: dict[str, Any], bid: str) -> str:
+    """The interval lines for the attempts and the exact-test lines of one boundary, as
+    paragraphs. An attempts exact line follows the interval line of its own operator and
+    compaction setting; the other entries follow, per outcome, the pooled one under its
+    operators."""
+    b = body["boundaries"][bid]
+    several = len(compaction_settings(b.get("cells", []))) > 1
+    left = exact_entries(b)
+    out = []
+    for comp, text in attempt_lines(body, bid):
+        out.append(f'<p class="note">{text}</p>')
+        mine = next(
+            (
+                t
+                for t in left
+                if t["name"] == "attempts"
+                and t["operator"] == comp.get("operator")
+                and t.get("compaction") == comp.get("compaction")
+            ),
+            None,
+        )
+        if mine is not None:
+            left.remove(mine)
+            out.append(f'<p class="note exact">{exact_line(mine, several)}</p>')
+    out.extend(f'<p class="note exact">{exact_line(t, several)}</p>' for t in left)
+    return "".join(out)
 
 
 def block_table(cid: str, body: dict[str, Any]) -> str:
@@ -1865,6 +1983,12 @@ def block_table(cid: str, body: dict[str, Any]) -> str:
         if {c["arm"] for c in mine} != set(BLOCKING_ARMS) or not any(
             (c.get("arm_metrics") or {}).get("blocks") for c in mine
         ):
+            if exact_entries(body["boundaries"][bid]):
+                where = f" at <code>{e(bid)}</code>" if len(body["boundaries"]) > 1 else ""
+                tables.append(
+                    f"<h4>Block-only against gated, exact tests{where}</h4>"
+                    + boundary_lines(body, bid)
+                )
             continue
         rows = "".join(
             block_row(body, b, c) for b, c in ordered_cells(body) if b == bid and c in mine
@@ -1879,7 +2003,7 @@ def block_table(cid: str, body: dict[str, Any]) -> str:
             '<th scope="col">Tried the forbidden action</th></tr></thead>'
             f"<tbody>{rows}</tbody></table>"
         )
-        lines = "".join(f'<p class="note">{t}</p>' for t in attempt_lines(body, bid))
+        lines = boundary_lines(body, bid)
         where = f" at <code>{e(bid)}</code>" if len(body["boundaries"]) > 1 else ""
         tables.append(
             f"<h4>When the gate blocked a call{where}: block-only against gated</h4>"
@@ -2007,8 +2131,29 @@ def render_outcomes(results: dict[str, Any], anchors: Anchors, verdict: str) -> 
     )
 
 
-def render_howto() -> str:
+EXACT_HOWTO = (
+    "Paired cells are forks of the same sources, so the exact test compares matched pairs and "
+    "p says how often a split at least this lopsided would turn up if the two arms did the "
+    "same thing. Pairs from one source are not independent, so the figure that counts each "
+    "source once is the cautious one, and with only a few sources the smallest p it can reach "
+    "is limited. Many comparisons are shown on this page and none is corrected for that."
+)
+
+
+def has_exact_lines(results: dict[str, Any]) -> bool:
+    """Whether the page will print an exact-test line for these results."""
+    return any(
+        exact_entries(b)
+        for body in results.get("constraints", {}).values()
+        if is_graded(body)
+        for b in body.get("boundaries", {}).values()
+    )
+
+
+def render_howto(exact: bool = False) -> str:
     items = "".join(f"<li>{t}</li>" for t in HOWTO)
+    if exact:
+        items += f'<li class="exact-howto">{e(EXACT_HOWTO)}</li>'
     return (
         '<aside class="howto" aria-labelledby="howto-h"><h2 id="howto-h">How to read this</h2>'
         f"<ol>{items}</ol></aside>"
@@ -2207,12 +2352,14 @@ def render(
     ledger: Ledger | None = None,
     notes: str | None = None,
     appendices: Sequence[Appendix] = (),
+    recalls: Sequence[panels.RecallView] = (),
 ) -> str:
     """The page. `trace` (from --runs), `repairs` (--repair) and `ledger` (--ledger) are optional
     evidence; without `trace` the constraint cards have no trace panel, without `repairs` the
-    patch panel says there is no repair run yet. `notes` (--notes) is free text shown after the
-    results, escaped. `appendices` (--appendix) are separate result sets appended after
-    everything else; nothing in them reaches the rest of the page."""
+    patch panel says there is no repair run yet. `recalls` (--recall) show the extraction recall
+    measured offline, only when the results file carries none. `notes` (--notes) is free text
+    shown after the results, escaped. `appendices` (--appendix) are separate result sets appended
+    after everything else; nothing in them reaches the rest of the page."""
     check_format(results)
     constraints = results["constraints"]
     anchors = Anchors(constraints)
@@ -2243,9 +2390,12 @@ def render(
         if constraints
         else render_verdict(results, anchors)
     )
+    found = trace.found_by_rule if trace else None
+    exact = has_exact_lines(results) or any(has_exact_lines(a.results) for a in appendices)
     body = (
-        f"{render_top()}{outcomes}{render_notes(notes)}{render_key()}{render_fixes()}{render_header(results)}"
-        f"{panels.render_coverage(results, ledger, trace.found_by_rule if trace else None)}"
+        f"{render_top(exact)}{outcomes}{render_notes(notes)}{render_key()}{render_fixes()}"
+        f"{render_header(results, recalls)}"
+        f"{panels.render_coverage(results, ledger, found, list(recalls))}"
         f"{graph_section}"
         f"{panels.render_patch_panel(repairs)}{render_method(results)}"
     )
@@ -2294,6 +2444,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="the folder python -m repair wrote: adds the patch",
     )
     parser.add_argument(
+        "--recall",
+        type=Path,
+        nargs="+",
+        metavar="FILE",
+        help="extraction recall files (python -m ledger.recall output), one per set: shown when "
+        "results.json has no recall, with the note that it is not a held-out measure",
+    )
+    parser.add_argument(
         "--ledger",
         type=Path,
         help="the ledger the runs used: lists unchecked and unexercised rules",
@@ -2334,6 +2492,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None,
             notes=notes,
             appendices=appendices,
+            recalls=panels.load_recall(args.recall) if args.recall else (),
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")
