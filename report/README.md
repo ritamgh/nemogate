@@ -42,6 +42,32 @@ What it shows:
   its boundary section. The caption says the rows are all graded rules, not a selection. The
   table is repeated at the top of each appendix, from its own file (the rule's wording withheld
   there as everywhere in an appendix). It reuses the outcome table's CSS (`table.outcome`).
+- "Cost of prevention" (`cost.py`, rendered by `render_cost` in `site.py`), directly under "At a
+  glance" and for each appendix likewise, under the same condition (the set has exact tests) and
+  only where cells carry `arm_metrics.cost`. One row per rule, sabotage setting and arm (gated,
+  then block-only), against the arm at the same setting that has no gate (natural at "none",
+  mutated at an operator). Columns: the broke-the-rule counts of the two arms with their 95%
+  intervals; violations prevented per 100 runs; extra cost per run (the arm's mean cost minus the
+  ungated arm's); cost per prevented violation = extra cost per run over prevented per run; and
+  what the cost covers. Rules: (1) *like with like*: the arms are priced only when both are whole
+  runs or both are all forks (`n_forks` equal to `n`). A fork's cost covers only what ran after
+  the fork point, so a natural source against forks (the case at "no sabotage" for paired
+  rules) gets no row; the page says "N comparisons left out", and a cell that mixes forks and
+  whole runs is left out too. The last column says "Whole runs" or "After the fork point only".
+  (2) A price needs more than 0 prevented and a positive extra cost. A gate that cost less is "<arm>
+  cost less per run", never a negative price; nothing prevented, or more violations with the
+  gate, or no extra cost, is a dash with its reason. (3) "Widest reading" under a figure: the ends
+  of the two intervals the file holds (Wilson for the rates, bootstrap for the costs) combined the
+  worst and the best way; the price's cheapest end is the least extra cost over the most
+  prevented, the dearest the most extra cost over the fewest prevented. It is wider than an
+  interval made for the price, and an end the data cannot fix reads "may cost less" or "no upper
+  limit". A cost on the `range` basis has no interval, so the row shows the point values only and
+  says "cost is a range, not a 95% interval"; a cell of fewer than five runs says so. Sharing of
+  sources cannot be read from the file for the ungated arm, so two all-fork cells are priced
+  together without that check. The caption says it is a price for this reference app and these
+  rules, not a price list, that rates and prices come from the same runs, and to read the detail
+  below. It never says "significant". No CSS: it reuses `table.outcome`. Tests:
+  `report/tests/test_cost.py` (the arithmetic), `report/tests/test_site_cost.py` (the page).
 - "What happened, rule by rule" (the first result on the page): one sentence that task success
   and keeping the rule are counted separately, with an example from the data (the cell with the
   most runs that broke the rule and still passed the task, `successes - outcomes.done`; when no
@@ -92,12 +118,20 @@ What it shows:
   It is for a re-grade or a caveat that is not in the results file; the text stays in the file,
   never in code. It is plain text and escaped, so markup shows as typed. Without the option, or
   with an empty file, nothing is added and the page is byte-identical to one built without it. A
-  missing or unreadable file is exit code 2 and no page is written.
+  missing or unreadable file is exit code 2 and no page is written. A note may only repeat a
+  number the page shows: each number in a notes file (a digit run with an optional decimal part,
+  compared as typed; a run right after a letter, or a letter and a hyphen, is part of an
+  identifier such as a task or rule id and is not a number) must be in the visible text of its own set, the page built with no notes at
+  all (main part for `--notes`, the appendix's own section for its file). Otherwise exit code 2,
+  one line per file naming it and, per line, the unmatched numbers, never the line's text.
 - With `--appendix TITLE RESULTS_FILE [NOTES_FILE]` (repeatable), a separately labelled result
   set after everything else on the page, for runs that must be reported but not pooled with the
   main set. Each is drawn from its own results file only: its title, a line "Counts are small;
   read the intervals", the optional notes (plain text, escaped, like `--notes`), a run-accounting
-  block (found, counted, left out by reason, models, short hashes), "How these runs differ from
+  block (found, counted, left out by reason, models, short hashes), "Run accounting" (tables from
+  the results file: found, counted and not counted for the set, and the counted runs per rule,
+  sabotage setting and arm; a figure the file lacks is a dash, never 0; no per-rule errored
+  count, the file holds counted runs only per rule), "How these runs differ from
   the main set" (changed hashes and model ids, mutation no-op counts; from the two results files),
   then per rule the "What happened" table, the block-only against gated table where it applies and
   the cell tables with their intervals. It never feeds the main page: the main part is

@@ -161,13 +161,13 @@ def test_appendix_notes_come_in_file_order_and_are_escaped(tmp_path):
     # Breaks if the notes are not split on blank lines, or if markup in them is put in raw.
     page = build(
         tmp_path,
-        [("Set one", appendix_data(), NOTES + "\nLook <script>alert(1)</script> & <b>x</b>.\n")],
+        [("Set one", appendix_data(), NOTES + "\nLook <script>alert(x)</script> & <b>x</b>.\n")],
     )
     part = appendix_part(page)
 
     assert "<script" not in part.lower()
     assert "<b>x" not in part
-    assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; &lt;b&gt;x&lt;/b&gt;." in part
+    assert "&lt;script&gt;alert(x)&lt;/script&gt; &amp; &lt;b&gt;x&lt;/b&gt;." in part
     text = text_of(part)
     assert text.index("First appendix note.") < text.index("Second note, over two lines.")
 
