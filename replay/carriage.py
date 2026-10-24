@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from gate.middleware import REPIN
+from replay.app import load_app
 from schemas.enums import Arm, Operator
 from schemas.ledger import (
     ApprovalBefore,
@@ -465,10 +466,8 @@ def _event_block(event: Any, before_delegation: bool | None) -> dict[str, Any]:
 
 
 def load_user_messages() -> dict[str, str]:
-    """Task id -> user message, from the default app (the one place this module names it)."""
-    from refapp.app import APP
-
-    return {task.id: task.user_message for task in APP.tasks()}
+    """Task id -> user message, from the selected app (`replay.app.load_app`)."""
+    return {task.id: task.user_message for task in load_app().tasks()}
 
 
 def write_carriage(path: Path, carriage: dict[str, Any]) -> None:

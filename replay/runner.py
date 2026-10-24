@@ -27,7 +27,7 @@ from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from common.spend import run_scope, run_totals
 from gate.operators import MutationFailed, NothingToMutate, make_operator
 from replay import record, sweep_status
-from replay.app import App, AppTask, pairs
+from replay.app import App, AppTask, load_app, pairs
 from replay.boundaries import (
     BoundaryRecorder,
     Crossing,
@@ -799,9 +799,7 @@ def default_refusals(
 ) -> list[tuple[str, Arm, Operator, str]]:
     """`refusals` with the app and ledger `default_runner` uses, without building a runner."""
     ledger = load_ledger_yaml(LEDGER_PATH.read_text(encoding="utf-8"))
-    from refapp.app import APP
-
-    return refusals(APP, ledger, task_ids, arms, operators, paired=paired)
+    return refusals(load_app(), ledger, task_ids, arms, operators, paired=paired)
 
 
 def _app_refusal(ledger: Ledger, rule: Constraint) -> str | None:
@@ -1056,10 +1054,8 @@ def default_runner(runs_dir: Path | None = None) -> Runner:
     if not LEDGER_PATH.is_file():
         raise RuntimeError(f"cannot run: the ledger file {LEDGER_PATH} does not exist")
     ledger = load_ledger_yaml(LEDGER_PATH.read_text(encoding="utf-8"))
-    from refapp.app import APP
-
     return Runner(
-        app=APP,
+        app=load_app(),
         evaluate=evaluate,
         make_middleware=make_middleware,
         ledger=ledger,
