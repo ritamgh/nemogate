@@ -2,8 +2,10 @@
 @media (prefers-color-scheme:dark){:root{--hl:#5a4710;--hl-ink:#ffe9a8}}
 .story header{margin-bottom:8px}
 .story .howto ol{gap:.6rem}
-.story .words{margin:.3rem 0 0;padding-left:1.1rem;font-size:.92rem;color:var(--muted)}
+.story .words{margin:.8rem 0 0;padding-left:1.1rem;font-size:.92rem;color:var(--muted)}
 .story mark{background:var(--hl);color:var(--hl-ink);font-weight:600;border-radius:3px;padding:0 2px;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:.15em}
+.story .diff p{flex-wrap:wrap}
+.story .diff .t,.story .diff del,.story .diff ins{flex:1 1 14em}
 .story .diff del{text-decoration:line-through}
 .story .diff ins{text-decoration:none}
 .story .pinhead{padding-top:6px}

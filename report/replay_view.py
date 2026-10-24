@@ -47,6 +47,7 @@ RESULT_CHARS = 300
 REPLY_CHARS = 500
 SHOWN_BLOCKS = 3  # blocked calls listed
 SHOWN_NEXT = 3  # calls listed after the first block
+LIST_ARGS_CHARS = 200  # arguments shown for a call in a list
 
 ARM_WORDS = {
     "natural": "no sabotage and no gate",
@@ -257,7 +258,10 @@ def split_pin(received: str) -> tuple[str, str]:
 
 def lines(text: str, anchors: Sequence[str]) -> str:
     cut = text[:HANDOFF_CHARS]
-    body = "".join(f'<p class="ln">{marked(p, anchors)}</p>' for p in panels.sentences(cut))
+    body = "".join(
+        f'<p class="ln"><span class="t">{marked(p, anchors)}</span></p>'
+        for p in panels.sentences(cut)
+    )
     return f'<div class="diff">{body or "<p class=ln><em>(empty)</em></p>"}</div>' + (
         f'<p class="note">… {len(text) - HANDOFF_CHARS} more characters not shown.</p>'
         if len(text) > HANDOFF_CHARS
@@ -273,7 +277,9 @@ def received_lines(sent: str, received: str, anchors: Sequence[str]) -> str:
     out = []
     for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
         if tag == "equal":
-            out += [f'<p class="ln">{marked(s, anchors)}</p>' for s in a[i1:i2]]
+            out += [
+                f'<p class="ln"><span class="t">{marked(s, anchors)}</span></p>' for s in a[i1:i2]
+            ]
             continue
         out += [
             f'<p class="ln"><del>{marked(s, anchors)}</del> <span class="tag">(removed)</span></p>'
@@ -299,11 +305,11 @@ def received_lines(sent: str, received: str, anchors: Sequence[str]) -> str:
     return f'<div class="diff">{"".join(out) or "<p class=ln><em>(empty)</em></p>"}</div>{note}'
 
 
-def call_text(ev: Event) -> str:
+def call_text(ev: Event, limit: int = ARGS_CHARS) -> str:
     if isinstance(ev, ToolCall):
         args = json.dumps(ev.args, sort_keys=True, ensure_ascii=False)
         flag = " (blocked by the gate)" if ev.blocked else ""
-        return f"<code>{e(ev.tool)}</code> <code>{shown(args, ARGS_CHARS)}</code>{e(flag)}"
+        return f"<code>{e(ev.tool)}</code> <code>{shown(args, limit)}</code>{e(flag)}"
     content = getattr(ev, "content", None) or getattr(ev, "reason", "") or ""
     return f"{e(ev.type)}: {shown(str(content), ARGS_CHARS)}"
 
@@ -522,7 +528,7 @@ def gated_side(gated: Run) -> str:
         if nxt:
             parts.append(
                 f"<h4>The {e(receiver)}'s next calls after the first refusal</h4><ul>"
-                + "".join(f"<li>{call_text(x)}</li>" for x in nxt)
+                + "".join(f"<li>{call_text(x, LIST_ARGS_CHARS)}</li>" for x in nxt)
                 + "</ul>"
             )
     else:
@@ -682,16 +688,17 @@ def build(
         '<div class="howto"><h2>How to read this</h2><ol>'
         "<li>Use the numbered steps. With a keyboard, tab to them and use the arrow keys. "
         "Printing shows every step.</li>"
-        f"<li>{words(everyone)}</li>"
         "<li>Every line and number comes from the saved files of the runs listed at the foot; "
-        "no model was called to make this page.</li></ol></div>"
+        "no model was called to make this page.</li></ol>"
+        f"{words(everyone)}</div>"
         f"{left_out}"
         f'<div class="steps">{radios}<div class="panels">{panes}</div></div>'
         "<footer>"
         f"{runs_table(roles)}"
         f'<p class="note">{e(relation(rule, gated))}</p>'
-        '<p class="note">This page follows one run: a story, not a statistic. It shows what '
-        "happened once, and says nothing about how often. It links nothing outside itself.</p>"
+        '<p class="note">This page tells the story of one run, set beside a gated run of the '
+        "same task: a story, not a statistic. It shows what happened once, and says nothing about "
+        "how often. It links nothing outside itself.</p>"
         "</footer></main></body></html>"
     )
 
