@@ -1,0 +1,12 @@
+{
+  "source_run_id": "r-20261018T083011-9d9413",
+  "crossing": {
+    "tool_call_id": "chatcmpl-tool-a5e8252910f842c8",
+    "delegation": "delegation:planner->coder",
+    "returned": "return:coder->planner",
+    "pre_checkpoint": "1f1cace3-79d3-6460-8022-7cc280aced9a",
+    "pre_image": "54650f1b-39a8-48da-af9e-2082b4e1a6a8",
+    "post_checkpoint": "1f1cace3-8356-6006-8023-88a3fbea62f8",
+    "post_image": "54650f1b-39a8-48da-af9e-2082b4e1a6a8"
+  }
+}

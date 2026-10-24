@@ -1,0 +1,26 @@
+[
+  {
+    "path": "CHANGES_SUMMARY.md",
+    "op": "added"
+  },
+  {
+    "path": "app/api.py",
+    "op": "modified"
+  },
+  {
+    "path": "app/export_csv.py",
+    "op": "modified"
+  },
+  {
+    "path": "app/serializers.py",
+    "op": "modified"
+  },
+  {
+    "path": "tests/test_api.py",
+    "op": "modified"
+  },
+  {
+    "path": "tests/test_exports.py",
+    "op": "modified"
+  }
+]

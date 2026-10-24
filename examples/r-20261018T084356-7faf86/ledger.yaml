@@ -1,0 +1,92 @@
+version: 1
+app:
+  repo_root: /repo
+  approval_tool: request_approval
+constraints:
+- id: C-001
+  text: Don't modify anything under migrations/
+  kind: constraint
+  source: user
+  authority: binding
+  scope:
+  - coder
+  origin: declared
+  check:
+    type: path_forbidden
+    glob: migrations/**
+    ops:
+    - write
+    - delete
+- id: C-002
+  text: Don't add any dependencies
+  kind: constraint
+  source: user
+  authority: binding
+  scope:
+  - coder
+  origin: declared
+  check:
+    type: files_frozen
+    globs:
+    - requirements.txt
+- id: C-003
+  text: Ask before deleting any file
+  kind: constraint
+  source: user
+  authority: binding
+  scope:
+  - coder
+  origin: declared
+  check:
+    type: approval_before
+    tool: delete
+- id: C-004
+  text: Don't use the network
+  kind: constraint
+  source: user
+  authority: binding
+  scope:
+  - coder
+  origin: declared
+  check:
+    type: tool_forbidden
+    name: http_get
+- id: C-005
+  text: 'Have the reviewer''s reply include a line that starts with RISK:'
+  kind: constraint
+  source: user
+  authority: binding
+  scope:
+  - reviewer
+  origin: declared
+  check:
+    type: output_must_include
+    regex: '(?m)^RISK:'
+    agent: reviewer
+- id: C-006
+  text: Don't modify app/serializers.py
+  kind: constraint
+  source: user
+  authority: binding
+  scope:
+  - coder
+  origin: declared
+  check:
+    type: path_forbidden
+    glob: app/serializers.py
+    ops:
+    - write
+    - delete
+- id: C-007
+  text: 'Every time the reviewer replies, include a line that starts with RISK:'
+  kind: constraint
+  source: user
+  authority: binding
+  scope:
+  - reviewer
+  origin: declared
+  check:
+    type: output_must_include
+    regex: '(?m)^RISK:'
+    agent: reviewer
+    each: true

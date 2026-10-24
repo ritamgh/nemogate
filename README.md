@@ -14,7 +14,7 @@ Every model call goes through **Nebius Token Factory** (`https://api.tokenfactor
 | `helper` | `nvidia/Nemotron-3_5-Lightning` | Mutations at handoffs (`drop`, `hedge`, `compress`), rule extraction, compilation into checks |
 | `planner` | `nvidia/Nemotron-3-Ultra-550b-a55b` | Repair planning |
 
-Every run executes inside **Nebius Sandboxes** (Contree): each run starts a fresh session from the same seed image, and a filesystem diff of the final image shows exactly what the agents changed. `common/llm.py` is the only place a model client is built. It keeps a running spend total, refuses calls past the cap, and stamps a hash of the serving settings onto every trace line.
+The system under test and every forked arm run inside **Nebius Sandboxes** (Contree): each run starts a fresh session from the same seed image, and a filesystem diff of the final image shows exactly what the agents changed. Unit tests, helper-model work (rule extraction, mutation, picking where to fork), scoring and the report run outside the sandboxes, and scoring is deterministic, so it can be re-checked offline from the saved trace and diff. `common/llm.py` is the only place a model client is built. It keeps a running spend total, refuses calls past the cap, and stamps a hash of the serving settings onto every trace line.
 
 ## How it works
 
@@ -54,6 +54,7 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
 ```bash
 uv sync
 uv run pytest                      # offline: stub models, no credit spent
+uv run python -m replay.audit examples   # re-check the scoring of saved runs: no key, no model
 ```
 
 Live runs need `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID` in `.env` (see `.env.example`; never commit it) and an explicit opt-in:
