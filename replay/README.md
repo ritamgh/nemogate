@@ -2,7 +2,7 @@
 
 Owner: A. Pipeline code: the generality rule (AGENTS.md rule 5) applies to everything here
 outside `tests/`. Nothing in replay/ names a task, a constraint, the seed repo or `refapp`
-except the one default noted under "Defaults".
+except the one default noted under "Choosing the app".
 
 This file is the contract between the modules below. Change it only together with the code.
 
@@ -969,8 +969,8 @@ delegations to the same agent are not told apart; planner delegations here are s
 
 ## Defaults
 
-`replay.runner.default_runner()` (used by `run()` and the CLI) builds: `app = refapp.app.APP` (the one place
-replay names the reference app), `evaluate = oracle.evaluate`, `make_middleware =
+`replay.runner.default_runner()` (used by `run()` and the CLI) builds: `app = replay.app.load_app()`
+(`refapp.app:APP` unless `NEMOGATE_APP=module:attr` names another `App`, see "Choosing the app"), `evaluate = oracle.evaluate`, `make_middleware =
 gate.make_middleware`, `ledger = load_ledger_yaml(ROOT/"nemogate.yaml")`. All imported inside
 the function, so replay imports and tests work before B's packages exist; a missing one raises
 a RuntimeError saying which package is missing.
@@ -979,3 +979,22 @@ a RuntimeError saying which package is missing.
 agents' commands run from the app's repo, so a path-less `grep` or `glob` searches the repo and
 not the image's default directory (docs/FACTS.md §9). A factory passed in is called with the
 session only and is used as is.
+
+## Choosing the app
+
+```python
+# replay/app.py
+APP_ENV = "NEMOGATE_APP"; DEFAULT_APP = "refapp.app:APP"
+def load_app() -> App
+```
+
+`load_app()` reads `NEMOGATE_APP` as `module:attr` and returns that attribute. Unset or blank it
+returns `refapp.app.APP`, so every existing command is unchanged (`replay/tests/test_app_select.py`
+pins that). A malformed spec, a module that does not import or a missing attribute is a
+`ValueError` naming the variable; the runner and budget CLIs turn it into a refusal (exit 2),
+never a fall back to the default. `default_runner`, `default_refusals` (so also `replay.budget`)
+and `carriage.load_user_messages` (so also `replay.carriage` and `report.natural_runs`) all go
+through it. One ledger (`nemogate.yaml`) still serves every app: the selected app's task ids must
+resolve to constraints in it. Set the variable for the whole command, e.g.
+`NEMOGATE_APP=refapp.research.app:APP uv run python -m replay.budget ...`; the run record does not
+store the app, so keep an app's runs in their own `--runs-dir`.

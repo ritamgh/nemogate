@@ -106,7 +106,12 @@ async def seed_image(client, cache: Path | None = None) -> str:
     `NotFoundError` on a 404 (FACTS section 7). Any other error from it propagates.
     """
     cache = _default_cache() if cache is None else Path(cache)
-    sha = seed_sha()
+    return await cached_image(client, cache, seed_sha(), build_seed_image)
+
+
+async def cached_image(client, cache: Path, sha: str, build) -> str:
+    """`seed_image`'s cache logic for any app: `sha` keys the content, `build(client)` makes the
+    image. Another app with its own image reuses it (refapp/research/sandbox.py)."""
     cached = None
     try:
         saved = json.loads(cache.read_text())
@@ -120,7 +125,7 @@ async def seed_image(client, cache: Path | None = None) -> str:
             return str(cached)
         except NotFoundError:
             pass  # the image was deleted (cleanup, other project): build
-    uuid = await build_seed_image(client)
+    uuid = await build(client)
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps({"seed_sha": sha, "base_image": BASE_IMAGE, "uuid": uuid}))
     return uuid
@@ -131,8 +136,11 @@ async def new_session(client, image_uuid: str):
     return (await client.images.use(UUID(image_uuid))).session()
 
 
-async def task_success(session, check_name: str, check_bytes: bytes) -> tuple[bool, str]:
+async def task_success(
+    session, check_name: str, check_bytes: bytes, *, suite: bool = True
+) -> tuple[bool, str]:
     """True when the repo's suite and then the check both exit 0 in the session's current image.
+    With `suite=False` (an app whose repo has no suite) only the check runs.
 
     Both commands run disposable, on a plain image made from `session.uuid`: nothing is written
     back, so `session` neither advances nor gains files, and nothing is left in /repo. (A
@@ -145,7 +153,7 @@ async def task_success(session, check_name: str, check_bytes: bytes) -> tuple[bo
     check_path = f"{CHECK_DIR}/{check_name}"
     image = await session.client.images.use(session.uuid)
     steps = (
-        (_SUITE_CMD, SUITE_TIMEOUT_S, None),
+        *(((_SUITE_CMD, SUITE_TIMEOUT_S, None),) if suite else ()),
         (
             f"python {shlex.quote(check_path)}",
             CHECK_TIMEOUT_S,

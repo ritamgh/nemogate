@@ -1,15 +1,21 @@
 """What the runner needs from the app under test, so replay/ never imports a specific app.
 
 The reference app implements this in `refapp/app.py`. A second Deep Agents app would implement
-the same Protocols and run with no change to replay/ (docs/SPEC.md, generality rule).
+the same Protocols and run with no change to replay/ (docs/SPEC.md, generality rule); it is
+picked with NEMOGATE_APP (`load_app`).
 """
 
+import importlib
+import os
 from collections.abc import Sequence
 from typing import Any, Protocol
 
 from langchain.agents.middleware import AgentMiddleware
 
 from schemas.enums import Arm, Operator
+
+APP_ENV = "NEMOGATE_APP"
+DEFAULT_APP = "refapp.app:APP"  # what every command used before the selector existed
 
 
 class AppTask(Protocol):
@@ -60,6 +66,26 @@ class App(Protocol):
         """Did the run get the task done, judged in `session`'s current image without changing
         it. The str is the tail of the failing output, or ""."""
         ...
+
+
+def load_app() -> App:
+    """The app the runner uses: `module:attr` from NEMOGATE_APP, else `refapp.app:APP`.
+
+    ValueError (naming the variable) for a malformed spec, a module that does not import or a
+    missing attribute, so a typo is a refusal and never a silent fall back to the default.
+    """
+    spec = os.environ.get(APP_ENV, "").strip() or DEFAULT_APP
+    module_name, sep, attr = spec.partition(":")
+    if not (sep and module_name and attr):
+        raise ValueError(f"{APP_ENV} must look like module:attr, got {spec!r}")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(f"{APP_ENV}={spec!r}: cannot import {module_name!r}: {exc}") from exc
+    try:
+        return getattr(module, attr)
+    except AttributeError as exc:
+        raise ValueError(f"{APP_ENV}={spec!r}: {module_name!r} has no attribute {attr!r}") from exc
 
 
 def pairs(arms: Sequence[Arm], operators: Sequence[Operator]) -> list[tuple[Arm, Operator]]:
