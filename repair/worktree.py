@@ -3,7 +3,9 @@
 The runner only claims the commit it runs from (replay/record.py), so the patched code must be
 checked out where the runner runs. The branch is local and never pushed; the main checkout is
 untouched. This spends model credit (NEMOGATE_LIVE=1 is set for the runner); callers must check
-the budget first. A rejected patch's worktree and branch are removed with discard_last().
+the budget first. A rejected patch's worktree and branch are removed with discard_last(); a round
+that did not finish keeps them, because the re-runs that did finish are records in the worktree
+(`completed()`).
 """
 
 import os
@@ -18,8 +20,34 @@ from schemas.run import RunRecord
 _IDENTITY = ["-c", "user.name=NemoGate repair", "-c", "user.email=repair@nemogate.invalid"]
 
 
+STOP_GRACE_SECONDS = 20  # how long a stopped runner gets to wind down before it is killed
+
+
 def _default_run(cmd: list[str], cwd: Path, env: dict[str, str]) -> None:
-    subprocess.run(cmd, cwd=cwd, env=env, check=True)
+    """Run `cmd` to the end, like `subprocess.run(check=True)`, but if this process is stopped
+    first (Ctrl-C, or a SIGTERM turned into KeyboardInterrupt), ask the runner to stop and wait for
+    it. `subprocess.run` sends SIGKILL, which `uv run` does not pass on, and the runner behind it
+    would go on making model calls after the round was reported as stopped. The runner stays in
+    this process's group, so a kill of the whole group still reaches it."""
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env)
+    try:
+        code = proc.wait()
+    except BaseException:
+        _stop(proc)
+        raise
+    if code != 0:
+        raise subprocess.CalledProcessError(code, cmd)
+
+
+def _stop(proc: "subprocess.Popen[bytes]") -> None:
+    """Ask `proc` to stop, wait for it, and kill it if it does not (or if the user presses Ctrl-C
+    again while waiting: they want it gone now, and an orphaned runner keeps spending credit)."""
+    proc.terminate()
+    try:
+        proc.wait(timeout=STOP_GRACE_SECONDS)
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
+        proc.kill()
+        proc.wait()
 
 
 class WorktreeRerun:
@@ -33,12 +61,30 @@ class WorktreeRerun:
         operators: Sequence[str],
         n: int,
         run_cmd: Callable[[list[str], Path, dict[str, str]], None] = _default_run,
+        on_start: Callable[[Path, str], None] | None = None,
     ) -> None:
         self.repo_dir = Path(repo_dir)
         self.worktrees_dir = Path(worktrees_dir)
         self.tasks, self.arms, self.operators, self.n = list(tasks), list(arms), list(operators), n
         self.run_cmd = run_cmd
+        self.on_start = on_start  # called with (worktree, branch) once the patch is committed
         self.last: tuple[Path, str] | None = None  # (worktree, branch) of the latest re-run
+
+    def completed(self) -> list[RunRecord]:
+        """The re-run records the latest worktree holds so far, for a round that was stopped.
+
+        A record that cannot be read (the run in progress when the runner was stopped) is left
+        out rather than failing the report.
+        """
+        if self.last is None:
+            return []
+        records = []
+        for path in sorted((self.last[0] / "runs").glob("*/record.json")):
+            try:
+                records.append(RunRecord.model_validate_json(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
+        return records
 
     def discard_last(self) -> None:
         """Remove the latest re-run's worktree and its local branch (for a rejected patch)."""
@@ -70,6 +116,8 @@ class WorktreeRerun:
             f"Repair: apply {patch.fix_id}\n\nInsert-only edits chosen from the closed fix menu."
         )
         self._git(tree, *_IDENTITY, "commit", "-q", "-m", message)
+        if self.on_start is not None:
+            self.on_start(tree, branch)
         # --yes: the repair CLI has already checked the run count against the repair bucket
         # and required its own --yes (repair/__main__.py), so the inner runner does not ask.
         cmd = [
