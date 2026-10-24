@@ -6,7 +6,7 @@ Two pages, both generated offline from run data. Neither calls a model.
 
 ```
 uv run python -m report.site --results results/results.json --out results/site/index.html \
-    [--runs DIR...] [--repair DIR] [--ledger nemogate.yaml] [--notes FILE] \
+    [--runs DIR...] [--repair DIR] [--recall FILE...] [--ledger nemogate.yaml] [--notes FILE] \
     [--appendix TITLE RESULTS_FILE [NOTES_FILE]]...
 ```
 
@@ -22,6 +22,26 @@ What it shows:
   and the definitions are). The first line also says that the gate stops the rule from being
   broken, and that finishing the task after a block needs a route that keeps the rule or a human
   who can approve, so an unfinished task with the rule kept is not a gate failure.
+- "At a glance", above "How to read this", only when the results set has exact tests (a results
+  file without `exact_tests` renders byte for byte as before): one table of every graded rule,
+  from the results file only. One row per rule and condition, because the arms of one rule do
+  not always share their operators (the ungated arm is natural at "no sabotage" and mutated at
+  an operator), so nothing is added up across rows: sabotage setting, plus handoff and
+  compaction setting where the rule has several. Only conditions with a block-only or gated
+  cell get a row; a graded rule with none still gets one row of dashes. Columns: "Broke the
+  rule, no gate", "block-only", "gated" (k of n and the share, the cells the detail tables use;
+  a dash for a missing cell, never 0) and "Exact test p (gated vs block-only)" (the `violations`
+  entry of that operator and compaction setting, gated against block-only; a paired test also
+  gives the figure that counts each source once; a dash when there is none, and a dash when both
+  arms broke the rule 0 times, because block-only gets 0 by construction for an action it
+  refuses, so 0 against 0 is not tested). When the set has `attempts` entries, two more columns:
+  "Tried the forbidden action, block-only -> gated" (k of n and the share of each arm, from the
+  cells' `arm_metrics.attempt_rate`, the detail table's figures; a dash for a cell without) and
+  its exact test p (the `attempts` entry of the same operator and compaction setting, same
+  rules). Without attempts entries the columns are not there. Each row links to
+  its boundary section. The caption says the rows are all graded rules, not a selection. The
+  table is repeated at the top of each appendix, from its own file (the rule's wording withheld
+  there as everywhere in an appendix). It reuses the outcome table's CSS (`table.outcome`).
 - "What happened, rule by rule" (the first result on the page): one sentence that task success
   and keeping the rule are counted separately, with an example from the data (the cell with the
   most runs that broke the rule and still passed the task, `successes - outcomes.done`; when no
@@ -49,6 +69,24 @@ What it shows:
   for any other rule it adds nothing of the kind; when that handoff was run under more than one
   compaction setting, the sentence names the setting it quotes and says the others have their own
   rows below; "No comparison has enough runs yet" when there is none.
+- Exact tests (p-values), when a boundary of the results file has `exact_tests` (written by
+  `replay/stats.py`; see `replay/README.md`, "Exact tests"). Under the gated-minus-block-only
+  attempt lines of each boundary (main set and appendices alike) there is one table, a row per
+  entry, built from the entries only. Columns: Outcome ("Broke the rule", "Tried the forbidden
+  action", "Did the job and kept the rule"), Operator ("Pooled over operators" for the pooled
+  entry, "no sabotage" for `none`, the compaction setting named under it when the boundary has
+  several), Gated, Block-only, Test ("Fisher, independent runs" or "McNemar, matched forks of the
+  same sources"), "p over runs or pairs" and "p counting each source once" (a dash for Fisher).
+  Fisher shows each arm's `k of n runs`; McNemar shows, per arm, the matched pairs where only that
+  arm had the outcome ("1 of 8 pairs (only this arm)"). The Gated and Block-only columns take the
+  entry's `a`/`b` by their `arm` (so a swapped entry still lines up); an entry of other arms keeps
+  its order and names each arm in its cell. Rows follow the order of the outcomes, then the
+  compaction setting, then the operators, the pooled entry last under its outcome. p has three
+  significant figures, "< 0.001" below that. Under the table one line gives the smallest p each
+  source count can reach, `2 * 0.5^S` (at most 1), for the paired rows whose source test dropped
+  no ties. The "How to read this" box gains one item (pairs, sources, the cautious source-level
+  figure, no correction for many comparisons) only when some table is shown; the page never says
+  "significant". A results file without `exact_tests` renders byte for byte as before.
 - With `--notes FILE`, a section "Notes on these numbers" right after the results section (so
   after its verdict line, before the key): the file's paragraphs, split on blank lines, in order.
   It is for a re-grade or a caveat that is not in the results file; the text stays in the file,
@@ -86,7 +124,14 @@ What it shows:
   it says each rule's own group is in its section, lists every commit with its rules, and labels
   the commit "largest group"), run accounting (found, pooled, inconclusive by reason) and the honesty strip
   (extraction recall or "not measured", constraints with a compiled check, inconclusive total).
-  The strip is always shown, including when nothing was pooled.
+  The strip is always shown, including when nothing was pooled. With `--recall FILE...` (the
+  `ledger.recall` output, e.g. `results/recall/dev.json reference.json`) and no recall in
+  `results.json`, the recall entry is one per file: "matched of total", the percentage, the extra
+  checks proposed, labelled with the file's name, plus the note that this is not a clean held-out
+  measure (the extraction prompts were tuned on the development set, FACTS section 6). A recall
+  already in `results.json` is kept and the files are ignored. A file that is not a recall
+  measurement (not JSON, a missing `matched`/`total`/`extra`, a fraction or negative count, more
+  found than asked, none asked) exits 2.
 - Boundary graph: agents are parsed from the `delegation:<from>-><to>` and
   `return:<from>-><to>` boundary ids found in the data; nothing is hard-coded. A
   `compaction:<agent>` boundary is a marker on its agent. Each edge is coloured by the pooled
@@ -112,7 +157,7 @@ What it shows:
   square. Under block_only and gated the second column reads "Agent broke it or tried to" and a
   line says blocked attempts count there while the violation rate counts only what got through
   (a blocked attempt is labelled `DISOBEYED`). Runs the classifier could not place (`NOT_EXERCISED`, `UNKNOWN`, `UNCLASSIFIABLE`, no
-  carriage.json) are counted under it as "Not placed". Its CSS (`presence.css`) is added only to
+  carriage.json) are counted under it as "Not placed". When none of the four squares has a run (for example a rule whose text is withheld, or runs with no carriage record), the grid and its notes are left out and one line says "Where the rule went in the handoff is not recorded for these runs." Its CSS (`presence.css`) is added only to
   a page that has a grid, so a page without one is unchanged. A cell that was not run prints "not run", not 0. A cell with
   `clustered: true` carries a warning that its intervals are too narrow. The rule effect
   (`load_bearing`), gate effect on task success (`ledger_value`) and gate effect on attempts
@@ -171,7 +216,8 @@ outcome-first section is tested in `test_site_outcome_first.py`.
 
 - **Coverage** (always): from the honesty block, the pooled constraints and, with `--ledger`, the
   full ledger. Declared, with a compiled check, exercised (at least one pooled run), exercised and
-  checked, extraction recall ("not measured" when null), and the unchecked and never-exercised
+  checked, extraction recall ("not measured" when null; the `--recall` figures and the same note
+  when given), and the unchecked and never-exercised
   rules by id and text. Without `--ledger` only constraints that had pooled runs can be named.
   With `--runs` as well, each never-exercised rule says whether the run folders held any of its
   runs ("No run of this rule is in the run folders this page read", or how many there are and
@@ -193,7 +239,9 @@ outcome-first section is tested in `test_site_outcome_first.py`.
   or the gate withheld every one) and the page says that.
   The comparison side says "No such call" when it never made the call. Trace text is escaped.
 - **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
-  `.patch` beside it. Without `--repair` it says "No repair run yet". `repair` writes no
+  `.patch` beside it, one block per summary in file-name order (a folder can hold several rounds:
+  the verdict, the reason a refused patch was refused, the judged numbers and the diff each
+  show). Without `--repair` it says "No repair run yet". `repair` writes no
   structured result, so the numbers are parsed from the `Result:` line `write_report` writes. If the summary has more than one line starting `- Result:` (a model's
   rationale, or a file name quoted in a guard's reason, can forge one) the result is ambiguous:
   no numbers table, the raw text is shown escaped. The

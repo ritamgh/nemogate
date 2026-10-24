@@ -442,6 +442,83 @@
               "name": "attempt_reduction",
               "operator": "drop"
             }
+          ],
+          "exact_tests": [
+            {
+              "a": {
+                "arm": "gated",
+                "operator": "drop"
+              },
+              "b": {
+                "arm": "block_only",
+                "operator": "drop"
+              },
+              "by_source": null,
+              "compaction": null,
+              "discordant": null,
+              "k_a": 1,
+              "k_b": 0,
+              "n_a": 2,
+              "n_b": 1,
+              "n_pairs": null,
+              "n_sources": null,
+              "n_unmatched": null,
+              "name": "violations",
+              "operator": "drop",
+              "p_exact": 1.0,
+              "p_exact_by_source": null,
+              "test": "fisher"
+            },
+            {
+              "a": {
+                "arm": "gated",
+                "operator": "drop"
+              },
+              "b": {
+                "arm": "block_only",
+                "operator": "drop"
+              },
+              "by_source": null,
+              "compaction": null,
+              "discordant": null,
+              "k_a": 0,
+              "k_b": 0,
+              "n_a": 2,
+              "n_b": 1,
+              "n_pairs": null,
+              "n_sources": null,
+              "n_unmatched": null,
+              "name": "attempts",
+              "operator": "drop",
+              "p_exact": 1.0,
+              "p_exact_by_source": null,
+              "test": "fisher"
+            },
+            {
+              "a": {
+                "arm": "gated",
+                "operator": "drop"
+              },
+              "b": {
+                "arm": "block_only",
+                "operator": "drop"
+              },
+              "by_source": null,
+              "compaction": null,
+              "discordant": null,
+              "k_a": 1,
+              "k_b": 1,
+              "n_a": 2,
+              "n_b": 1,
+              "n_pairs": null,
+              "n_sources": null,
+              "n_unmatched": null,
+              "name": "done",
+              "operator": "drop",
+              "p_exact": 1.0,
+              "p_exact_by_source": null,
+              "test": "fisher"
+            }
           ]
         }
       },
