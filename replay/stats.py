@@ -29,6 +29,7 @@ from gate.policy import checkable_before_the_call
 from replay.arm_metrics import RunFacts, cell_metrics, errored_cost
 from replay.blocks import run_blocks
 from replay.carriage import Label
+from replay.exact import Obs, compare_arms
 from replay.intervals import Z, rate_stat, round4, wilson
 from replay.noop import is_noop_error, text_noop
 from schemas.enums import Arm
@@ -473,6 +474,84 @@ def _attempt_reduction(
     return {**out, "n_a": rate_a["n"], "n_b": rate_b["n"]}
 
 
+EXACT_OUTCOMES = ("violations", "attempts", "done")  # the order of `exact_tests`
+POOLED = "pooled"  # `operator` of an exact test over several operators of paired cells
+P_DECIMALS = 6  # a p-value of 0.0001 must not round to 0.0001 +- half of itself
+
+
+def _outcome(name: str, run: LoadedRun, facts: RunFacts) -> bool | None:
+    """Whether `run` had outcome `name`; None if it cannot be told (no readable trace, or a rule
+    that is not about a tool or path, so there is no attempt)."""
+    violated = run.record.constraint_id in run.record.violations
+    if name == "violations":
+        return violated
+    if name == "done":  # the `done` bucket of `_outcomes`: finished the task and kept the rule
+        return run.record.task_success and not violated
+    if facts.blocks is None or facts.blocks.attempts is None:
+        return None
+    return facts.blocks.attempts > 0
+
+
+def _exact_entry(name: str, operator: str, knobs: Any, result: Mapping[str, Any]) -> dict[str, Any]:
+    p_by_source = result["p_exact_by_source"]
+    return {
+        "name": name,
+        "operator": operator,
+        "compaction": _compaction(knobs),
+        "a": {"arm": "gated", "operator": operator},
+        "b": {"arm": "block_only", "operator": operator},
+        **result,
+        "p_exact": round(result["p_exact"], P_DECIMALS) + 0.0,
+        "p_exact_by_source": None if p_by_source is None else round(p_by_source, P_DECIMALS) + 0.0,
+    }
+
+
+def _exact_tests(
+    order: Sequence[tuple[str, str, Any]],
+    cell_runs: Mapping[tuple[str, str, Any], Sequence[LoadedRun]],
+    facts: Mapping[tuple[str, str, Any], Sequence[RunFacts]],
+) -> list[dict[str, Any]]:
+    """Exact tests of each `gated` cell against the `block_only` cell of its operator and
+    compaction setting, on `EXACT_OUTCOMES`: Fisher for independent cells, McNemar for cells that
+    share fork sources (`replay.exact.compare_arms`), then for each outcome and setting one
+    pooled entry over the operators that were tested as pairs, when there are at least two.
+    Empty when there is no gated cell with a partner."""
+    out: list[dict[str, Any]] = []
+    gated_keys = sorted(
+        (k for k in order if k[0] == "gated"),
+        key=lambda k: (k[1], _knob_rank(k[2])),
+    )
+
+    def observations(key: tuple[str, str, Any], name: str) -> list[Obs]:
+        return [
+            Obs(run.fork_source, key[1], _outcome(name, run, f))
+            for run, f in zip(cell_runs[key], facts[key], strict=True)
+        ]
+
+    for name in EXACT_OUTCOMES:
+        paired: dict[Any, list[tuple[list[Obs], list[Obs]]]] = {}
+        for key in gated_keys:
+            partner = ("block_only", key[1], key[2])
+            if partner not in cell_runs:
+                continue
+            a, b = observations(key, name), observations(partner, name)
+            result = compare_arms(a, b)
+            if result is None:
+                continue
+            out.append(_exact_entry(name, key[1], key[2], result))
+            if result["test"] == "mcnemar":
+                paired.setdefault(key[2], []).append((a, b))
+        for knobs in sorted(paired, key=_knob_rank):
+            if len(paired[knobs]) < 2:
+                continue
+            result = compare_arms(
+                [o for a, _ in paired[knobs] for o in a], [o for _, b in paired[knobs] for o in b]
+            )
+            if result is not None:
+                out.append(_exact_entry(name, POOLED, knobs, result))
+    return out
+
+
 def _facts(run: LoadedRun, constraint: Any, repo_root: str | None) -> RunFacts:
     blocks = (
         None
@@ -558,11 +637,15 @@ def aggregate(
             for key in order:
                 _one_classifier_version(constraint_id, boundary, key, cell_runs[key])
             cells = [_cell(*key, cell_runs[key]) for key in order]
+            facts = {
+                key: [_facts(run, constraint, ledger.app.repo_root) for run in cell_runs[key]]
+                for key in order
+            }
             for cell, key in zip(cells, order, strict=True):
-                cell["arm_metrics"] = cell_metrics(
-                    [_facts(run, constraint, ledger.app.repo_root) for run in cell_runs[key]]
-                )
+                cell["arm_metrics"] = cell_metrics(facts[key])
             boundary_out[boundary] = {"cells": cells, "comparisons": _comparisons(cells)}
+            if exact := _exact_tests(order, cell_runs, facts):
+                boundary_out[boundary]["exact_tests"] = exact
         constraints[constraint_id] = {
             "text": constraint.text,
             "kind": constraint.kind.value,

@@ -194,6 +194,30 @@ def comparison(name, operator, a, b, metric, diff, lo, hi, compaction=None):
     }
 
 
+def exact_test(name, counts, operator="drop", p=1.0):
+    """A Fisher entry of `exact_tests` (gated a, block_only b) from counts (k_a, n_a, k_b, n_b)."""
+    k_a, n_a, k_b, n_b = counts
+    return {
+        "name": name,
+        "operator": operator,
+        "compaction": None,
+        "a": {"arm": "gated", "operator": operator},
+        "b": {"arm": "block_only", "operator": operator},
+        "test": "fisher",
+        "k_a": k_a,
+        "n_a": n_a,
+        "k_b": k_b,
+        "n_b": n_b,
+        "p_exact": p,
+        "n_pairs": None,
+        "n_unmatched": None,
+        "discordant": None,
+        "n_sources": None,
+        "by_source": None,
+        "p_exact_by_source": None,
+    }
+
+
 # Hand-checked with z = 1.96, z^2 = 3.8416 (denominator d = 1 + z^2/n):
 #   Wilson(2,4):  centre 0.5, half = 1.96*sqrt(0.0625 + 3.8416/64)/1.9604 = 0.349965
 #                 -> (0.1500, 0.8500)
@@ -345,6 +369,16 @@ EXPECTED = {
                             -0.2726,
                             0.9055,
                         ),
+                    ],
+                    # Added with the exact tests (replay/exact.py); nothing above it changed. The
+                    # gated and block_only drop cells are independent runs, so Fisher. No run has
+                    # a trace, so there is no attempts test. Both p are 1 by hand:
+                    #   violations 0/2 against 0/2: the only table with these margins, p = 1;
+                    #   done 2/2 against 1/2: margin 3 of 4, weights C(2,x)C(2,3-x) = 2 and 2,
+                    #   both <= the observed 2, so (2 + 2) / C(4,3) = 1.
+                    "exact_tests": [
+                        exact_test("violations", (0, 2, 0, 2)),
+                        exact_test("done", (2, 2, 1, 2)),
                     ],
                 }
             },
