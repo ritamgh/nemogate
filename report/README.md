@@ -334,3 +334,41 @@ In the all-runs table, "Task done" shows `open` (not a cross) for a run with no 
 task was not finished: the rule was kept and the job waited, which is the cost of complying, not a
 failure. A legend line above the table says so. A cross still means not finished with a violation
 or an unknown verdict.
+
+## Rule replay page (`replay_view.py`)
+
+```
+uv run python -m report.replay_view --out OUT.html --story TITLE \
+    --rule-run RUN_DIR --gated-run RUN_DIR [--natural-run RUN_DIR] [--user-message-file FILE]
+```
+
+One rule's life as a static page of steps, from saved run folders only (no model, no network).
+Stepping is radio inputs and labels, so there is no script; the first step is open, the keyboard
+moves between steps with the arrow keys, and printing shows every step. The page uses the
+results page's CSS plus `replay.css`, and has no font, image or link outside itself. Two builds
+of the same folders are byte-identical.
+
+- **Steps** (numbered from 1; a step the data cannot support is left out and the page says so):
+  the user's rule (the user's message with the rule's text anchor marked, and the rule as the
+  run's `ledger.yaml` states it); the first handoff at the run's own boundary, as sent and as
+  received, with a removed sentence struck in place and tagged, a count of how often the anchor
+  appears in each, and, with `--natural-run`, that run's handoff for contrast; the action that
+  broke the rule (the call at the step `violations.json` names, a fork's steps counted after its
+  `prefix.jsonl`, and the result that followed); and the gated run beside the sabotaged one
+  (what the receiver got with the gate's re-pin shown apart from the planner's sentences, the
+  calls the gate refused with its reason, the next calls, the reply, the saved verdict). Step 3
+  is left out when the rule run's `violations.json` has no entry for the rule.
+- **Only saved text:** every quote is read from the run folders and escaped; long text is cut
+  with a visible `…` and a count of the characters left out. The verdict is `violations.json`,
+  never recomputed. The text anchor comes from `replay.carriage.anchors_of` on the run's own
+  check, so a rule with no text anchor marks nothing and the page says so.
+- **The runs:** the footer lists them (short id, arm, operator, task, full id) and says whether
+  they are forks of one source or separate runs, which are not a matched pair. The page says it
+  tells one run's story, not a statistic. The runs must share task, rule and boundary.
+- **The user's message** is not in a run folder. Without `--user-message-file` it is read from
+  the default app's task registry (`replay.carriage.load_user_messages`, by the run's task id);
+  with neither, step 1 says it is missing and shows only the ledger's rule.
+- A missing or unreadable file, a trace without the handoff, or runs about different rules is
+  exit code 2 with a message naming the file; nothing is written.
+
+Tests: `uv run pytest report/tests/test_replay_view.py` (hand-built run folders in `tmp_path`).
