@@ -118,12 +118,20 @@ What it shows:
   It is for a re-grade or a caveat that is not in the results file; the text stays in the file,
   never in code. It is plain text and escaped, so markup shows as typed. Without the option, or
   with an empty file, nothing is added and the page is byte-identical to one built without it. A
-  missing or unreadable file is exit code 2 and no page is written.
+  missing or unreadable file is exit code 2 and no page is written. A note may only repeat a
+  number the page shows: each number in a notes file (a digit run with an optional decimal part,
+  compared as typed; a run right after a letter, or a letter and a hyphen, is part of an
+  identifier such as a task or rule id and is not a number) must be in the visible text of its own set, the page built with no notes at
+  all (main part for `--notes`, the appendix's own section for its file). Otherwise exit code 2,
+  one line per file naming it and, per line, the unmatched numbers, never the line's text.
 - With `--appendix TITLE RESULTS_FILE [NOTES_FILE]` (repeatable), a separately labelled result
   set after everything else on the page, for runs that must be reported but not pooled with the
   main set. Each is drawn from its own results file only: its title, a line "Counts are small;
   read the intervals", the optional notes (plain text, escaped, like `--notes`), a run-accounting
-  block (found, counted, left out by reason, models, short hashes), "How these runs differ from
+  block (found, counted, left out by reason, models, short hashes), "Run accounting" (tables from
+  the results file: found, counted and not counted for the set, and the counted runs per rule,
+  sabotage setting and arm; a figure the file lacks is a dash, never 0; no per-rule errored
+  count, the file holds counted runs only per rule), "How these runs differ from
   the main set" (changed hashes and model ids, mutation no-op counts; from the two results files),
   then per rule the "What happened" table, the block-only against gated table where it applies and
   the cell tables with their intervals. It never feeds the main page: the main part is
