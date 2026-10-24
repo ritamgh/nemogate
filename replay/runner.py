@@ -36,7 +36,14 @@ from replay.boundaries import (
     copy_checkpoints,
     crossings_of,
 )
-from replay.carriage import classify, compaction_evidence, fork_trace, write_carriage
+from replay.carriage import (
+    check_trace,
+    classify,
+    compaction_evidence,
+    fork_scored,
+    fork_trace,
+    write_carriage,
+)
 from replay.fsdiff import diff, snapshot
 from replay.step_cap import StepCap
 from schemas.config import AppConfig, load_config
@@ -445,9 +452,7 @@ class Runner:
             n = len(fork.prefix)
             trace = fork_trace(fork.prefix, trace)
             since = diff(await snapshot(client, start, self.app.repo_root), after)
-            violations = [
-                v for v in self.evaluate(scoped, trace, since) if v.step is None or v.step >= n
-            ]
+            violations = fork_scored(self.evaluate(scoped, trace, since), n)
             # A path changed since the fork point is the fork's, counted above (a file added
             # before it and modified after reads "modified" there and "added" against the base),
             # so the base diff leaves it out rather than list it twice.
@@ -499,24 +504,13 @@ class Runner:
                 "trace would report zero violations"
             )
         trace = parse_trace_jsonl(trace_path.read_text(encoding="utf-8"))
-        if not trace:
-            raise RuntimeError(
-                f"trace file {trace_path} has no events: the gate did not run, and evaluating an "
-                "empty trace would report zero violations"
-            )
-        expected = {
-            "run_id": run_config.run_id,
-            "ledger_hash": ledger_hash,
-            "safe_config_hash": safe_config_hash,
-        }
-        for event in trace:
-            for field, want in expected.items():
-                got = getattr(event, field)
-                if got != want:
-                    raise RuntimeError(
-                        f"trace {trace_path}: {field} is {got!r} at step {event.step}, but the "
-                        f"run record carries {want!r}"
-                    )
+        check_trace(
+            trace,
+            trace_path,
+            run_id=run_config.run_id,
+            ledger_hash=ledger_hash,
+            safe_config_hash=safe_config_hash,
+        )
         return trace
 
     async def _invoke(

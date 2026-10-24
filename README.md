@@ -54,6 +54,7 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
 ```bash
 uv sync
 uv run pytest                      # offline: stub models, no credit spent
+uv run python -m replay.audit examples   # re-check the scoring of saved runs: no key, no model
 ```
 
 Live runs need `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID` in `.env` (see `.env.example`; never commit it) and an explicit opt-in:
