@@ -1,7 +1,11 @@
 """The repair agent (SPEC C5), offline: stub models and an injected re-run, no credit spent."""
 
 import json
+import os
+import signal
 import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -18,7 +22,15 @@ from repair.guards import (
     check_editable,
     check_edits,
 )
-from repair.loop import Rates, rates, repair_once, write_report
+from repair.loop import (
+    PENDING_REASON,
+    Rates,
+    pending_result,
+    rates,
+    repair_once,
+    stopped_result,
+    write_report,
+)
 from repair.menu import MENU, get_fix
 from repair.patch import (
     WRITE_PROMPT,
@@ -31,6 +43,7 @@ from repair.patch import (
 )
 from repair.plan import PLAN_PROMPT, BudgetExceeded, CallBudget, FixChoice, choose_fix
 from repair.worktree import WorktreeRerun
+from report.panels import JUDGED_RE, load_repairs
 from schemas.run import RunRecord
 
 STAMP = {
@@ -784,17 +797,23 @@ def live_cli(tmp_path, monkeypatch):
     for i, violated in enumerate([True, True, False]):
         run_folder(runs, f"r-{i}", violated=violated)
 
-    def go(*extra, editable=PROMPT_FILE, after=None):
+    def go(*extra, editable=PROMPT_FILE, after=None, rerun=None, writer=None):
         edit_args = {
             "file": PROMPT_FILE,
             "old_string": PROMPT_ANCHOR,
             "new_string": PROMPT_ANCHOR + ". Copy every rule from the user into each delegation",
         }
         planner = get_model("planner", stub_responses=[structured("FixChoice", CHOICE)])
-        writer = get_model("sut", stub_responses=[structured("EditList", {"edits": [edit_args]})])
-        rerun = FakeRerun(
-            after if after is not None else [record(f"p{i}", False) for i in range(3)]
+        writer = writer or get_model(
+            "sut", stub_responses=[structured("EditList", {"edits": [edit_args]})]
         )
+        if rerun == "build":  # let the CLI build its own re-run (the test replaces the class)
+            rerun, passed = None, None
+        else:
+            rerun = rerun or FakeRerun(
+                after if after is not None else [record(f"p{i}", False) for i in range(3)]
+            )
+            passed = rerun
         argv = [
             "--runs", str(runs), "--constraint", "C-001", "--task", "X1",
             "--editable", editable, "--agents", "lead,worker",
@@ -802,7 +821,7 @@ def live_cli(tmp_path, monkeypatch):
         ]  # fmt: skip
         monkeypatch.setenv("NEMOGATE_LIVE", "1")
         try:
-            code = main(argv, planner_model=planner, writer_model=writer, rerun=rerun)
+            code = main(argv, planner_model=planner, writer_model=writer, rerun=passed)
         finally:
             monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
         return code, rerun
@@ -867,3 +886,427 @@ def test_the_write_prompt_asks_for_a_separated_addition():
     # The guard refuses a glued insert; the prompt says how to avoid one up front.
     assert "Start your addition with a newline" in " ".join(WRITE_PROMPT.split())
     assert "ends with a backslash" in " ".join(WRITE_PROMPT.split())
+
+
+# ---- a round that does not finish still leaves a summary -------------------------------------
+#
+# Live repair round 2 (A, 2026-10-19): the worker's timeout killed `python -m repair` after 18 of
+# its 20 re-runs, and because the summary was written only after the re-runs, there was none.
+
+
+class StoppingRerun(FakeRerun):
+    """A re-run that stops with `exc` after `finished` records, as a killed runner does."""
+
+    def __init__(self, exc, finished=(), tree=None):
+        super().__init__([])
+        self.exc, self.finished = exc, list(finished)
+        self.last = (tree, "repair/carry_rules-abc123") if tree else None
+
+    def __call__(self, patch):
+        self.patches.append(patch)
+        raise self.exc
+
+    def completed(self):
+        return self.finished
+
+
+def stopped_cli(live_cli, rerun):
+    """Run the CLI with a re-run that stops. A KeyboardInterrupt that escapes would abort the whole
+    test session, so a regression is turned into one failing test."""
+    try:
+        return live_cli("--n", "3", "--yes", rerun=rerun)
+    except KeyboardInterrupt:
+        pytest.fail("a KeyboardInterrupt escaped the CLI: the stopped round was not reported")
+
+
+def summary_of(out: Path) -> str:
+    return (out / "repair-carry_rules.md").read_text(encoding="utf-8")
+
+
+class Probe(FakeRerun):
+    """Looks at the output folder while the re-runs are 'running'."""
+
+    def __init__(self, out: Path, records):
+        super().__init__(records)
+        self.out, self.seen = out, None
+
+    def __call__(self, patch):
+        self.seen = (summary_of(self.out), (self.out / "repair-carry_rules.patch").read_text())
+        return super().__call__(patch)
+
+
+def test_the_summary_and_diff_exist_before_the_reruns_start(live_cli, tmp_path):
+    probe = Probe(tmp_path / "out", [record(f"p{i}", False) for i in range(3)])
+    code, _ = live_cli("--n", "3", "--yes", rerun=probe)
+    summary, diff = probe.seen
+    assert summary.startswith("# Repair: Rejected\n")  # the only headings the results page reads
+    assert PENDING_REASON in summary and "Nothing is accepted" in summary
+    assert diff.startswith("--- a/refapp/")  # the patch being tested is already on disk
+    assert code == 0
+    assert summary_of(tmp_path / "out").startswith("# Repair: Accepted\n")  # then rewritten
+
+
+@pytest.mark.parametrize(
+    ("exc", "why"),
+    [
+        (KeyboardInterrupt(), "interrupted"),
+        (KeyboardInterrupt("SIGTERM"), "stopped by SIGTERM"),
+        (subprocess.CalledProcessError(1, ["runner"]), "the runner exited with status 1"),
+        (RuntimeError("secret detail"), "failed with RuntimeError"),
+    ],
+    ids=["ctrl-c", "sigterm", "runner-failed", "other"],
+)
+def test_a_round_that_stops_is_reported_not_judged_and_keeps_its_runs(
+    live_cli, tmp_path, capsys, exc, why
+):
+    tree = tmp_path / "tree"
+    finished = [record("p0", False), record("p1", True)]
+    rerun = StoppingRerun(exc, finished, tree)
+    code, _ = stopped_cli(live_cli, rerun)
+    assert code == 3  # not 0 (accepted), 1 (rejected) or 2 (refused)
+    summary = summary_of(tmp_path / "out")
+    assert summary.startswith("# Repair: Rejected\n")
+    assert f"Not judged: the round stopped ({why}) after 2 of 3 re-runs" in summary
+    assert "nothing is accepted" in summary
+    assert "1 of 2 (50%) broke the rule, against 2 of 3 (67%)" in summary
+    assert f"- Re-runs kept in: `{tree}`" in summary
+    assert rerun.discarded == 0  # the finished runs cost credit and are records in the worktree
+    out = capsys.readouterr()
+    assert "NOT JUDGED" in out.err and f"re-run records kept in: {tree}" in out.out
+    assert ("secret detail" in out.err) == isinstance(exc, RuntimeError)  # to the terminal only
+    assert "secret detail" not in summary  # nothing a run or model wrote reaches the file
+
+
+def test_a_round_stopped_before_any_rerun_finished_says_so(live_cli, tmp_path):
+    code, _ = stopped_cli(live_cli, StoppingRerun(KeyboardInterrupt()))
+    summary = summary_of(tmp_path / "out")
+    assert code == 3 and "after 0 of 3 re-runs" in summary
+    assert "On the" not in summary and "Re-runs kept" not in summary  # no numbers, no worktree
+
+
+def test_sigterm_is_handled_like_ctrl_c_and_the_handler_is_put_back(live_cli, tmp_path):
+    before = signal.getsignal(signal.SIGTERM)
+
+    class Terminated(FakeRerun):
+        def __call__(self, patch):
+            handler = signal.getsignal(signal.SIGTERM)
+            assert handler not in (before, signal.SIG_DFL, signal.SIG_IGN)
+            handler(signal.SIGTERM, None)  # what the signal does, without ending the test run
+
+    code, _ = stopped_cli(live_cli, Terminated([]))
+    assert code == 3 and "stopped by SIGTERM" in summary_of(tmp_path / "out")
+    assert signal.getsignal(signal.SIGTERM) == before
+
+
+def test_an_error_before_any_patch_was_tested_is_not_hidden(live_cli, tmp_path):
+    class Broken:
+        def with_structured_output(self, schema):
+            raise RuntimeError("the model is down")
+
+    with pytest.raises(RuntimeError, match="the model is down"):
+        live_cli("--n", "3", "--yes", writer=Broken())
+    assert not (tmp_path / "out" / "repair-carry_rules.md").exists()  # nothing to report
+
+
+def test_a_finished_round_is_judged_as_before(live_cli, tmp_path):
+    code, rerun = live_cli("--n", "3", "--yes", after=[record(f"p{i}", i < 2) for i in range(3)])
+    assert code == 1 and rerun.discarded == 1
+    summary = summary_of(tmp_path / "out")
+    assert summary.startswith("# Repair: Rejected\n") and "Not judged" not in summary
+
+
+# ---- what the results page makes of them -----------------------------------------------------
+
+
+def parsed(tmp_path, result, kept=None):
+    out = tmp_path / "page"
+    write_report(result, out, kept=kept)
+    (view,) = load_repairs(out)
+    return view
+
+
+def pending():
+    return pending_result(FixChoice(**CHOICE), [Edit(**EDIT)], "--- a/x\n+++ b/x\n", Rates(3, 2, 3))
+
+
+def test_the_page_reads_a_pending_and_a_stopped_summary_without_a_judged_table(tmp_path):
+    # The page raises on a heading that is not Accepted or Rejected, and prints a "Judged on"
+    # table for a result line that has the judged numbers in its fixed wording.
+    stopped = stopped_result(pending(), [record("p0", False), record("p1", True)], 3, "x", "C-001")
+    for result in (pending(), stopped):
+        view = parsed(tmp_path / result.reason[:12].strip(), result, kept=tmp_path / "tree")
+        assert view.accepted is False and view.ambiguous is False
+        assert view.result.startswith("Not judged")
+        assert "kept in" not in view.result  # the kept-folder line sits after `- Diff:`
+        assert view.diff is not None and view.fix_id == "carry_rules"
+        assert JUDGED_RE.search(view.result.splitlines()[0]) is None
+
+
+def test_a_stopped_summary_reads_as_one_result_line(tmp_path):
+    stopped = stopped_result(pending(), [record("p0", False)], 20, "interrupted", "C-001")
+    write_report(stopped, tmp_path)
+    text = (tmp_path / "repair-carry_rules.md").read_text()
+    assert sum(line.startswith("- Result: ") for line in text.splitlines()) == 1
+
+
+def test_stopped_result_counts_only_the_rules_runs_and_never_accepts():
+    other = record("q0", False).model_copy(update={"constraint_id": "C-002"})
+    result = stopped_result(pending(), [record("p0", False), other], 3, "interrupted", "C-001")
+    assert result.accepted is False and result.after == Rates(1, 0, 1)
+    assert "after 1 of 3 re-runs" in result.reason
+    empty = stopped_result(pending(), [], 3, "interrupted", "C-001")
+    assert empty.after is None and "after 0 of 3 re-runs" in empty.reason
+
+
+def test_the_pending_summary_is_never_an_acceptance():
+    result = pending()
+    assert result.accepted is False and result.after is None
+    assert result.reason.startswith("Not judged") and "Nothing is accepted" in result.reason
+
+
+def test_a_report_write_that_fails_leaves_the_earlier_files_whole(tmp_path, monkeypatch):
+    # A kill in the middle of a write must not leave a heading with no result line: the page
+    # refuses such a file. Write to a scratch name, then rename: the file is old or new, not half.
+    write_report(pending(), tmp_path)
+    before = (tmp_path / "repair-carry_rules.md").read_text()
+    real = Path.write_text
+
+    def dies(self, *args, **kwargs):
+        if ".md" not in self.name:  # the patch file goes first; the crash is in the summary
+            return real(self, *args, **kwargs)
+        real(self, "# Repair: Rejec", encoding="utf-8")  # half a file, then the process dies
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Path, "write_text", dies)
+    with pytest.raises(KeyboardInterrupt):
+        write_report(stopped_result(pending(), [], 3, "interrupted", "C-001"), tmp_path)
+    monkeypatch.setattr(Path, "write_text", real)
+    assert (tmp_path / "repair-carry_rules.md").read_text() == before
+    assert len(load_repairs(tmp_path)) == 1  # the scratch file is not mistaken for a summary
+
+
+# ---- the worktree re-run ---------------------------------------------------------------------
+
+
+def seeded_repo(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "app" / "prompts.py").write_text(PROMPTS, encoding="utf-8")
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed")
+    return repo
+
+
+def a_patch():
+    return Patch(
+        fix_id="carry_rules", edits=[Edit(**EDIT)], files_after=apply_edits(FILES, [Edit(**EDIT)])
+    )
+
+
+def test_completed_reads_the_records_a_stopped_runner_left_and_skips_a_torn_one(tmp_path):
+    def killed_runner(cmd, cwd, env):
+        for name in ("r-p0", "r-p1"):
+            (Path(cwd) / "runs" / name).mkdir(parents=True)
+            rec = record(name[2:], False).model_dump_json()
+            (Path(cwd) / "runs" / name / "record.json").write_text(rec, "utf-8")
+        (Path(cwd) / "runs" / "r-p2").mkdir()
+        (Path(cwd) / "runs" / "r-p2" / "record.json").write_text('{"run_id": "p2", "vi', "utf-8")
+        raise KeyboardInterrupt
+
+    rerun = WorktreeRerun(
+        repo_dir=seeded_repo(tmp_path), worktrees_dir=tmp_path / "trees", tasks=["X1"],
+        arms=["mutated"], operators=["drop"], n=3, run_cmd=killed_runner,
+    )  # fmt: skip
+    assert rerun.completed() == []  # nothing has run yet
+    with pytest.raises(KeyboardInterrupt):
+        rerun(a_patch())
+    assert [r.run_id for r in rerun.completed()] == ["p0", "p1"]
+    rerun.discard_last()
+    assert rerun.completed() == []
+
+
+def test_on_start_is_called_with_the_patched_worktree_before_the_runner_starts(tmp_path):
+    seen = []
+
+    def runner(cmd, cwd, env):
+        seen.append("runner")
+
+    def on_start(tree, branch):
+        seen.append(
+            ("start", tree, branch, "Copy every rule" in (tree / "app/prompts.py").read_text())
+        )
+
+    rerun = WorktreeRerun(
+        repo_dir=seeded_repo(tmp_path), worktrees_dir=tmp_path / "trees", tasks=["X1"],
+        arms=["mutated"], operators=["drop"], n=1, run_cmd=runner, on_start=on_start,
+    )  # fmt: skip
+    rerun(a_patch())
+    (start, runner_call) = seen
+    assert runner_call == "runner" and start[0] == "start"
+    assert start[1] == rerun.last[0] and start[2] == rerun.last[1] and start[3] is True
+
+
+# The default runner: graceful stop, and the exit status of a runner that fails.
+
+CHILD = """
+import os, signal, sys, time
+marker, ready, mode = sys.argv[1:4]
+open(ready + ".pid", "w").write(str(os.getpid()))
+if mode == "graceful":
+    def stop(signum, frame):
+        open(marker, "w").write("terminated")
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, stop)
+else:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(ready, "w").write("ready")
+time.sleep(60)
+"""
+
+
+def interrupt_when_ready(ready: Path):
+    """Once the child says it is ready, send the main thread a real SIGINT. (`interrupt_main`
+    only sets a flag, which a blocked wait() does not see until the child has exited.)"""
+    main = threading.main_thread().ident
+
+    def wait_then_interrupt():
+        for _ in range(400):
+            if ready.exists():
+                break
+            threading.Event().wait(0.05)
+        signal.pthread_kill(main, signal.SIGINT)
+
+    threading.Thread(target=wait_then_interrupt, daemon=True).start()
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_a_stopped_runner_is_asked_to_stop_not_killed(tmp_path):
+    from repair.worktree import _default_run
+
+    marker, ready = tmp_path / "marker", tmp_path / "ready"
+    cmd = [sys.executable, "-c", CHILD, str(marker), str(ready), "graceful"]
+    interrupt_when_ready(ready)
+    with pytest.raises(KeyboardInterrupt):
+        _default_run(cmd, tmp_path, dict(os.environ))
+    # SIGTERM reached it (SIGKILL could not have written this), so `uv run` could pass it on.
+    assert marker.read_text() == "terminated"
+    assert not alive(int(Path(f"{ready}.pid").read_text()))
+
+
+def test_a_runner_that_ignores_the_request_is_killed_after_the_grace_period(tmp_path, monkeypatch):
+    import repair.worktree as worktree
+
+    monkeypatch.setattr(worktree, "STOP_GRACE_SECONDS", 0.5)
+    ready = tmp_path / "ready"
+    cmd = [sys.executable, "-c", CHILD, str(tmp_path / "marker"), str(ready), "stubborn"]
+    interrupt_when_ready(ready)
+    with pytest.raises(KeyboardInterrupt):
+        worktree._default_run(cmd, tmp_path, dict(os.environ))
+    assert not alive(int(Path(f"{ready}.pid").read_text()))
+
+
+def test_the_default_runner_raises_with_the_exit_status_of_a_failed_runner(tmp_path):
+    from repair.worktree import _default_run
+
+    _default_run([sys.executable, "-c", "pass"], tmp_path, dict(os.environ))
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        _default_run([sys.executable, "-c", "raise SystemExit(7)"], tmp_path, dict(os.environ))
+    assert caught.value.returncode == 7
+
+
+def test_a_real_sigterm_during_a_real_worktree_rerun_leaves_everything_to_recover(
+    live_cli, tmp_path
+):
+    # The live failure, end to end but for the model calls: the runner has finished two re-runs
+    # when the process is told to stop. The summary says so, the two records and the worktree
+    # and its branch are still there, and the exit status is "not judged".
+    head = subprocess.run(
+        ["git", "show", f"HEAD:{PROMPT_FILE}"], capture_output=True, text=True, check=True
+    ).stdout
+    repo = tmp_path / "repo"
+    (repo / "refapp").mkdir(parents=True)
+    (repo / PROMPT_FILE).write_text(head, encoding="utf-8")
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "add", ".")
+    git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed")
+
+    def runner_told_to_stop(cmd, cwd, env):
+        for name in ("p0", "p1"):
+            (Path(cwd) / "runs" / f"r-{name}").mkdir(parents=True)
+            (Path(cwd) / "runs" / f"r-{name}" / "record.json").write_text(
+                record(name, False).model_dump_json(), "utf-8"
+            )
+        handler = signal.getsignal(signal.SIGTERM)
+        if handler in (signal.SIG_DFL, signal.SIG_IGN):  # never send it to a bare test process
+            pytest.fail("main() did not install its SIGTERM handler")
+        os.kill(os.getpid(), signal.SIGTERM)
+        threading.Event().wait(5)  # the handler raises during this wait
+
+    rerun = WorktreeRerun(
+        repo_dir=repo, worktrees_dir=tmp_path / "trees", tasks=["X1"], arms=["mutated"],
+        operators=["drop"], n=3, run_cmd=runner_told_to_stop,
+    )  # fmt: skip
+    code, _ = stopped_cli(live_cli, rerun)
+    assert code == 3
+    summary = summary_of(tmp_path / "out")
+    assert "Not judged: the round stopped (stopped by SIGTERM) after 2 of 3 re-runs" in summary
+    tree = Path(summary.split("- Re-runs kept in: `")[1].split("`")[0])
+    assert sorted(p.parent.name for p in tree.glob("runs/*/record.json")) == ["r-p0", "r-p1"]
+    assert git(repo, "branch", "--list", "repair/*").stdout.strip()  # the branch was kept too
+
+
+def test_the_cli_records_the_worktree_in_the_summary_as_soon_as_it_exists(
+    live_cli, tmp_path, monkeypatch
+):
+    # If the process is killed outright nothing runs after that, so the summary written before
+    # the re-runs must already say where the re-run records will be.
+    import repair.__main__ as cli
+
+    seen = {}
+
+    class Building:
+        def __init__(self, **kwargs):
+            seen["on_start"] = kwargs["on_start"]
+
+        def __call__(self, patch):
+            seen["on_start"](tmp_path / "tree", "repair/carry_rules-abc123")
+            seen["summary"] = summary_of(tmp_path / "out")
+            raise SystemExit  # a hard stop, which the CLI does not turn into a report
+
+    monkeypatch.setattr(cli, "WorktreeRerun", Building)
+    with pytest.raises(SystemExit):
+        live_cli("--n", "3", "--yes", rerun="build")
+    text = seen["summary"]
+    assert text.startswith("# Repair: Rejected\n") and "Not judged" in text
+    assert f"- Re-runs kept in: `{tmp_path / 'tree'}`" in text
+    assert text.index("- Diff:") < text.index("- Re-runs kept in:")  # after Diff: not in the result
+
+
+def test_a_second_ctrl_c_while_the_runner_winds_down_kills_it_at_once():
+    from repair.worktree import _stop
+
+    class Runner:
+        calls = []
+
+        def terminate(self):
+            self.calls.append("terminate")
+
+        def wait(self, timeout=None):
+            self.calls.append("wait")
+            if timeout is not None:
+                raise KeyboardInterrupt  # the user presses Ctrl-C again during the grace wait
+
+        def kill(self):
+            self.calls.append("kill")
+
+    runner = Runner()
+    _stop(runner)
+    assert runner.calls == ["terminate", "wait", "kill", "wait"]
