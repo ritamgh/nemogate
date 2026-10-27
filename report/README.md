@@ -250,7 +250,7 @@ What it shows:
   block-only success and the gated success all exist. It uses those cells' numbers and nothing
   else.
 
-The second app's results (research team, Tavily; PRs #101 and #102) are shown this way, T14 and
+The second app's results (research team, Tavily; added in PR #102, shown on the page in PR #106) are shown this way, T14 and
 the T13 pilot as two separate open sets, never pooled with each other or with the main set. Their
 results files and notes are committed (`results/research/t14.json`, `t13.json`,
 `results/notes/research-t14.txt`, `research-t13.txt`); the run folders are not in git. To rebuild
@@ -330,6 +330,8 @@ cp results/site/index.html /tmp/nemogate-pages/index.html
 git -C /tmp/nemogate-pages commit -am "Publish results page" && git -C /tmp/nemogate-pages push
 git worktree remove /tmp/nemogate-pages
 ```
+
+The run folders and the results files behind the published main and sealed sets are not committed, so this command rebuilds the page only from runs you have locally. The committed results files are `results/research/*.json` (T14 and T13).
 
 Pages serves it at `https://ritamgh.github.io/nemogate/` a minute or so after the push. Whatever
 is on `gh-pages` is public, so publish only pages built from runs you mean to show. Serving on
