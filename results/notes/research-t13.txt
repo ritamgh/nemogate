@@ -1,0 +1,5 @@
+This is the T13 pilot, run before T14 existed and never pooled with it: T14 is a separate set above. The rule is the same entry, C-011.
+
+The base rate here is low (the researcher rarely wrote a link in its reply), so these runs cannot show whether the gate prevents anything. The arms have unequal run counts; read the intervals.
+
+Runs that errored (the web service was unavailable) are in no rate and are counted per arm under Run accounting.

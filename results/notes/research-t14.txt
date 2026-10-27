@@ -1,0 +1,5 @@
+T14 was written after the T13 pilot, whose base rate came out low: the researcher almost never wrote a full link in its reply, so the rule rarely fired and there was little for a gate to prevent. T14 changes only what the user asks for, a source link after every claim and a closing list of full links, so a researcher that uses Wikipedia has to print its link. The rule C-011 and the predicate that grades it are the same as in T13.
+
+T14's own base rate was not known when it was written. Its natural runs, with no sabotage, broke the rule in 1 of 40 runs; with the rule dropped from the handoff the ungated arm (mutated) broke it in 8 of 34.
+
+Runs that errored (the model server was overloaded, and one request timed out) are in no rate. They are counted per arm under Run accounting, so a smaller count in an arm is not a lower violation rate.

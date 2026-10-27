@@ -7,7 +7,7 @@ Two pages, both generated offline from run data. Neither calls a model.
 ```
 uv run python -m report.site --results results/results.json --out results/site/index.html \
     [--runs DIR...] [--repair DIR] [--recall FILE...] [--ledger nemogate.yaml] [--notes FILE] \
-    [--appendix TITLE RESULTS_FILE [NOTES_FILE]]...
+    [--appendix TITLE RESULTS_FILE [NOTES_FILE]]... [--appendix-open TITLE RESULTS_FILE [NOTES_FILE]]...
 ```
 
 Reads the `results.json` that `replay/stats.py` writes (`format_version` 2; any other version is
@@ -141,6 +141,21 @@ What it shows:
   A missing, unreadable or wrong-version file is exit code 2. Without the option the page is
   byte-identical to one built before it existed. Its CSS (`appendix.css`) is added only to a page
   that has an appendix.
+- With `--appendix-open TITLE RESULTS_FILE [NOTES_FILE]` (repeatable), the same separately
+  labelled set for a task that is **not sealed** (`Appendix.sealed` is False): the rule's wording
+  replaces "Rule text withheld" in its card, "At a glance" and "Cost of prevention", the task ids
+  ("task T14") show next to the rule id, and a line says "Not a sealed task". Nothing else
+  changes: the set is still drawn from its own file, never feeds the main numbers, reads no run
+  folder, and the main part is byte-identical with and without it. `--appendix` and
+  `--appendix-open` share one list, so sets are numbered in the order given; the notes number
+  check holds an open set's notes to its own section too. Use `--appendix` for anything sealed.
+  Tests: `report/tests/test_site_appendix_open.py`.
+- Every appendix, open or sealed, with `runs.errored_cost` in its file, gets "Errored runs, by arm"
+  under Run accounting: per arm the errored runs (from `errored_cost.by_arm`; `replay.stats` lists
+  only the arms that had one, so an arm not listed reads 0) and the runs counted in the rates (the
+  cells' runs; a dash for an arm with no cell), plus an "All arms" row (`errored_cost.count` and
+  the cells' total), and a line saying an errored run ended in an error before it could be graded
+  and is in no rate. A file without `errored_cost` gets no table, not zeros.
 - Below the results: the key (the four arms, the operators, and "Words on this page": boundary,
   compaction, not comparable, inconclusive and 95% interval in plain words; the statistical
   method stays in the Method block at the foot), then "What each part fixes": four static lines.
@@ -234,6 +249,25 @@ What it shows:
 - A one-sentence summary per (boundary, operator), only when the mutated violation rate, the
   block-only success and the gated success all exist. It uses those cells' numbers and nothing
   else.
+
+The second app's results (research team, Tavily; PRs #101 and #102) are shown this way, T14 and
+the T13 pilot as two separate open sets, never pooled with each other or with the main set. Their
+results files and notes are committed (`results/research/t14.json`, `t13.json`,
+`results/notes/research-t14.txt`, `research-t13.txt`); the run folders are not in git. To rebuild
+them, run `replay.stats` on one task's folders at a time (`replay.stats` pools by rule and T13 and
+T14 share C-011), with the research app selected, then build:
+
+```
+NEMOGATE_APP=refapp.research.app:APP uv run python -m replay.stats RUNS/research-t14-a RUNS/research-t14-b \
+    --ledger nemogate.yaml --out results/research/t14.json
+NEMOGATE_APP=refapp.research.app:APP uv run python -m replay.stats RUNS/research-arms RUNS/research-pilot \
+    RUNS/research-pilot-drop --ledger nemogate.yaml --out results/research/t13.json
+uv run python -m report.site --results results/results.json --out results/site/index.html \
+    --appendix-open "Second app: research team with web search (Tavily), task T14" \
+    results/research/t14.json results/notes/research-t14.txt \
+    --appendix-open "T13 pilot of the same app (not pooled with T14)" \
+    results/research/t13.json results/notes/research-t13.txt
+```
 
 Tests: `uv run pytest report/tests/test_site.py`. Fixtures in `report/tests/fixtures/`:
 `results_runs.json` is generated from `run_folders/` and `ledger.yaml` by `replay.stats`
