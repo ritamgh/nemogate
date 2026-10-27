@@ -138,7 +138,7 @@ their rules survive and a gate that keeps them alive.
 
 **Notes on the second app (T14).**
 
-- **Errors.** 21 of 160 runs errored (server 503s and one timeout): block-only 8, gated 7, mutated 6,
+- **Errors.** 21 of 160 runs errored (20 "System is overloaded" 529 responses from the server and one timeout): block-only 8, gated 7, mutated 6,
   natural 0. They are left out of the counts above; 29 matched pairs remain from 40 repetitions.
 - **Why T14 exists.** T13 was the first research task. Its base rate came out low, so we wrote T14
   under the same rule. The check and the rule are unchanged; T14 only requires a link after every
