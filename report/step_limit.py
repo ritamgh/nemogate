@@ -23,16 +23,23 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from langgraph.errors import GraphRecursionError
 
 from oracle.evaluate import evaluate
 from replay import stats
+from replay.carriage import fork_scored, fork_trace
 from replay.intervals import wilson
 from replay.noop import is_noop_error
 from replay.record import scoped_ledger
+from replay.step_cap import StepLimitReached
 from schemas.ledger import load_ledger_yaml
 from schemas.run import FsChange
+from schemas.trace import parse_trace_jsonl
 
-STEP_LIMIT_ERROR = "GraphRecursionError"  # class name of the error the step limit raises
+# Class names an error.json carries for a run the step limit stopped: the runner raises
+# StepLimitReached, a GraphRecursionError subclass; older folders name GraphRecursionError itself.
+STEP_LIMIT_ERRORS = (GraphRecursionError.__name__, StepLimitReached.__name__)
+PREFIX = "prefix.jsonl"  # a fork's folder: the source's events before the fork point
 REPRO_FIELDS = ("model_ids", "safe_config_hash", "ledger_hash", "repo_sha", "lockfile_hash")
 NO_FS_DIFF = "none, taken as empty"
 
@@ -74,7 +81,7 @@ class Report:
 
 
 def _is_step_limit(error_type: Any) -> bool:
-    return isinstance(error_type, str) and error_type.rsplit(".", 1)[-1] == STEP_LIMIT_ERROR
+    return isinstance(error_type, str) and error_type.rsplit(".", 1)[-1] in STEP_LIMIT_ERRORS
 
 
 def _judge(folder: Path, constraint: str) -> StepLimitRun:
@@ -94,7 +101,13 @@ def _judge(folder: Path, constraint: str) -> StepLimitRun:
                 for item in json.loads((folder / "fs_diff.json").read_bytes())
             ]
             run.fs_diff = "fs_diff.json"
-        violations = evaluate(ledger, list(trace), diff)
+        if (folder / PREFIX).is_file():
+            # A fork is scored as the runner scores it: the source's events then its own, and
+            # only what falls at or after the fork point (a violation before it is the source's).
+            prefix = parse_trace_jsonl((folder / PREFIX).read_text(encoding="utf-8"))
+            violations = fork_scored(evaluate(ledger, fork_trace(prefix, trace), diff), len(prefix))
+        else:
+            violations = evaluate(ledger, list(trace), diff)
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
         run.fs_diff = NO_FS_DIFF
         return run
@@ -108,8 +121,9 @@ def _same_conditions(error: dict[str, Any], reproducibility: dict[str, Any]) -> 
 
 
 def _cells(results: dict[str, Any], constraint: str, arm: str, operator: str, boundary: str | None):
-    """(boundary, cells of that arm and operator) of the rule's pooled group; ValueError if the
-    rule has none or several boundaries match and none was named."""
+    """(boundary, the one cell of that arm and operator, reproducibility) of the rule's pooled
+    group; ValueError if the rule has none, several boundaries match and none was named, or the
+    boundary has several cells (one per compaction setting)."""
     rule = results["constraints"].get(constraint)
     if rule is None:
         raise ValueError(
@@ -128,7 +142,14 @@ def _cells(results: dict[str, Any], constraint: str, arm: str, operator: str, bo
             f"cells, found {sorted(found) or 'none'}; name one with --boundary"
         )
     ((name, cells),) = found.items()
-    return name, cells, rule["reproducibility"]
+    if len(cells) != 1:
+        settings = sorted(json.dumps(c["compaction"], sort_keys=True) for c in cells)
+        raise ValueError(
+            f"rule {constraint}, arm {arm}, operator {operator}: the runs were made under "
+            f"{len(cells)} compaction settings ({', '.join(settings)}) and the results page "
+            "keeps each as its own cell; this script reports one cell, so it will not merge them"
+        )
+    return name, cells[0], rule["reproducibility"]
 
 
 def build(
@@ -154,12 +175,24 @@ def build(
         extraction_recall=None,
         repo_sha_pins={} if repo_sha is None else {task: repo_sha},
     )
-    boundary, cells, reproducibility = _cells(results, constraint, arm, operator, boundary)
-    n = sum(c["n"] for c in cells)
-    broke = sum(c["outcomes"]["broke"] for c in cells)
-    done = sum(c["outcomes"]["done"] for c in cells)
+    boundary, cell, reproducibility = _cells(results, constraint, arm, operator, boundary)
+    n, broke, done = cell["n"], cell["outcomes"]["broke"], cell["outcomes"]["done"]
 
     cell_key = (task, constraint, arm, operator, boundary)
+    pooled_tasks = {
+        r.record.task_id
+        for r in loaded.runs
+        if (r.record.constraint_id, r.record.arm.value, r.record.operator.value, r.record.boundary)
+        == cell_key[1:]
+        and stats._reproducibility(r.record) == reproducibility
+    }
+    if pooled_tasks - {task}:
+        raise ValueError(
+            f"the published cell of rule {constraint}, arm {arm} pools finished runs of several "
+            f"tasks ({', '.join(sorted(pooled_tasks | {task}))}), but this script counts the "
+            f"step-limit runs of one task ({task}), so the two rows would not match; "
+            "it will not mix them"
+        )
     left_out: Counter[str] = Counter()
     pooled_finished = sum(
         (
@@ -172,7 +205,7 @@ def build(
         == cell_key
         for r in loaded.runs
     )
-    left_out[LEFT_FINISHED_UNPOOLED] = pooled_finished - n
+    left_out[LEFT_FINISHED_UNPOOLED] = max(0, pooled_finished - n)
     steps: list[StepLimitRun] = []
     for folder in stats._run_dirs(paths):
         if (folder / "record.json").exists() or not (folder / "error.json").is_file():

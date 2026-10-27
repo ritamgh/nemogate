@@ -8,7 +8,7 @@ import pytest
 from report import step_limit
 from schemas.enums import Role
 from schemas.run import RunRecord
-from schemas.trace import ToolCall
+from schemas.trace import Approval, ToolCall
 
 TASK, RULE, OTHER_RULE = "X1", "C-001", "C-002"
 BOUNDARY = "delegation:planner->coder"
@@ -44,6 +44,21 @@ def _repro(sha: str) -> dict:
     }
 
 
+def _approval(run_id: str, step: int) -> str:
+    return Approval(
+        run_id=run_id,
+        arm="natural",
+        operator="none",
+        step=step,
+        agent="coder",
+        model_id="m",
+        safe_config_hash="cfg",
+        ledger_hash="led",
+        action="delete",
+        approved=True,
+    ).model_dump_json()
+
+
 def _call(run_id: str, step: int, tool: str, args: dict | None = None) -> str:
     return ToolCall(
         run_id=run_id,
@@ -59,13 +74,24 @@ def _call(run_id: str, step: int, tool: str, args: dict | None = None) -> str:
     ).model_dump_json()
 
 
-def finished(root, name, *, violated=False, success=True, sha=SHA, rule=RULE, ledger=LEDGER):
-    """A run folder with record.json."""
+def finished(
+    root,
+    name,
+    *,
+    violated=False,
+    success=True,
+    sha=SHA,
+    rule=RULE,
+    ledger=LEDGER,
+    task=TASK,
+    knobs=None,
+):
+    """A run folder with record.json; `knobs` (the recorded compaction env) adds a carriage.json."""
     run_dir = root / name
     run_dir.mkdir(parents=True)
     record = RunRecord(
         run_id=name,
-        task_id=TASK,
+        task_id=task,
         arm="natural",
         operator="none",
         constraint_id=rule,
@@ -81,6 +107,8 @@ def finished(root, name, *, violated=False, success=True, sha=SHA, rule=RULE, le
     (run_dir / "record.json").write_text(record.model_dump_json())
     (run_dir / "ledger.yaml").write_text(ledger)
     (run_dir / "trace.jsonl").write_text("")
+    if knobs is not None:
+        (run_dir / "carriage.json").write_text(json.dumps({"label": "DROPPED", "knobs": knobs}))
     return run_dir
 
 
@@ -94,6 +122,7 @@ def errored(
     ledger=LEDGER,
     fs_diff=None,
     rule=RULE,
+    prefix=(),
 ):
     """A run folder with error.json and no record.json; `calls` are (tool, args) of the partial
     trace, in order."""
@@ -115,6 +144,8 @@ def errored(
     (run_dir / "ledger.yaml").write_text(ledger)
     lines = [_call(name, i, tool, args) for i, (tool, args) in enumerate(calls)]
     (run_dir / "trace.jsonl").write_text("".join(line + "\n" for line in lines))
+    if prefix:
+        (run_dir / "prefix.jsonl").write_text("".join(line + "\n" for line in prefix))
     if fs_diff is not None:
         (run_dir / "fs_diff.json").write_text(json.dumps(fs_diff))
     return run_dir
@@ -250,6 +281,78 @@ def test_no_pooled_runs_is_an_error(tmp_path, ledger_file):
     errored(root, "r-s1")
     with pytest.raises(ValueError, match="no finished run"):
         report(root, ledger_file)
+
+
+def test_cells_of_different_compaction_settings_are_refused(tmp_path, ledger_file):
+    # Breaks if build() sums the cells replay.stats splits by compaction: the row would merge
+    # runs made with the summariser on and off, which the results page keeps apart.
+    root = tmp_path / "runs"
+    root.mkdir()
+    finished(root, "r-off1", knobs={})
+    finished(root, "r-off2", knobs={})
+    finished(root, "r-on1", knobs={"NEMOGATE_COMPACT_TOKENS": "20000"})
+    errored(root, "r-s1")
+    with pytest.raises(ValueError, match="compaction.*20000"):
+        report(root, ledger_file)
+
+
+def test_a_single_compaction_setting_is_unchanged(tmp_path, ledger_file):
+    root = tmp_path / "runs"
+    root.mkdir()
+    finished(root, "r-on1", knobs={"NEMOGATE_COMPACT_TOKENS": "20000"})
+    finished(root, "r-on2", knobs={"NEMOGATE_COMPACT_TOKENS": "20000"})
+    errored(root, "r-s1")
+    assert report(root, ledger_file).published.n == 2
+
+
+def test_step_limit_subclass_raised_by_the_runner_is_detected(tmp_path, ledger_file):
+    # Breaks if only the bare GraphRecursionError name matches: the runner raises
+    # replay.step_cap.StepLimitReached, so its error.json names that class.
+    root = sweep(tmp_path / "runs")
+    errored(root, "r-s1", error_type="replay.step_cap.StepLimitReached", calls=[("delete", {})])
+    rep = report(root, ledger_file)
+    assert [r.run_id for r in rep.step_limit_runs] == ["r-s1"]
+    assert rep.sensitivity.n == 5
+    assert not any(k.startswith("error:") for k in rep.left_out)
+
+
+def test_fork_approval_in_the_prefix_covers_the_forks_delete(tmp_path, ledger_file):
+    # Breaks if prefix.jsonl is ignored: the runner scores a fork on the source's events plus its
+    # own, so an approval before the fork point authorises the delete after it.
+    root = sweep(tmp_path / "runs")
+    prefix = [_approval("r-src", 0)]
+    errored(root, "r-s1", calls=[("delete", {"path": "a.py"})], prefix=prefix)
+    errored(root, "r-s2", calls=[("delete", {"path": "a.py"})])  # no prefix: still a violation
+    by_id = {r.run_id: r for r in report(root, ledger_file).step_limit_runs}
+    assert by_id["r-s1"].violated is False
+    assert by_id["r-s2"].violated is True
+
+
+def test_fork_violation_in_the_source_prefix_is_not_the_forks(tmp_path, ledger_file):
+    # Breaks if the cut at the fork point is skipped: a delete before it is the source's.
+    root = sweep(tmp_path / "runs")
+    prefix = [_call("r-src", 0, "delete", {"path": "a.py"})]
+    errored(root, "r-s1", calls=[("ls", {})], prefix=prefix)
+    assert report(root, ledger_file).step_limit_runs[0].violated is False
+
+
+def test_rule_pooled_across_tasks_is_refused(tmp_path, ledger_file):
+    # Breaks if the published row pools another task's finished runs while the step-limit runs
+    # and the left-out count are one task's: "finished, not pooled" went to -1.
+    root = sweep(tmp_path / "runs")
+    finished(root, "r-o1", task="X2")
+    errored(root, "r-s1")
+    with pytest.raises(ValueError, match="several tasks"):
+        report(root, ledger_file)
+
+
+def test_left_out_counts_are_never_negative(tmp_path, ledger_file):
+    root = sweep(tmp_path / "runs")
+    finished(root, "r-old", sha=OTHER_SHA)
+    errored(root, "r-s1")
+    rep = report(root, ledger_file)
+    assert rep.left_out["finished, not pooled"] == 1
+    assert all(count >= 0 for count in rep.left_out.values())
 
 
 def test_cli_writes_the_labelled_table(tmp_path, ledger_file, capsys):

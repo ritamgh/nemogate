@@ -412,7 +412,7 @@ uv run python -m report.step_limit RUN_DIR_OR_PARENT... --ledger nemogate.yaml \
 ```
 
 A run that reaches the graph's step limit (`recursion_limit`) has error.json (a
-`GraphRecursionError`, matched by class name) and a partial trace but no record.json, so
+`GraphRecursionError` or its subclass `StepLimitReached`, matched by class name) and a partial trace but no record.json, so
 `replay.stats` leaves it out of the rates. This writes a two-row table for one cell: the cell as
 published (loaded and pooled by `replay.stats`, so it equals the results page; `--repo-sha` pins the
 task's commit exactly as `stats --repo-sha TASK=COMMIT` does) and the same cell with its step-limit
@@ -422,6 +422,9 @@ filesystem diff taken as empty unless the folder has `fs_diff.json`; the page sa
 Only step-limit runs at the published group's five reproducibility fields are counted. It is a
 sensitivity check: it changes no score and the page's numbers stay those of `stats`. The partial
 trace can miss a violation after the cut, so the broken count is a floor for those runs.
+A fork is judged as the runner judges it (the source's `prefix.jsonl` first, only the fork's own
+steps count). It refuses, with an error, a cell that has several compaction settings or that pools
+several tasks, since it reports one cell and one task's step-limit runs.
 Reads saved folders only. Tests: `uv run pytest report/tests/test_step_limit.py`.
 
 ## Rule replay page (`replay_view.py`)
