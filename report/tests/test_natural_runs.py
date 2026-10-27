@@ -236,6 +236,29 @@ def test_main_writes_the_file(batch, tmp_path, monkeypatch, capsys):
     assert "2 counted" in capsys.readouterr().out
 
 
+def test_main_says_on_stderr_why_folders_without_run_config_counted_nothing(tmp_path, capsys):
+    # Breaks if main stays silent when every passed folder is skipped for lacking run_config.json.
+    examples = tmp_path / "examples"
+    for name in ("r-a", "r-b", "r-c"):
+        (examples / name).mkdir(parents=True)
+        (examples / name / "record.json").write_text("{}")
+    out = tmp_path / "out.md"
+
+    assert natural_runs.main(["--out", str(out), str(examples)]) == 0
+
+    captured = capsys.readouterr()
+    assert "0 counted" in captured.out
+    assert "skipped 3 folders with no run_config.json" in captured.err
+
+
+def test_main_is_quiet_on_stderr_when_runs_are_counted(batch, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(natural_runs, "load_user_messages", lambda: {"X1": USER_MESSAGE})
+
+    assert natural_runs.main(["--out", str(tmp_path / "o.md"), str(batch)]) == 0
+
+    assert capsys.readouterr().err == ""
+
+
 def test_a_fork_folder_is_not_a_natural_run_even_when_its_arm_is_natural(batch):
     # Breaks if a natural fork (it repeats its source's planner handoff) is counted as an
     # independent natural run: it would inflate every count and the carriage rates.
