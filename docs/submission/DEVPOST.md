@@ -1,7 +1,7 @@
 # NemoGate: Devpost submission text
 
 Draft for the Devpost form. Paste each section into the matching field. Every number comes from the
-[results page](https://ritamgh.github.io/nemogate/) (republished 2026-10-21) unless it is marked
+[results page](https://ritamgh.github.io/nemogate/) (republished 2026-10-27) unless it is marked
 otherwise; the table at the end says where each one is. **Re-check them against the page you
 submit with** (the "Before you submit" list is the last section).
 
@@ -43,7 +43,7 @@ NemoGate turns that failure into something you can measure.
    `output_must_not_include`). A rule with no check is reported as unverified, never guessed.
 2. **A gate**, one Deep Agents middleware placed in the planner and in every subagent. It records
    every handoff and tool call. In the experiment it can sabotage the handoff (`drop` the rule,
-   `hedge` it, `compress` the message), block calls the oracle would flag, or re-pin the rule into
+   `hedge` it, `compress` the message; only `drop` was run live), block calls the oracle would flag, or re-pin the rule into
    the handoff.
 3. **A deterministic oracle.** Whether a rule was kept is decided by programs over the trace and the
    filesystem diff. No language model ever grades a run.
@@ -72,8 +72,9 @@ NemoGate turns that failure into something you can measure.
 | helper | `nvidia/Nemotron-3_5-Lightning` | sabotages handoffs, proposes and compiles rules into checks | $0.06 / $0.24 |
 | planner | `nvidia/Nemotron-3-Ultra-550b-a55b` | chooses a repair fix, at most 3 calls per iteration | $1.00 / $3.00 |
 
-**Every run executes in Nebius Sandboxes** (Contree): a fresh session from the same seed image, and a
-diff of the final image shows what the agents changed. A fork is a new session on a snapshot, about
+**Each run's file edits and shell commands run in a fresh Nebius Sandbox** (Contree) session from the
+same seed image, and a diff of the final image shows what the agents changed. The agent loop and the
+model calls run on the host. A fork is a new session on a snapshot, about
 1.3 seconds at the median (10 forks at once took 6.3 seconds with no rate-limit retries).
 
 **Choices that came from measuring the platform** (details in our feedback writeup):
@@ -108,13 +109,17 @@ runs compared → report → patch.**
   it was broken with no gate, with block-only and with the gate, how often the agent *tried* the
   forbidden action, and the exact-test p-value for each comparison. Missing data shows a dash, never 0.
 - **It states its own limits** on the page: blocking applies only to path, tool and approval rules;
-  forked cells share a source run; held-out cells have 5 to 6 runs.
-- **A replay page** that tells one rule's life in four steps from saved runs: the rule, the handoff
-  with the sentence struck out, the action that broke it, and the gated run beside it.
+  forked cells share a source run; held-out cells have 1 to 6 runs per cell.
+- **A [replay page](https://ritamgh.github.io/nemogate/replay.html)** that tells one rule's life in
+  four steps from saved runs: the rule, the handoff with the sentence struck out, the action that
+  broke it, and a gated run beside it. It shows one T6 run that broke the rule (mutated, `drop`), one
+  gated run and one natural run. These are separate runs of the same task, not a fork pair, so it is
+  a story, not a statistic.
 - **Anyone can check a verdict offline.** `replay.audit` re-scores saved runs from their own files.
 - **Adding a task is a data change.** We proved it with a second app: a research team (a lead agent
-  plus a researcher with Tavily web search) runs through the same pipeline with one new ledger rule
-  and no pipeline change.
+  plus a researcher with Tavily web search) runs through the same pipeline with one new ledger rule.
+  Adding a second app took a small app selector in `replay/` (99b4648) and no change to the ledger,
+  oracle or gate.
 
 ---
 
@@ -152,8 +157,8 @@ their rules survive and a gate that keeps them alive.
 - Gated did not finish the job significantly more often than block-only (T6: 10 of 14 against 7 of
   14, p = 0.44). Intervals are wide.
 - On two sealed held-out tasks, the rule that blocking cannot enforce (graded after the run) was
-  run twice. In the **first run** gated broke it in 1 of 5 and block-only in 4 of 5. We then fixed how
-  forks are scored (PR #89) and **re-ran**: block-only broke it in 4 of 5 (no sabotage) and 5 of 5
+  run twice. In the **first run** gated broke it in 1 of 5 and block-only in 4 of 5. We then fixed where
+  a fork is cut (PR #89: at the first handoff that carries the rule) and **re-ran**: block-only broke it in 4 of 5 (no sabotage) and 5 of 5
   (rule dropped) runs and gated in 0 of 5 and 0 of 5. The re-run came after that fix. Over the 10 matched fork pairs the exact test gives p = 0.0039, **but the 10 pairs come
   from only 5 sources (each forked under both operators), so they are not independent; counting each
   source once, all 5 point the same way and p = 0.0625.** We treat it as the direction we expected
@@ -220,7 +225,7 @@ Our feedback on Token Factory, Sandboxes and the NVIDIA models is in
 | T10: 10 of 20 → 3 of 20, p = 0.0156; T11: 9 of 17 → 4 of 16, p = 0.0625 | results page, "At a glance" |
 | Held-out: 0 of 5 vs 4 of 5 (p = 0.125), 0 of 5 vs 5 of 5 (p = 0.0625), pooled 0 of 10 vs 9 of 10 pairs (p = 0.0039; counting each of the 5 sources once, p = 0.0625) | results page, "Held-out tasks, re-run after the fork fix", exact-test table for the second held-out rule |
 | Repair: 45% → 44%, 90% → 88% | results page, "The repair patch" |
-| Second app (T14): 0 of 33 vs 10 of 32, p = 0.0078 | **PR #102 description; not yet on the results page** |
+| Second app (T14): 0 of 33 vs 10 of 32, p = 0.0078 | results page, Appendix 3 and 4 (also in the PR #102 description) |
 | Thinking-off savings, json_object vs json_schema, fork timings | `docs/FACTS.md` sections 2, 3 and 6 |
 | 1,474 AI messages, 36 live runs, 0 tool calls as text | `docs/SPEC.md`, Changes, 2026-10-16 (Preflight) |
 | More than 2,400 tests | `uv run pytest --collect-only -q` on `main` (re-count on the day) |
