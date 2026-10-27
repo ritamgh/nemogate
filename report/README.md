@@ -403,6 +403,27 @@ task was not finished: the rule was kept and the job waited, which is the cost o
 failure. A legend line above the table says so. A cross still means not finished with a violation
 or an unknown verdict.
 
+## Step-limit sensitivity (`step_limit.py`)
+
+```
+uv run python -m report.step_limit RUN_DIR_OR_PARENT... --ledger nemogate.yaml \
+    --task ID --constraint ID --arm natural [--operator none] [--boundary ID] \
+    [--repo-sha COMMIT] --out results/step-limit-sensitivity.md
+```
+
+A run that reaches the graph's step limit (`recursion_limit`) has error.json (a
+`GraphRecursionError`, matched by class name) and a partial trace but no record.json, so
+`replay.stats` leaves it out of the rates. This writes a two-row table for one cell: the cell as
+published (loaded and pooled by `replay.stats`, so it equals the results page; `--repo-sha` pins the
+task's commit exactly as `stats --repo-sha TASK=COMMIT` does) and the same cell with its step-limit
+runs counted as finished. Those are counted as task failed, with the rule judged by `oracle.evaluate`
+on the partial trace against the run's own `ledger.yaml` (scoped to the target rule), and the
+filesystem diff taken as empty unless the folder has `fs_diff.json`; the page says which, per run.
+Only step-limit runs at the published group's five reproducibility fields are counted. It is a
+sensitivity check: it changes no score and the page's numbers stay those of `stats`. The partial
+trace can miss a violation after the cut, so the broken count is a floor for those runs.
+Reads saved folders only. Tests: `uv run pytest report/tests/test_step_limit.py`.
+
 ## Rule replay page (`replay_view.py`)
 
 ```
