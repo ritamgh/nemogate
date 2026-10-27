@@ -2368,14 +2368,16 @@ def glance_empty_row(
     return f'<tr><th scope="row">{rule}</th>{dashes}</tr>'
 
 
-def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | None = None) -> str:
+def render_glance(
+    results: dict[str, Any], anchors: Anchors, appendix: int | None = None, sealed: bool = True
+) -> str:
     """The result of one results set in one table, above everything else of the set: one row per
     graded rule and condition (sabotage setting, handoff, compaction setting), the broke-the-rule
     counts of the ungated, block-only and gated arms and the exact test p. Nothing is added up
     across rows. Empty for a results file without exact tests."""
     if not has_exact_lines(results):
         return ""
-    withheld = appendix is not None
+    withheld = appendix is not None and sealed
     attempts = any(
         t["name"] == "attempts"
         for body in results["constraints"].values()
@@ -2413,7 +2415,9 @@ def render_glance(results: dict[str, Any], anchors: Anchors, appendix: int | Non
     )
 
 
-def render_cost(results: dict[str, Any], anchors: Anchors, appendix: int | None = None) -> str:
+def render_cost(
+    results: dict[str, Any], anchors: Anchors, appendix: int | None = None, sealed: bool = True
+) -> str:
     """The "Cost of prevention" table (report/cost.py), right under "At a glance" and under the
     same condition: nothing for a results file without exact tests, and nothing where no cell
     carries the cost figures."""
@@ -2437,7 +2441,7 @@ def render_cost(results: dict[str, Any], anchors: Anchors, appendix: int | None 
         note = row_note(body, bid, {"compaction": setting})
         return (
             f'<a href="#{e(anchors.section(cid, bid))}">'
-            f"{glance_rule(cid, body, appendix is not None)}</a> "
+            f"{glance_rule(cid, body, appendix is not None and sealed)}</a> "
             f'<span class="op">{e(op_row(op))}</span>'
             + (f'<span class="count">{e(note)}</span>' if note else "")
         )
@@ -2475,6 +2479,10 @@ APPENDIX_INTRO = (
     "Reported apart from the main set: none of these runs is counted in the results above. "
     "Counts are small; read the intervals."
 )
+OPEN_INTRO = (
+    "Not a sealed task: the rule's wording and the task ids are shown. Nothing else about how "
+    "the set is kept apart changes."
+)
 CONDITION_FIELDS = (
     ("repo_sha", "repo commit"),
     ("ledger_hash", "ledger"),
@@ -2491,6 +2499,7 @@ class Appendix:
     title: str
     results: dict[str, Any]
     notes: str | None = None
+    sealed: bool = True  # False (--appendix-open): the rule's wording and the task ids are shown
 
 
 def value_or_none(value: Any) -> str:
@@ -2568,9 +2577,15 @@ def appendix_accounting(results: dict[str, Any]) -> str:
 
 ACCOUNTING_NOTE = (
     "Each rule's row counts only the runs that were counted: the results file holds no record of "
-    "a run that errored or was left out for a single rule, arm or sabotage setting, so those "
-    "runs are shown for the whole set only, in the first table and under “Left out, by "
-    "reason”. A dash means the file has no figure there."
+    "a run that errored or was left out for a single rule or sabotage setting, so those runs are "
+    "shown for the whole set only, in the first table and under “Left out, by reason”; errored "
+    "runs are also counted per arm under “Errored runs, by arm”, where the file has them. A "
+    "dash means the file has no figure there."
+)
+ERRORED_NOTE = (
+    "An errored run ended in an error before it could be graded (for example the model server "
+    "failing, or a timeout). It is in no rate, so an arm with more errored runs has fewer runs "
+    "counted, not more violations."
 )
 
 
@@ -2641,11 +2656,55 @@ def accounting_by_arm(results: dict[str, Any]) -> str:
     return panels.tablewrap("Run accounting: counted runs by rule, sabotage setting and arm", table)
 
 
+def accounting_errored(results: dict[str, Any]) -> str:
+    """Errored runs by arm, from `runs.errored_cost.by_arm`, beside the runs counted in the rates
+    (the cells' runs). `errored_cost` lists only the arms that had an errored run, so an arm
+    missing from it had none (0). A file without `errored_cost` gets no table, not zeros."""
+    errored = (results.get("runs") or {}).get("errored_cost")
+    if not errored:
+        return ""
+    errored_by_arm = errored.get("by_arm") or {}
+    counted: dict[str, int] = {}
+    for body in results.get("constraints", {}).values():
+        for b in body.get("boundaries", {}).values():
+            for cell in b.get("cells", []):
+                counted[cell["arm"]] = counted.get(cell["arm"], 0) + cell["n"]
+    body = ""
+    # an errored run whose arm was not recorded is listed under the name the file gives it, so
+    # the arm rows always add up to the "All arms" row
+    for arm in [*ARM_ORDER, *sorted(set(errored_by_arm) - set(ARM_ORDER))]:
+        failed = (errored_by_arm.get(arm) or {}).get("count", 0)
+        ran = DASH if arm not in counted else e(counted[arm])
+        body += (
+            f'<tr><th scope="row">{e(ARM_LABEL.get(arm, arm))}</th>'
+            f'<td data-label="Errored, in no rate">{e(failed)}</td>'
+            f'<td data-label="Counted in the rates">{ran}</td></tr>'
+        )
+    body += (
+        '<tr><th scope="row">All arms</th>'
+        f'<td data-label="Errored, in no rate">{e(errored.get("count", 0))}</td>'
+        f'<td data-label="Counted in the rates">{e(sum(counted.values()))}</td></tr>'
+    )
+    table = (
+        '<table class="outcome"><colgroup><col style="width:50%"><col style="width:25%">'
+        '<col style="width:25%"></colgroup><thead><tr><th scope="col">Arm</th>'
+        '<th scope="col">Errored, in no rate</th><th scope="col">Counted in the rates</th>'
+        f"</tr></thead><tbody>{body}</tbody></table>"
+    )
+    return f'<h4>Errored runs, by arm</h4><p class="note">{e(ERRORED_NOTE)}</p>' + panels.tablewrap(
+        "Run accounting: errored runs by arm", table
+    )
+
+
 def run_accounting(results: dict[str, Any], index: int) -> str:
     """The set's run accounting as tables, every figure computed from its own results file: what
     was found, counted and not counted, and the counted runs by rule, sabotage setting and arm.
     Nothing a file does not carry is shown (a dash), and a file with none of it gets no section."""
-    inner = accounting_totals(results.get("runs") or {}) + accounting_by_arm(results)
+    inner = (
+        accounting_totals(results.get("runs") or {})
+        + accounting_by_arm(results)
+        + accounting_errored(results)
+    )
     if not inner:
         return ""
     sid = f"appendix-{index}-accounting"
@@ -2656,11 +2715,16 @@ def run_accounting(results: dict[str, Any], index: int) -> str:
     )
 
 
-def appendix_rule(cid: str, body: dict[str, Any], anchors: Anchors, explain: bool) -> str:
-    """One rule of an appendix: its id, kind and counts. The rule's wording is never printed."""
+def appendix_rule(
+    cid: str, body: dict[str, Any], anchors: Anchors, explain: bool, sealed: bool = True
+) -> str:
+    """One rule of an appendix: its id, kind and counts. A sealed set never prints the rule's
+    wording or its task ids; an open one (`sealed=False`) prints both."""
     graded = is_graded(body)
     boundaries = body.get("boundaries", {})
     meta = [f"rule <code>{e(cid)}</code>"]
+    if not sealed and task_phrase(body):
+        meta.append(e(task_phrase(body)))
     pooled = body.get("reproducibility")
     if pooled:
         meta.append(f"runs made at repo commit {value_or_none(pooled.get('repo_sha'))}")
@@ -2683,8 +2747,12 @@ def appendix_rule(cid: str, body: dict[str, Any], anchors: Anchors, explain: boo
         f'<section class="ogroup" data-rule="{e(cid)}" aria-label="{e(cid)}">'
         f'<h3 class="rule"><code>{e(cid)}</code> '
         f'<span class="badge">{e(body.get("kind", "unknown kind"))}</span></h3>'
-        f'<p class="note withheld">{e(WITHHELD)}</p>'
-        f'<p class="ometa">{" &middot; ".join(meta)}</p>{inner}</section>'
+        + (
+            f'<p class="note withheld">{e(WITHHELD)}</p>'
+            if sealed
+            else f'<p class="ruletext">{e(body.get("text", ""))}</p>'
+        )
+        + f'<p class="ometa">{" &middot; ".join(meta)}</p>{inner}</section>'
     )
 
 
@@ -2701,14 +2769,17 @@ def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str
     anchors = Anchors(constraints, prefix=f"a{index}-")
     rules, explained = [], False
     for cid in sorted(constraints):
-        rules.append(appendix_rule(cid, constraints[cid], anchors, not explained))
+        rules.append(appendix_rule(cid, constraints[cid], anchors, not explained, appendix.sealed))
         explained = explained or '<table class="blocks"' in rules[-1]
     paragraphs = "".join(f"<p>{e(p)}</p>" for p in note_paragraphs(appendix.notes))
     return (
         f'<section class="appendix" id="{sid}" aria-labelledby="{sid}-h">'
         f'<h2 id="{sid}-h">{e(appendix.title)}</h2>'
-        f'<p class="note">{e(APPENDIX_INTRO)}</p>{paragraphs}'
-        f"{render_glance(results, anchors, index)}{render_cost(results, anchors, index)}"
+        f'<p class="note">{e(APPENDIX_INTRO)}</p>'
+        + ("" if appendix.sealed else f'<p class="note">{e(OPEN_INTRO)}</p>')
+        + f"{paragraphs}"
+        f"{render_glance(results, anchors, index, appendix.sealed)}"
+        f"{render_cost(results, anchors, index, appendix.sealed)}"
         f"{appendix_accounting(results)}"
         f"{run_accounting(results, index)}{appendix_differences(main, results)}"
         f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
@@ -2850,7 +2921,7 @@ def notes_problems(
     page = render(
         results,
         notes=None,
-        appendices=[Appendix(a.title, a.results) for a in appendices],
+        appendices=[Appendix(a.title, a.results, sealed=a.sealed) for a in appendices],
         **evidence,
     )
     body = page[page.index("<body>") :]
@@ -2873,13 +2944,26 @@ def notes_problems(
     return problems
 
 
-def load_appendix(title: str, results_file: str, notes_file: str | None = None) -> Appendix:
+def load_appendix(
+    title: str, results_file: str, notes_file: str | None = None, sealed: bool = True
+) -> Appendix:
     """Read an appendix's results (and notes) file. OSError or ValueError on anything unusable."""
     results = json.loads(Path(results_file).read_text(encoding="utf-8"))
     if not isinstance(results, dict):
         raise ValueError(f"appendix {title!r}: {results_file} is not a results object")
     notes = Path(notes_file).read_text(encoding="utf-8") if notes_file else None
-    return Appendix(title, results, notes)
+    return Appendix(title, results, notes, sealed)
+
+
+class AppendixAction(argparse.Action):
+    """Collect (sealed, values) from --appendix and --appendix-open into one list."""
+
+    def __init__(self, *args: Any, sealed: bool, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.sealed = sealed
+
+    def __call__(self, parser, namespace, values, option_string=None):  # noqa: ANN001
+        setattr(namespace, self.dest, [*getattr(namespace, self.dest), (self.sealed, values)])
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -2920,22 +3004,36 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="FILE",
         help="plain text, paragraphs split by blank lines: shown as 'Notes on these numbers'",
     )
+    # Both options add to one list, so the sets are numbered in the order they were given.
     parser.add_argument(
         "--appendix",
-        action="append",
+        action=AppendixAction,
+        sealed=True,
         nargs="+",
+        dest="appendix",
         default=[],
         metavar=("TITLE", "RESULTS_FILE"),
         help="TITLE RESULTS_FILE [NOTES_FILE], repeatable: a separate result set shown after the "
-        "page, never pooled into it. Rule wording is withheld; no run folders are read",
+        "page, never pooled into it. Rule wording and task ids are withheld; no run folders are "
+        "read",
+    )
+    parser.add_argument(
+        "--appendix-open",
+        action=AppendixAction,
+        sealed=False,
+        nargs="+",
+        dest="appendix",
+        metavar=("TITLE", "RESULTS_FILE"),
+        help="like --appendix, for a task that is not sealed: the rule's wording and the task "
+        "ids are shown. The set is still apart from the main numbers",
     )
     args = parser.parse_args(argv)
-    for values in args.appendix:
+    for _, values in args.appendix:
         if not 2 <= len(values) <= 3:
-            parser.error("--appendix takes TITLE RESULTS_FILE [NOTES_FILE]")
+            parser.error("--appendix and --appendix-open take TITLE RESULTS_FILE [NOTES_FILE]")
     try:
         notes = args.notes.read_text(encoding="utf-8") if args.notes else None
-        appendices = [load_appendix(*values) for values in args.appendix]
+        appendices = [load_appendix(*values, sealed=sealed) for sealed, values in args.appendix]
         results = json.loads(args.results.read_text(encoding="utf-8"))
         evidence = {
             "trace": panels.load_trace_evidence(
@@ -2955,7 +3053,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             [(args.notes, notes)]
             + [
                 (v[2] if len(v) == 3 else None, a.notes)
-                for v, a in zip(args.appendix, appendices, strict=True)
+                for (_, v), a in zip(args.appendix, appendices, strict=True)
             ],
             **evidence,
         )
