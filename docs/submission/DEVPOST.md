@@ -93,9 +93,9 @@ diff of the final image shows what the agents changed. A fork is a new session o
   commit and the lockfile hash. Runs made under different conditions are never pooled.
 - The pipeline names no task or rule: everything specific lives in `refapp/`, `nemogate.yaml` and the
   task files. A grep for task ids and rule wording over the pipeline folders must print nothing.
-- Two tasks were written **before the pipeline was built** and sealed until the final sweep, so the
+- Two tasks were kept **sealed outside the repo** and not opened until the final sweep, so the
   pipeline could not be fitted to them.
-- 2,422 offline tests (stub models, no credit spent).
+- More than 2,400 offline tests (stub models, no credit spent).
 
 ---
 
@@ -134,7 +134,16 @@ their rules survive and a gate that keeps them alive.
 | Carrying the rule too (gated) | attempts fell to **4 of 14**; exact test **p = 0.0213** |
 | Same on "ask before deleting" (T10) | attempts **10 of 20 → 3 of 20**; exact test on matched forks **p = 0.0156** (7 pairs where only block-only tried, none where only gated did) |
 | Same on "don't modify `app/serializers.py`" (T11) | **9 of 17 → 4 of 16**; p = 0.0625, **not significant** |
-| Second app: research team with Tavily (T14, rule: don't cite Wikipedia) | gated broke the rule in **0 of 33** runs, block-only in **10 of 32**; exact test on matched forks, 0 against 8 over 29 pairs, **p = 0.0078** |
+| Second app: research team with Tavily (T14, rule: don't cite Wikipedia) | gated broke the rule in **0 of 33** runs, block-only in **10 of 32**; the paired test on matched forks is the headline: 0 against 8 over 29 pairs, **p = 0.0078** (see the notes below the table) |
+
+**Notes on the second app (T14).**
+
+- **Errors.** 21 of 160 runs errored (server 503s and one timeout): block-only 8, gated 7, mutated 6,
+  natural 0. They are left out of the counts above; 29 matched pairs remain from 40 repetitions.
+- **Why T14 exists.** T13 was the first research task. Its base rate came out low, so we wrote T14
+  under the same rule. The check and the rule are unchanged; T14 only requires a link after every
+  claim. T13 pilot, never pooled with T14: rule dropped (mutated) broke it in 1 of 8 runs, block-only
+  1 of 5, gated 0 of 5, natural 1 of 12 (7 of 37 runs errored).
 
 **What it does not show, and we say so:**
 
@@ -143,8 +152,9 @@ their rules survive and a gate that keeps them alive.
 - Gated did not finish the job significantly more often than block-only (T6: 10 of 14 against 7 of
   14, p = 0.44). Intervals are wide.
 - On two sealed held-out tasks, the rule that blocking cannot enforce (graded after the run) was
-  broken by block-only in 4 of 5 (no sabotage) and 5 of 5 (rule dropped) runs and by gated in 0 of 5
-  and 0 of 5. Over the 10 matched fork pairs the exact test gives p = 0.0039, **but the 10 pairs come
+  run twice. In the **first run** gated broke it in 1 of 5 and block-only in 4 of 5. We then fixed how
+  forks are scored (PR #89) and **re-ran**: block-only broke it in 4 of 5 (no sabotage) and 5 of 5
+  (rule dropped) runs and gated in 0 of 5 and 0 of 5. The re-run came after that fix. Over the 10 matched fork pairs the exact test gives p = 0.0039, **but the 10 pairs come
   from only 5 sources (each forked under both operators), so they are not independent; counting each
   source once, all 5 point the same way and p = 0.0625.** We treat it as the direction we expected
   and as exploratory, not as a significant result.
@@ -154,8 +164,10 @@ their rules survive and a gate that keeps them alive.
   Agents also has an experimental `fork` mode that shares the parent's conversation; we have not
   measured it.
 
-**Cost of prevention** is small: a run costs about $0.12 to $0.19 (T6: $0.161 natural, $0.115
-mutated, $0.188 block-only, $0.150 gated).
+**Cost of prevention.** A run costs about $0.12 to $0.19 (T6: $0.161 natural, $0.115 mutated,
+$0.188 block-only, $0.150 gated). For the one rule that can be priced (T6, 14 runs per arm), the
+results page's cost table gives about **$0.054 per prevented violation** for gated. The widest
+reading runs from "may cost less" up to $0.61, and the data cannot rule out that it cost nothing.
 
 ---
 
@@ -211,7 +223,7 @@ Our feedback on Token Factory, Sandboxes and the NVIDIA models is in
 | Second app (T14): 0 of 33 vs 10 of 32, p = 0.0078 | **PR #102 description; not yet on the results page** |
 | Thinking-off savings, json_object vs json_schema, fork timings | `docs/FACTS.md` sections 2, 3 and 6 |
 | 1,474 AI messages, 36 live runs, 0 tool calls as text | `docs/SPEC.md`, Changes, 2026-10-16 (Preflight) |
-| 2,422 tests | `uv run pytest --collect-only -q` on `main` |
+| More than 2,400 tests | `uv run pytest --collect-only -q` on `main` (re-count on the day) |
 
 ## Before you submit
 

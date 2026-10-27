@@ -188,4 +188,4 @@ use:** NeMo Guardrails and the NeMo Agent Toolkit. We read their documentation t
 
 The combination of cheap open-weight models and fast snapshot forks is what made this project
 possible: we could re-run a task from the same point under four conditions, hundreds of times, for
-about $23 of credit on one account (its spend log read $22.74 after the main sweep). The asks above are the places where the platform made that harder than it needed to be.
+about $34 of credit on one account (as of Oct 24, after the repair rounds, the sealed final sweep and the research-app runs; re-read the spend log before submitting). The asks above are the places where the platform made that harder than it needed to be.
