@@ -164,7 +164,9 @@ their rules survive and a gate that keeps them alive.
   source once, all 5 point the same way and p = 0.0625.** We treat it as the direction we expected
   and as exploratory, not as a significant result.
 - A repair that only edits the planner's prompt did not hold: violations 45% → 44%, task success
-  90% → 88% on T11, so the accept rule rejected it. The gate, not a prompt patch, is what worked.
+  90% → 88% on T11 (one live round; the 45% is the T11 no-sabotage cell, 9 of 20 broke; the round was
+  cut off by its worker's timeout after 18 of 20 re-runs, so its summary is rebuilt by hand and the
+  page says so), so the accept rule rejected it. The gate, not a prompt patch, is what worked.
 - One agent model, two apps, small samples, and Deep Agents' default `isolated` subagent mode. Deep
   Agents also has an experimental `fork` mode that shares the parent's conversation; we have not
   measured it.
@@ -224,7 +226,7 @@ Our feedback on Token Factory, Sandboxes and the NVIDIA models is in
 | T6 cost per run | results page, same section, cost table |
 | T10: 10 of 20 → 3 of 20, p = 0.0156; T11: 9 of 17 → 4 of 16, p = 0.0625 | results page, "At a glance" |
 | Held-out: 0 of 5 vs 4 of 5 (p = 0.125), 0 of 5 vs 5 of 5 (p = 0.0625), pooled 0 of 10 vs 9 of 10 pairs (p = 0.0039; counting each of the 5 sources once, p = 0.0625) | results page, "Held-out tasks, re-run after the fork fix", exact-test table for the second held-out rule |
-| Repair: 45% → 44%, 90% → 88% | results page, "The repair patch" |
+| Repair: 45% → 44%, 90% → 88% (one round, T11; 45% = 9 of 20 in the T11 natural cell) | results page, "The repair patch"; baseline cell in `results.json` (release `evidence-2026-10-27`) |
 | Second app (T14): 0 of 33 vs 10 of 32, p = 0.0078 | results page, Appendix 3 and 4 (also in the PR #102 description) |
 | Thinking-off savings, json_object vs json_schema, fork timings | `docs/FACTS.md` sections 2, 3 and 6 |
 | 1,474 AI messages, 36 live runs, 0 tool calls as text | `docs/SPEC.md`, Changes, 2026-10-16 (Preflight) |
