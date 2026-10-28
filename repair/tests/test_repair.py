@@ -1213,6 +1213,36 @@ def test_a_runner_that_ignores_the_request_is_killed_after_the_grace_period(tmp_
     assert not alive(int(Path(f"{ready}.pid").read_text()))
 
 
+WRAPPER = """
+import signal, subprocess, sys
+signal.signal(signal.SIGTERM, signal.SIG_IGN)  # a wrapper that is slow to pass the request on
+sys.exit(subprocess.run([sys.executable, "-c", sys.argv[1], *sys.argv[2:]]).returncode)
+"""
+
+
+def test_the_kill_after_the_grace_period_reaches_the_runner_behind_a_wrapper(tmp_path, monkeypatch):
+    # `uv run` -> python: killing only the process we started leaves the python child alive.
+    import repair.worktree as worktree
+
+    monkeypatch.setattr(worktree, "STOP_GRACE_SECONDS", 0.5)
+    ready = tmp_path / "ready"
+    cmd = [sys.executable, "-c", WRAPPER, CHILD, str(tmp_path / "marker"), str(ready), "stubborn"]
+    interrupt_when_ready(ready)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            worktree._default_run(cmd, tmp_path, dict(os.environ))
+        child = int(Path(f"{ready}.pid").read_text())
+        for _ in range(60):  # init reaps the orphaned child a moment after it is killed
+            if not alive(child):
+                break
+            threading.Event().wait(0.05)
+        assert not alive(child)
+    finally:  # only the pid the child recorded, so a failing run leaves nothing behind
+        child_pid = Path(f"{ready}.pid")
+        if child_pid.exists() and alive(int(child_pid.read_text())):
+            os.kill(int(child_pid.read_text()), signal.SIGKILL)
+
+
 def test_the_default_runner_raises_with_the_exit_status_of_a_failed_runner(tmp_path):
     from repair.worktree import _default_run
 
@@ -1294,6 +1324,7 @@ def test_a_second_ctrl_c_while_the_runner_winds_down_kills_it_at_once():
     from repair.worktree import _stop
 
     class Runner:
+        pid = 2**31 - 1  # no process has this as its parent, so nothing below it gets killed
         calls = []
 
         def terminate(self):

@@ -9,6 +9,7 @@ that did not finish keeps them, because the re-runs that did finish are records 
 """
 
 import os
+import signal
 import subprocess
 import uuid
 from collections.abc import Callable, Sequence
@@ -39,14 +40,48 @@ def _default_run(cmd: list[str], cwd: Path, env: dict[str, str]) -> None:
         raise subprocess.CalledProcessError(code, cmd)
 
 
+def _descendants(pid: int) -> list[int]:
+    """Every process below `pid`, deepest first (so killing in order never orphans one unseen)."""
+    table = subprocess.run(
+        ["ps", "-eo", "pid=,ppid="], capture_output=True, text=True, check=False
+    ).stdout
+    children: dict[int, list[int]] = {}
+    for line in table.splitlines():
+        child, parent = (int(field) for field in line.split())
+        children.setdefault(parent, []).append(child)
+    found: list[int] = []
+    pending = [pid]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            found.append(child)
+            pending.append(child)
+    return found[::-1]  # a parent is always found before its children, so reversed is deepest first
+
+
+def _kill_tree(proc: "subprocess.Popen[bytes]", seen: list[int]) -> None:
+    """SIGKILL what is below `proc`, then `proc`. `uv run` does not pass a kill on, so killing only
+    `proc` leaves the runner behind it alive. `seen` is what was below it before it was asked to
+    stop: a wrapper that exits first re-parents its child out of sight."""
+    below = _descendants(proc.pid)
+    for pid in [*below, *(p for p in seen if p not in below)]:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    proc.kill()
+
+
 def _stop(proc: "subprocess.Popen[bytes]") -> None:
-    """Ask `proc` to stop, wait for it, and kill it if it does not (or if the user presses Ctrl-C
-    again while waiting: they want it gone now, and an orphaned runner keeps spending credit)."""
+    """Ask `proc` to stop, wait for it, and kill it and everything below it if it does not (or if
+    the user presses Ctrl-C again while waiting: they want it gone now, and an orphaned runner
+    keeps spending credit). The request goes to `proc` only: `uv run` passes it on, and sending it
+    to the runner as well would deliver it twice."""
+    seen = _descendants(proc.pid)
     proc.terminate()
     try:
         proc.wait(timeout=STOP_GRACE_SECONDS)
     except (subprocess.TimeoutExpired, KeyboardInterrupt):
-        proc.kill()
+        _kill_tree(proc, seen)
         proc.wait()
 
 
