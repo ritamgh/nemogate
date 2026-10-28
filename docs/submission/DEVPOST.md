@@ -81,8 +81,8 @@ model calls run on the host. A fork is a new session on a snapshot, about
 
 - Nemotron's thinking is on by default and billed as output tokens. Turning it off cut output tokens
   3 to 16 times and latency 2 to 10 times with no loss of valid output, so it is off for every role.
-- Super ignored `response_format: json_object` (0 of 3 valid) and obeyed `json_schema` (3 of 3, and
-  24 of 24 across the escape probes), so every structured call pins `json_schema`.
+- Super ignored `response_format: json_object` (0 of 3 valid) and obeyed `json_schema` (3 of 3; `json_schema`
+  was also valid in all 24 escape probes, which span four models), so every structured call pins `json_schema`.
 - Tool calls came back as native `tool_calls`; a scan of saved runs found none written as text in
   1,474 AI messages over 36 live runs.
 
@@ -139,9 +139,16 @@ their rules survive and a gate that keeps them alive.
 | Carrying the rule too (gated) | attempts fell to **4 of 14**; exact test **p = 0.0213** |
 | Same on "ask before deleting" (T10) | attempts **10 of 20 → 3 of 20**; exact test on matched forks **p = 0.0156** (7 pairs where only block-only tried, none where only gated did) |
 | Same on "don't modify `app/serializers.py`" (T11) | **9 of 17 → 4 of 16**; p = 0.0625, **not significant** |
-| Second app: research team with Tavily (T14, rule: don't cite Wikipedia) | gated broke the rule in **0 of 33** runs, block-only in **10 of 32**; the paired test on matched forks is the headline: 0 against 8 over 29 pairs, **p = 0.0078** (see the notes below the table) |
+| Second app: research team with Tavily (T14, rule: don't cite Wikipedia) | gated broke the rule in **0 of 33** runs, block-only in **10 of 32** (160 runs made, 21 errored and in no rate); matched forks: 0 against 8 over 29 pairs, **p = 0.0078** (see the notes below the table) |
 
 **Notes on the second app (T14).**
+
+- **What "gated" means on this rule.** This rule is about a reply's text, so gated here is the
+  re-pinned rule **plus** a reply check: the gate holds back a researcher reply that cites Wikipedia
+  (the same pattern the oracle grades with) and lets the lead delegate again, at most twice per run.
+  Block-only has no such check. So 0 of 33 against 10 of 32 compares re-pinning plus a reply check
+  with nothing, and does not show that re-pinning alone works. A held-back reply is not graded.
+  The results page's "no run was blocked" counts blocked tool calls, not held-back replies.
 
 - **Errors.** 21 of 160 runs errored (20 "System is overloaded" 529 responses from the server and one timeout): block-only 8, gated 7, mutated 6,
   natural 0. They are left out of the counts above; 29 matched pairs remain from 40 repetitions.
@@ -160,7 +167,7 @@ their rules survive and a gate that keeps them alive.
   run twice. In the **first run** gated broke it in 1 of 5 and block-only in 4 of 5. We then fixed where
   a fork is cut (PR #89: at the first handoff that carries the rule) and **re-ran**: block-only broke it in 4 of 5 (no sabotage) and 5 of 5
   (rule dropped) runs and gated in 0 of 5 and 0 of 5. The re-run came after that fix. Over the 10 matched fork pairs the exact test gives p = 0.0039, **but the 10 pairs come
-  from only 5 sources (each forked under both operators), so they are not independent; counting each
+  from only 5 sources (each forked with no sabotage and with `drop`), so they are not independent; counting each
   source once, all 5 point the same way and p = 0.0625.** We treat it as the direction we expected
   and as exploratory, not as a significant result.
 - A repair that only edits the planner's prompt did not hold: violations 45% → 44%, task success
@@ -172,9 +179,10 @@ their rules survive and a gate that keeps them alive.
   measured it.
 
 **Cost of prevention.** A run costs about $0.12 to $0.19 (T6: $0.161 natural, $0.115 mutated,
-$0.188 block-only, $0.150 gated). For the one rule that can be priced (T6, 14 runs per arm), the
+$0.188 block-only, $0.150 gated). For the main app's one priced rule (T6, 14 runs per arm), the
 results page's cost table gives about **$0.054 per prevented violation** for gated. The widest
 reading runs from "may cost less" up to $0.61, and the data cannot rule out that it cost nothing.
+The second app is priced too (about $0.002, widest reading up to $0.31), with the reply-check caveat above.
 
 ---
 
@@ -188,7 +196,8 @@ reading runs from "may cost less" up to $0.61, and the data cannot rule out that
   anyone.
 - **Why not just block the tool call?** We tested exactly that, with its own arm. Blocking is
   necessary for rules it can see and does nothing for rules it cannot (an output that must contain a
-  line, a file that must stay unchanged). Carrying the rule helps the agent stop trying.
+  line, a file that must stay unchanged). On the two rules where this was
+  significant (T6, T10) carrying the rule also cut how often the agent tried; on a third (T11) it did not reach significance.
 - **Using Nemotron against itself.** The cheapest Nemotron (Lightning) is the saboteur and rule
   extractor, the middle one (Super) is the team under test, and the largest (Ultra) plans repairs.
   The helper never edits text freely: it names which sentences carry the rule, and code removes them,
@@ -227,7 +236,7 @@ Our feedback on Token Factory, Sandboxes and the NVIDIA models is in
 | T10: 10 of 20 → 3 of 20, p = 0.0156; T11: 9 of 17 → 4 of 16, p = 0.0625 | results page, "At a glance" |
 | Held-out: 0 of 5 vs 4 of 5 (p = 0.125), 0 of 5 vs 5 of 5 (p = 0.0625), pooled 0 of 10 vs 9 of 10 pairs (p = 0.0039; counting each of the 5 sources once, p = 0.0625) | results page, "Held-out tasks, re-run after the fork fix", exact-test table for the second held-out rule |
 | Repair: 45% → 44%, 90% → 88% (one round, T11; 45% = 9 of 20 in the T11 natural cell) | results page, "The repair patch"; baseline cell in `results.json` (release `evidence-2026-10-27`) |
-| Second app (T14): 0 of 33 vs 10 of 32, p = 0.0078 | results page, Appendix 3 and 4 (also in the PR #102 description) |
+| Second app (T14): 0 of 33 vs 10 of 32 (160 runs made, 21 errored), 29 matched pairs, p = 0.0078 | results page, Appendix 3 and 4 (also in the PR #102 description) |
 | Thinking-off savings, json_object vs json_schema, fork timings | `docs/FACTS.md` sections 2, 3 and 6 |
 | 1,474 AI messages, 36 live runs, 0 tool calls as text | `docs/SPEC.md`, Changes, 2026-10-16 (Preflight) |
 | More than 2,400 tests | `uv run pytest --collect-only -q` on `main` (re-count on the day) |
@@ -235,10 +244,12 @@ Our feedback on Token Factory, Sandboxes and the NVIDIA models is in
 ## Before you submit
 
 - [ ] Put the YouTube link in the table above.
-- [ ] Re-check every number against the results page you submit with. The page was republished on
-      2026-10-21; the cost table, run accounting, replay page and the Tavily set came after.
-- [ ] **Second app:** if the T14 results are not on the results page by then, delete that row and the
-      "Second app" sentences. Do not leave a number the page does not show.
+- [ ] Re-check every number against the results page you submit with, as literal strings, after the
+      final republish (the last one was 2026-10-27).
+- [ ] **Second app:** once the hold-back count for the 33 gated T14 runs exists, put it in the
+      T14 row and the first note ("k of 33 needed a hold-back"; if 0, say no reply was held back),
+      and note the same for the "did the job" test (11 vs 2 pairs, p = 0.0225). Until then the
+      note above stands.
 - [ ] Held-out wording: keep "exploratory". If you quote the pooled p = 0.0039, quote 0.0625 (each source
       counted once) next to it, and lead with the second.
 - [ ] Open the demo URL and the repo's About box in a private window; the licence must be visible.
