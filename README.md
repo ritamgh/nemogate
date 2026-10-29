@@ -20,7 +20,7 @@ uv run pytest                              # offline: stub models, no credit spe
 uv run python -m replay.audit examples     # 3 saved runs re-scored offline: 3 of 3 match
 ```
 
-[`examples/README.md`](examples/README.md) explains what the audit prints, and [`results/natural-runs.md`](results/natural-runs.md) lists 25 natural runs (no sabotage) with how each one handled the rule. The run folders behind the page's main numbers are not in git, so those numbers can be read on the page but not rebuilt from a clone.
+[`examples/README.md`](examples/README.md) explains what the audit prints, and [`results/natural-runs.md`](results/natural-runs.md) lists 25 natural runs (no sabotage) with how each one handled the rule. The 300 run folders behind the page's main numbers (T6, T10, T11) are in the release [`evidence-2026-10-27`](https://github.com/ritamgh/nemogate/releases/tag/evidence-2026-10-27), with the command that rebuilds the page's `results.json` from them, byte for byte, and the audit that re-scores each finished run (278 of 280 match; the release notes explain the 2 that differ, neither counted on the page). None of it needs a key. [`docs/submission/EVIDENCE.md`](docs/submission/EVIDENCE.md) maps each headline number to its source. The sealed held-out runs are not released, so those numbers can be read on the page but not rebuilt.
 
 ## Built on Nebius Token Factory, Nemotron and Sandboxes
 
