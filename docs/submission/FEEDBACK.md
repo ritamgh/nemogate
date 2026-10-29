@@ -105,7 +105,7 @@ use:** NeMo Guardrails and the NeMo Agent Toolkit. We read their documentation t
   The SDK has no delete call. Listing images returns about 39,600 items, almost all public imports,
   and took about five minutes, so we could not measure our own count or retention.
 - **Why it matters.** We could not tell whether a large sweep was approaching a quota or leaving
-  storage behind. We saw no quota error after 35 runs.
+  storage behind.
 - **Suggestion.** An image delete (or a time-to-live), and a usage endpoint with your own image count and bytes.
 
 ### 3. One timeout or cancellation ends the session
@@ -188,4 +188,4 @@ use:** NeMo Guardrails and the NeMo Agent Toolkit. We read their documentation t
 
 The combination of cheap open-weight models and fast snapshot forks is what made this project
 possible: we could re-run a task from the same point under four conditions, hundreds of times, for
-about $34 of credit on one account (as of Oct 24, after the repair rounds, the sealed final sweep and the research-app runs; re-read the spend log before submitting). The asks above are the places where the platform made that harder than it needed to be.
+about $38 of the $60 credit on one account (the console balance read $22.20 on Oct 28, after the repair rounds, the sealed final sweep and the research-app runs). The asks above are the places where the platform made that harder than it needed to be.
