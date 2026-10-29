@@ -94,6 +94,24 @@ def _run_dirs(paths: Sequence[Path]) -> list[Path]:
     return dirs
 
 
+def count_unreadable_folders(paths: Sequence[Path]) -> int:
+    """Folders `_run_dirs` passes over because they have no run_config.json.
+
+    A passed folder that is not itself a run is searched for r-* children; any child without
+    run_config.json counts. A passed folder with no children but a record.json counts as one.
+    """
+    count = 0
+    for path in paths:
+        if (path / "run_config.json").is_file():
+            continue
+        children = [p for p in path.glob("r-*") if p.is_dir()]
+        if children:
+            count += sum(1 for p in children if not (p / "run_config.json").is_file())
+        elif (path / "record.json").is_file():
+            count += 1
+    return count
+
+
 def _knobs(old: dict[str, Any]) -> tuple[str | None, str | None]:
     knobs = old.get("knobs") or {}
     return knobs.get(TOKENS_ENV), knobs.get(KEEP_ENV)
@@ -426,6 +444,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     for label, n in sorted(counts.items()):
         print(f"{label}: {n}")
+    unreadable = count_unreadable_folders(args.paths)
+    if not rows and unreadable:
+        print(
+            f"skipped {unreadable} folders with no run_config.json: only full run folders are read",
+            file=sys.stderr,
+        )
     return 0
 
 
