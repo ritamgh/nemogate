@@ -246,3 +246,8 @@ CLAUDE.local.md
 
 # Local tool cache
 .playwright-mcp/
+
+# Local outputs: code map and the built results page (the page is published on gh-pages)
+graphify-out/
+/results/site/
+.lens/
