@@ -1360,10 +1360,12 @@ def test_links_are_escaped_and_only_web_or_relative_urls_are_taken(tmp_path, cap
     out = tmp_path / "index.html"
     results = str(FIXTURES / "results_rich.json")
 
-    assert site.main(["--results", results, "--out", str(out), "--link", "A<b>", "replay.html"]) == 0
+    argv = ["--results", results, "--out", str(out)]
+
+    assert site.main([*argv, "--link", "A<b>", "replay.html"]) == 0
     assert '<p class="links"><a href="replay.html">A&lt;b&gt;</a></p>' in out.read_text("utf-8")
     with pytest.raises(SystemExit):
-        site.main(["--results", results, "--out", str(out), "--link", "x", "javascript:alert(1)"])
+        site.main([*argv, "--link", "x", "javascript:alert(1)"])
 
 
 def test_two_repair_rounds_get_numbered_headings():

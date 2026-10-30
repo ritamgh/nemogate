@@ -2981,7 +2981,8 @@ def notes_problems(
         appendices=[Appendix(a.title, a.results, sealed=a.sealed) for a in appendices],
         **evidence,
     )
-    body = page[page.index("<body>") :]
+    # The contents list names every appendix, so it would let main notes borrow their numbers.
+    body = re.sub(r'<nav class="toc".*?</nav>', "", page[page.index("<body>") :], flags=re.S)
     parts = re.split(r'(?=<section class="appendix" id="appendix-)', body)
     problems = []
     for (path, text), part in zip(files, parts, strict=True):
