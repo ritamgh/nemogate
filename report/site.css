@@ -167,3 +167,13 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--rule)}
 .warn{max-width:none}
 }
 .graphwrap:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.links{margin:.9rem 0 0;font-size:1rem;font-weight:600}
+nav.toc{margin:1.2rem 0 0;font-size:.92rem}
+nav.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 18px}
+details.fold{margin-top:44px}
+details.fold>summary{cursor:pointer;list-style-position:outside}
+details.fold>summary>h2,details.fold>summary>h3{display:inline}
+details.fold>summary::marker{color:var(--muted)}
+details.fold.sub{margin-top:18px}
+details.fold.sub>summary{font-weight:600;font-size:.95rem}
+@media print{details.fold>*{display:block}}
