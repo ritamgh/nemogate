@@ -16,7 +16,7 @@ submit with** (the "Before you submit" list is the last section).
 | Tagline | Does your agent team keep the rules you give it? NemoGate finds where a rule dies between agents, proves it with forked re-runs, and carries it across. |
 | Demo (hosted) | https://ritamgh.github.io/nemogate/ |
 | Code (public, Apache-2.0) | https://github.com/ritamgh/nemogate |
-| Video | *(YouTube link, under 3 minutes)* |
+| Video | https://www.youtube.com/watch?v=ssPgqoufgnI |
 | Built with | Nebius Token Factory, NVIDIA Nemotron 3 (Lightning, Super, Ultra), Nebius Sandboxes (Contree), LangChain Deep Agents, Tavily |
 | Team | Ritam Ghosh ([@ritamgh](https://github.com/ritamgh)), Shekhar Padhy ([@Shekharpadhy](https://github.com/Shekharpadhy)) |
 
@@ -243,7 +243,7 @@ Our feedback on Token Factory, Sandboxes and the NVIDIA models is in
 
 ## Before you submit
 
-- [ ] Put the YouTube link in the table above.
+- [x] Put the YouTube link in the table above.
 - [ ] Re-check every number against the results page you submit with, as literal strings, after the
       final republish (the last one was 2026-10-27).
 - [ ] **Second app:** once the hold-back count for the 33 gated T14 runs exists, put it in the
