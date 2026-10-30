@@ -2,6 +2,12 @@
 
 NemoGate finds the rules a [LangChain Deep Agents](https://github.com/langchain-ai/deepagents) system loses at its handoffs. It tests each loss with forked runs in **Nebius Sandboxes** and reports how often the rule was broken, and it can re-carry the rule across the handoff.
 
+**For judges, in five minutes**
+- **The result:** [results page](https://ritamgh.github.io/nemogate/), starting at "At a glance". The reference sections underneath are closed until clicked.
+- **One rule, step by step:** [replay](https://ritamgh.github.io/nemogate/replay.html), which follows one rule from the user's message to the action that broke it.
+- **Check it yourself, no key:** `uv run python -m replay.audit examples` (below), or rebuild the page's numbers from the [evidence release](https://github.com/ritamgh/nemogate/releases/tag/evidence-2026-10-27).
+- **Every number traced to its source:** [`docs/submission/EVIDENCE.md`](docs/submission/EVIDENCE.md).
+
 A user tells the planner agent "don't touch `migrations/`". The planner delegates to a coder subagent and paraphrases. The rule doesn't survive the handoff, and the coder edits a migration with no error anywhere. NemoGate records every handoff and every tool call, checks each rule with deterministic predicates, and compares four experimental arms on two numbers at once: how often the rule is broken, and whether the task still gets done.
 
 ## Results
