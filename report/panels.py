@@ -518,7 +518,7 @@ def render_patch_lines(diff: str) -> str:
     return '<pre class="patch" tabindex="0">' + "".join(out) + "</pre>"
 
 
-def render_repair(r: RepairView) -> str:
+def render_repair(r: RepairView, round_label: str = "") -> str:
     verdict = "Accepted" if r.accepted else "Rejected"
     fix = (
         f"<code>{e(r.fix_id)}</code> on the <code>{e(r.agent)}</code> agent"
@@ -565,7 +565,7 @@ def render_repair(r: RepairView) -> str:
         else f'<p class="note">Result: {e(r.result)}</p>'
     )
     return (
-        f'<article class="constraint repair"><header><h3>{fix}</h3>'
+        f'<article class="constraint repair"><header><h3>{e(round_label)}{fix}</h3>'
         f'<span class="badge {"yes" if r.accepted else "no"}">{verdict}</span></header>'
         f"{why}{result}{numbers}{diff}</article>"
     )
@@ -584,7 +584,15 @@ def render_patch_panel(repairs: list[RepairView] | None) -> str:
             f'{head}<div class="empty"><strong>The repair folder has no repair summary.</strong> '
             "Expected <code>repair-*.md</code> and <code>repair-*.patch</code>.</div></section>"
         )
-    return head + "".join(render_repair(r) for r in repairs) + "</section>"
+    several = len(repairs) > 1
+    return (
+        head
+        + "".join(
+            render_repair(r, f"Round {i}: " if several else "")
+            for i, r in enumerate(repairs, start=1)
+        )
+        + "</section>"
+    )
 
 
 # --- extraction recall ------------------------------------------------------------------------

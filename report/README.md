@@ -8,12 +8,22 @@ Two pages, both generated offline from run data. Neither calls a model.
 uv run python -m report.site --results results/results.json --out results/site/index.html \
     [--runs DIR...] [--repair DIR] [--recall FILE...] [--ledger nemogate.yaml] [--notes FILE] \
     [--appendix TITLE RESULTS_FILE [NOTES_FILE]]... [--appendix-open TITLE RESULTS_FILE [NOTES_FILE]]...
+    [--link LABEL URL]...
 ```
 
 Reads the `results.json` that `replay/stats.py` writes (`format_version` 2; any other version is
 refused with exit code 2) and writes one self-contained HTML file: inline CSS and SVG, no script,
 no font, CDN or other network request. The output depends only on the input, so two runs are
 byte-identical. Generated pages are not committed.
+
+Layout: the page opens on the results. Under the title come the `--link` row (http, https or
+relative URLs only, escaped) and a contents list of every section. The reading sections stay open:
+At a glance, Cost of prevention, How to read this, What happened rule by rule, the notes and What
+these numbers can and cannot tell you. The reference sections start closed, each with its heading
+as the summary and its id unchanged: Key, What each part fixes, Runs models and conditions,
+Coverage, Boundary graph, Constraints and The repair patch. So do the block-only against gated
+tables under each rule. Each appendix shows its heading, notes, At a glance and Cost of prevention,
+with the rest closed. Two repair rounds get numbered headings.
 
 What it shows:
 

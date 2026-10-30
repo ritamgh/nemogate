@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from report import cost, panels
 from schemas.ledger import Ledger, load_ledger_yaml
@@ -123,6 +124,44 @@ def e(value: Any) -> str:
 
 def slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-").lower()
+
+
+FOLD_HEADING = re.compile(r"<(h[2-4])\b[^>]*>.*?</\1>", re.S)
+
+
+def fold(section: str) -> str:
+    """Close a section: its first heading becomes the summary of a <details> holding the rest, so
+    the page opens on the results and reference material is one click away. Ids, headings and
+    text are unchanged; a link to the heading still lands on it."""
+    m = FOLD_HEADING.search(section)
+    if not m:
+        return section
+    end = section.rfind("</section>")
+    end = end if end > m.end() else len(section)
+    return (
+        f'{section[: m.start()]}<details class="fold"><summary>{m.group(0)}</summary>'
+        f"{section[m.end() : end]}</details>{section[end:]}"
+    )
+
+
+def render_toc(markup: str) -> str:
+    """Links to every h2 that has an id, in page order. Empty when there are fewer than three."""
+    items = [
+        (hid, re.sub(r"<[^>]+>", "", text).strip())
+        for hid, text in re.findall(r'<h2 id="([^"]+)">(.*?)</h2>', markup, flags=re.S)
+    ]
+    if len(items) < 3:
+        return ""
+    links = "".join(f'<li><a href="#{hid}">{text}</a></li>' for hid, text in items)
+    return f'<nav class="toc" aria-label="On this page"><ol>{links}</ol></nav>'
+
+
+def render_links(links: Sequence[tuple[str, str]]) -> str:
+    """The row of links under the title (--link), escaped."""
+    if not links:
+        return ""
+    items = " &middot; ".join(f'<a href="{e(url)}">{e(label)}</a>' for label, url in links)
+    return f'<p class="links">{items}</p>'
 
 
 def pct_num(x: float) -> str:
@@ -664,33 +703,34 @@ rule never came up are not among them: they stay in the rates, and each natural 
 them</span></li>
 </ul>{recall_caveat}
 </section>
-<section aria-labelledby="runs-h" class="meta">
+<section aria-labelledby="runs-h" class="meta"><details class="fold">
+<summary><h2 id="meta-h">Runs, models and conditions</h2></summary>
 <div>
-<h2 id="runs-h">Runs</h2>
+<h3 id="runs-h">Runs</h3>
 <dl class="kv"><div><dt>found</dt><dd>{e(runs.get("found", 0))}</dd></div>
 <div><dt>counted in the rates</dt><dd>{e(runs.get("pooled", 0))}</dd></div></dl>
 <h3>Left out, by reason</h3>
 <dl class="kv">{reason_items}</dl>{errored_items}
 </div>
 <div>
-<h2>Models</h2>
+<h3>Models</h3>
 <p class="note">{group_note}</p>
 <dl class="kv">{model_items}</dl>
 </div>
 <div>
-<h2>Same conditions</h2>
+<h3>Same conditions</h3>
 {commits_note(results)}<dl class="kv">{hashes}</dl>
 </div>
-</section>"""
+</details></section>"""
 
 
-def render_top(exact: bool = False, glance: str = "") -> str:
+def render_top(exact: bool = False, glance: str = "", links: str = "", toc: str = "") -> str:
     return f"""<header class="top">
 <h1>NemoGate results</h1>
 <p class="lead">Do rules survive the handoffs between agents? Each rule was given to a team of
 agents, with and without sabotaging the handoff and with and without the NemoGate gate, and every
 run was checked against it.</p>
-{glance}{render_howto(exact)}
+{links}{toc}{glance}{render_howto(exact)}
 </header>"""
 
 
@@ -2100,7 +2140,14 @@ def render_group(cid: str, body: dict[str, Any], anchors: Anchors, explain: bool
         f'<section class="ogroup" data-rule="{e(cid)}" aria-label="{e(cid)}">'
         f'<h3 class="rule">{e(body.get("text", ""))}</h3>'
         f'<p class="ometa">{" &middot; ".join(meta)}</p>'
-        f"{outcome_table(cid, body)}{blocks}{BLOCK_NOTE if blocks and explain else ''}</section>"
+        f"{outcome_table(cid, body)}"
+        + (
+            '<details class="fold sub"><summary>Block-only against gated: blocks, retries and '
+            f"attempts</summary>{blocks}{BLOCK_NOTE if explain else ''}</details>"
+            if blocks
+            else ""
+        )
+        + "</section>"
     )
 
 
@@ -2780,9 +2827,12 @@ def render_appendix(index: int, appendix: Appendix, main: dict[str, Any]) -> str
         + f"{paragraphs}"
         f"{render_glance(results, anchors, index, appendix.sealed)}"
         f"{render_cost(results, anchors, index, appendix.sealed)}"
+        '<details class="fold sub"><summary>Detail: runs, conditions and rule by rule</summary>'
         f"{appendix_accounting(results)}"
         f"{run_accounting(results, index)}{appendix_differences(main, results)}"
-        f"<h3>What happened, rule by rule</h3>{outcome_legend()}" + "".join(rules) + "</section>"
+        f"<h3>What happened, rule by rule</h3>{outcome_legend()}"
+        + "".join(rules)
+        + "</details></section>"
     )
 
 
@@ -2804,26 +2854,31 @@ def render(
     notes: str | None = None,
     appendices: Sequence[Appendix] = (),
     recalls: Sequence[panels.RecallView] = (),
+    links: Sequence[tuple[str, str]] = (),
 ) -> str:
     """The page. `trace` (from --runs), `repairs` (--repair) and `ledger` (--ledger) are optional
     evidence; without `trace` the constraint cards have no trace panel, without `repairs` the
     patch panel says there is no repair run yet. `recalls` (--recall) show the extraction recall
     measured offline, only when the results file carries none. `notes` (--notes) is free text
     shown after the results, escaped. `appendices` (--appendix) are separate result sets appended
-    after everything else; nothing in them reaches the rest of the page."""
+    after everything else; nothing in them reaches the rest of the page. `links` (--link) are
+    (label, url) pairs shown under the title. Reference sections start closed, and a contents
+    list links every section."""
     check_format(results)
     constraints = results["constraints"]
     anchors = Anchors(constraints)
     boundaries = collect_boundaries(constraints)
     graph = render_graph(boundaries, anchors)
     if constraints:
-        graph_section = (
+        graph_section = fold(
             '<section aria-labelledby="graph-h"><h2 id="graph-h">Boundary graph</h2>'
-            '<p class="note scrollhint">This graph is wider than the screen: scroll sideways.</p>'
+            '<p class="note scrollhint">This graph is wider than the screen: '
+            "scroll sideways.</p>"
             '<div class="graphwrap" tabindex="0" role="region" '
             'aria-label="Boundary graph, scrolls sideways on narrow screens">'
             f"{graph}</div>{render_legend(boundaries)}"
             f"{render_boundary_table(boundaries, anchors)}</section>"
+        ) + fold(
             '<section aria-labelledby="cards-h"><h2 id="cards-h">Constraints</h2>'
             + "".join(
                 render_constraint(cid, constraints[cid], anchors, trace)
@@ -2843,19 +2898,21 @@ def render(
     )
     found = trace.found_by_rule if trace else None
     exact = has_exact_lines(results) or any(has_exact_lines(a.results) for a in appendices)
-    body = (
-        f"{render_top(exact, render_glance(results, anchors) + render_cost(results, anchors))}"
+    glance = render_glance(results, anchors) + render_cost(results, anchors)
+    rest = (
         f"{outcomes}{render_notes(notes)}"
-        f"{render_key()}{render_fixes()}"
+        f"{fold(render_key())}{fold(render_fixes())}"
         f"{render_header(results, recalls)}"
-        f"{panels.render_coverage(results, ledger, found, list(recalls))}"
+        f"{fold(panels.render_coverage(results, ledger, found, list(recalls)))}"
         f"{graph_section}"
-        f"{panels.render_patch_panel(repairs)}{render_method(results)}"
+        f"{fold(panels.render_patch_panel(repairs))}{render_method(results)}"
     )
     if appendices:
-        body += "<!--appendices-->" + "".join(
+        rest += "<!--appendices-->" + "".join(
             render_appendix(i, a, results) for i, a in enumerate(appendices, start=1)
         )
+    toc = render_toc(glance + rest)
+    body = render_top(exact, glance, render_links(links), toc) + rest
     css = CSS + PRESENCE_CSS if 'class="presence"' in body else CSS
     if appendices:
         css += APPENDIX_CSS
@@ -2924,7 +2981,8 @@ def notes_problems(
         appendices=[Appendix(a.title, a.results, sealed=a.sealed) for a in appendices],
         **evidence,
     )
-    body = page[page.index("<body>") :]
+    # The contents list names every appendix, so it would let main notes borrow their numbers.
+    body = re.sub(r'<nav class="toc".*?</nav>', "", page[page.index("<body>") :], flags=re.S)
     parts = re.split(r'(?=<section class="appendix" id="appendix-)', body)
     problems = []
     for (path, text), part in zip(files, parts, strict=True):
@@ -3027,7 +3085,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="like --appendix, for a task that is not sealed: the rule's wording and the task "
         "ids are shown. The set is still apart from the main numbers",
     )
+    parser.add_argument(
+        "--link",
+        nargs=2,
+        action="append",
+        default=[],
+        metavar=("LABEL", "URL"),
+        help="LABEL URL, repeatable: a link shown under the title (http, https or relative)",
+    )
     args = parser.parse_args(argv)
+    for _, url in args.link:
+        if urlsplit(url).scheme not in ("", "http", "https"):
+            parser.error(f"--link takes an http, https or relative URL, not {url!r}")
     for _, values in args.appendix:
         if not 2 <= len(values) <= 3:
             parser.error("--appendix and --appendix-open take TITLE RESULTS_FILE [NOTES_FILE]")
@@ -3061,7 +3130,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             for problem in problems:
                 print(f"report.site: {problem}", file=sys.stderr)
             return 2
-        page = render(results, notes=notes, appendices=appendices, **evidence)
+        page = render(
+            results,
+            notes=notes,
+            appendices=appendices,
+            links=[tuple(pair) for pair in args.link],
+            **evidence,
+        )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(page, encoding="utf-8")
     except (OSError, ValueError) as exc:

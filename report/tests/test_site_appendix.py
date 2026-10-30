@@ -7,7 +7,7 @@ import re
 import pytest
 
 from report import site
-from report.tests.test_site import FIXTURES, load, text_of
+from report.tests.test_site import FIXTURES, load, text_of, without_toc
 
 MARKER = "ZZ-UNIQUE-RULE-WORDING-7f3a"
 WITHHELD = "Rule text withheld (held-out task)"
@@ -49,9 +49,10 @@ def build(tmp_path, appendices=(), results: str = "results_rich.json", name: str
 
 
 def main_part(page: str) -> str:
-    """Everything the main page is made of: from <body> up to the appendices (or the end)."""
+    """Everything the main page is made of: from <body> up to the appendices (or the end). The
+    contents list is left out: it links the appendices by design."""
     end = page.index("<!--appendices-->") if "<!--appendices-->" in page else page.index("</main>")
-    return page[page.index("<body>") : end]
+    return without_toc(page[page.index("<body>") : end])
 
 
 def appendix_part(page: str) -> str:
@@ -93,7 +94,7 @@ def test_the_main_part_of_the_page_is_unchanged_by_an_appendix(tmp_path):
         name="with.html",
     )
 
-    assert main_part(with_app) == without[without.index("<body>") : without.index("</main>")]
+    assert main_part(with_app) == main_part(without)
     assert "9999" not in main_part(with_app)
     assert "9999" in appendix_part(with_app)
 

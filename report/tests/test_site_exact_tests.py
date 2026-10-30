@@ -9,7 +9,7 @@ import re
 import pytest
 
 from report import site
-from report.tests.test_site import load, text_of
+from report.tests.test_site import load, text_of, without_toc
 from report.tests.test_site_outcome_first import blocks_page, group
 
 BID = "delegation:planner->coder"
@@ -331,7 +331,7 @@ def test_the_exact_table_is_the_only_new_text_in_the_main_part():
     stripped = re.sub(r'<section class="ogroup glance".*?</section>', "", stripped, flags=re.S)
     stripped = re.sub(r'<li class="exact-howto">.*?</li>', "", stripped, flags=re.S)
 
-    assert stripped == plain
+    assert without_toc(stripped) == without_toc(plain)
 
 
 def test_the_how_to_read_box_explains_pairs_sources_and_many_comparisons():
