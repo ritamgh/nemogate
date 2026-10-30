@@ -97,11 +97,13 @@ FIXES = (
         "Reading a 0 in the blocking arms",
         "For a path, tool or approval rule, a 0 broken in the block-only and gated arms comes "
         "from blocking: the gate refuses the action with the same check that grades the run, so "
-        "both arms get it by construction. Other rules are not refused before the call (frozen "
-        "files and output rules are graded after the run), so a 0 there is a measured result, "
-        "not a construction. Whether carrying the rule adds anything over blocking, such as "
-        "finishing the task where blocking leaves the agent stuck, is the hypothesis being "
-        "measured, not a result.",
+        "both arms get it by construction. Frozen-file rules are not refused before the call, so "
+        "a 0 there is a measured result. Output rules are not refused before the call either, so "
+        "a block-only 0 on one is a measured result, but gated also holds back a reply that "
+        "misses the rule (at most 2 per run, with the same pattern the check grades; a held-back "
+        "reply is not graded), so a gated 0 on an output rule is partly by construction too. "
+        "Whether carrying the rule adds anything over blocking, such as finishing the task where "
+        "blocking leaves the agent stuck, is the hypothesis being measured, not a result.",
     ),
     (
         "Repair",
