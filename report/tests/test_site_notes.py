@@ -304,3 +304,14 @@ def test_notes_without_a_number_build_the_same_bytes_as_before(tmp_path, capsys)
     assert build(tmp_path, words) == page
     assert build(tmp_path, "") == (FIXTURES / "golden_results_rich.html").read_bytes()
     assert build(tmp_path, None) == (FIXTURES / "golden_results_rich.html").read_bytes()
+
+
+def test_a_main_note_cannot_borrow_a_number_from_an_appendix_title_in_the_contents(tmp_path):
+    # Breaks if the contents list, which names every appendix near the top of the page, lets the
+    # main notes repeat a number that only an appendix title holds.
+    appendix = site.Appendix(f"Set {NOWHERE}", appendix_data(), None, True)
+    files = [(tmp_path / "main-notes.txt", f"Borrowed {NOWHERE}.\n"), (None, None)]
+
+    problems = site.notes_problems(load("results_rich.json"), [appendix], files)
+
+    assert len(problems) == 1 and NOWHERE in problems[0]

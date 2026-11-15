@@ -5,7 +5,7 @@ import re
 
 from report import site
 from report.tests.test_cost import cell
-from report.tests.test_site import FIXTURES, one_constraint, text_of
+from report.tests.test_site import FIXTURES, one_constraint, text_of, without_toc
 from report.tests.test_site_appendix import appendix_part, main_part, write_json
 from report.tests.test_site_exact_tests import BID, fisher
 
@@ -238,4 +238,5 @@ def test_the_hook_adds_the_section_and_changes_nothing_else(monkeypatch):
     html = site.render(page())
     monkeypatch.setattr(site, "render_cost", lambda *args, **kwargs: "")
 
-    assert html.replace(section(html), "") == site.render(page())
+    # The contents list gains the section's link, so it is left out of both sides.
+    assert without_toc(html.replace(section(html), "")) == without_toc(site.render(page()))

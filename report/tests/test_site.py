@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from report import site
+from report import panels, site
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FORMAT_V1_DELEGATION = "delegation:planner->coder"
@@ -34,9 +34,15 @@ def ungraded() -> dict:
     return load("results_rich.json")
 
 
+def without_toc(page: str) -> str:
+    """The page without its contents list, which only repeats the section headings as links."""
+    return re.sub(r'<nav class="toc".*?</nav>', "", page, flags=re.S)
+
+
 def text_of(page: str) -> str:
-    """The visible text: tags dropped, whitespace collapsed, entities decoded."""
-    body = re.sub(r"<style>.*?</style>", "", page, flags=re.S)
+    """The visible text: tags dropped, whitespace collapsed, entities decoded. The contents list
+    is left out, so splitting the text at a heading lands on the section, not on its link."""
+    body = re.sub(r"<style>.*?</style>", "", without_toc(page), flags=re.S)
     body = re.sub(r"<[^>]+>", " ", body)
     return html.unescape(re.sub(r"\s+", " ", body))
 
@@ -1309,3 +1315,64 @@ def test_the_header_says_so_when_rules_were_pooled_under_different_conditions(ri
 def test_a_results_file_without_per_rule_groups_shows_no_pooled_at_line(rich):
     # Breaks if old results files (no `reproducibility` on a rule) get a line saying "none".
     assert "Pooled at" not in text_of(site.render(rich))
+
+
+# --- a page that opens on the results: contents, links, closed reference sections ---------------
+
+
+def test_reference_sections_start_closed_with_their_heading_and_id_kept(rich):
+    # Breaks if a reference section is open on load (the page opens on a wall of tables) or if
+    # closing it loses the heading id that other pages and the contents list link to.
+    page = site.render(rich)
+
+    for hid in ("key-h", "fixes-h", "meta-h", "coverage-h", "graph-h", "cards-h", "patch-h"):
+        assert re.search(rf'<details class="fold">\s*<summary><h2 id="{hid}">', page), hid
+    assert '<details class="fold" open' not in page
+    for hid in ("glance-h", "outcomes-h", "honesty-h"):
+        assert not re.search(rf'<summary><h2 id="{hid}"', page), hid
+
+
+def test_the_contents_list_links_every_section_in_page_order(rich):
+    # Breaks if a section is missing from the contents or a link points at no heading.
+    page = site.render(rich)
+    toc = re.search(r'<nav class="toc".*?</nav>', page, flags=re.S).group(0)
+    rest = page.replace(toc, "")
+    linked = re.findall(r'href="#([^"]+)"', toc)
+
+    # "How to read this" sits right under the contents, in the header, so it is not linked.
+    assert linked == [h for h in re.findall(r'<h2 id="([^"]+)">', rest) if h != "howto-h"]
+    assert page.index(toc) < page.index('id="outcomes-h"')
+
+
+def test_fold_closes_a_section_and_leaves_one_without_a_heading_alone():
+    # Breaks if fold drops text, moves the closing tag outside the section, or invents a summary.
+    section = '<section><h2 id="x-h">Title</h2><p>body</p></section>'
+
+    assert site.fold(section) == (
+        '<section><details class="fold"><summary><h2 id="x-h">Title</h2></summary>'
+        "<p>body</p></details></section>"
+    )
+    assert site.fold("<p>no heading</p>") == "<p>no heading</p>"
+
+
+def test_links_are_escaped_and_only_web_or_relative_urls_are_taken(tmp_path, capsys):
+    # Breaks if a label is printed unescaped or a javascript: URL reaches the page.
+    out = tmp_path / "index.html"
+    results = str(FIXTURES / "results_rich.json")
+
+    argv = ["--results", results, "--out", str(out)]
+
+    assert site.main([*argv, "--link", "A<b>", "replay.html"]) == 0
+    assert '<p class="links"><a href="replay.html">A&lt;b&gt;</a></p>' in out.read_text("utf-8")
+    with pytest.raises(SystemExit):
+        site.main([*argv, "--link", "x", "javascript:alert(1)"])
+
+
+def test_two_repair_rounds_get_numbered_headings():
+    # Breaks if two rounds of the same fix print the same heading twice.
+    view = panels.RepairView("r", True, "fix", "planner", None, "- Result: ok", None)
+
+    page = panels.render_patch_panel([view, view])
+
+    assert "<h3>Round 1: <code>fix</code>" in page and "<h3>Round 2: <code>fix</code>" in page
+    assert "Round" not in panels.render_patch_panel([view])

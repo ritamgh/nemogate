@@ -168,6 +168,15 @@ footer{margin-top:64px;padding-top:16px;border-top:1px solid var(--rule)}
 .warn{max-width:none}
 }
 .graphwrap:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.links{margin:.9rem 0 0;font-size:1rem;font-weight:600}
+nav.toc{margin:1.2rem 0 0;font-size:.92rem}
+nav.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:4px 18px}
+details.fold{margin-top:44px}
+details.fold>summary{cursor:pointer;list-style-position:outside}
+details.fold>summary>h2,details.fold>summary>h3{display:inline}
+details.fold>summary::marker{color:var(--muted)}
+details.fold.sub{margin-top:18px}
+details.fold.sub>summary{font-weight:600;font-size:.95rem}
 </style></head><body><main><header class="top">
 <h1>NemoGate results</h1>
 <p class="lead">Do rules survive the handoffs between agents? Each rule was given to a team of
@@ -188,21 +197,22 @@ rule never came up are not among them: they stay in the rates, and each natural 
 them</span></li>
 </ul>
 </section>
-<section aria-labelledby="runs-h" class="meta">
+<section aria-labelledby="runs-h" class="meta"><details class="fold">
+<summary><h2 id="meta-h">Runs, models and conditions</h2></summary>
 <div>
-<h2 id="runs-h">Runs</h2>
+<h3 id="runs-h">Runs</h3>
 <dl class="kv"><div><dt>found</dt><dd>16</dd></div>
 <div><dt>counted in the rates</dt><dd>0</dd></div></dl>
 <h3>Left out, by reason</h3>
 <dl class="kv"><div><dt>not comparable</dt><dd>9</dd></div><div><dt>rule never came up</dt><dd>7</dd></div><div><dt>unreadable record</dt><dd>0</dd></div></dl>
 </div>
 <div>
-<h2>Models</h2>
+<h3>Models</h3>
 <p class="note">No runs were counted, so there is no shared set of conditions.</p>
 <dl class="kv"><div><dt>models</dt><dd>none recorded</dd></div></dl>
 </div>
 <div>
-<h2>Same conditions</h2>
+<h3>Same conditions</h3>
 <dl class="kv"><div><dt>safe config</dt><dd>none recorded</dd></div><div><dt>ledger</dt><dd>none recorded</dd></div><div><dt>repo commit</dt><dd>none recorded</dd></div><div><dt>lockfile</dt><dd>none recorded</dd></div></dl>
 </div>
-</section><section aria-labelledby="coverage-h"><h2 id="coverage-h">Coverage</h2><p class="note">How much of the ledger these numbers speak for. A constraint without a compiled check cannot be graded; one that never came up in a run has no rate.</p><div class="tablewrap" tabindex="0" role="region" aria-label="Coverage of the ledger"><table class="plain"><tbody><tr><th scope="row">Declared in the ledger</th><td class="num">5</td></tr><tr><th scope="row">With a compiled check</th><td class="num">4 of 5</td></tr><tr><th scope="row">Exercised: at least one counted run</th><td class="num">0 of 5</td></tr><tr><th scope="row">Exercised and checked: the only ones with a verdict</th><td class="num">0 of 5</td></tr><tr><th scope="row">Extraction recall</th><td class="num">not measured</td></tr></tbody></table></div><h3>Without a compiled check (cannot be graded)</h3><p class="note">None.</p><p class="note">5 declared constraints were never exercised, and constraints that never ran are missing from the list above. Pass <code>--ledger</code> to list them.</p></section><div class="empty"><strong>No runs were counted.</strong> There is nothing to chart yet: no boundary, no constraint and no rate. Nothing here is a zero.</div><section aria-labelledby="patch-h"><h2 id="patch-h">The repair patch</h2><div class="empty"><strong>No repair run yet.</strong> Pass <code>--repair DIR</code>, the folder <code>python -m repair</code> wrote, to show the proposed patch and the verdict.</div></section><footer><p class="note">Ranges show how uncertain each number is: the fewer runs behind it, the wider the range. Whether a rule was obeyed comes from deterministic checks, never from a model.</p><details class="method"><summary>Method</summary><dl class="kv stack"><div><dt>Intervals</dt><dd>Every rate comes with a 95% Wilson score interval.</dd></div><div><dt>Differences</dt><dd>A difference between two rates uses the Newcombe hybrid-score interval. When it includes 0 the page says the difference is not distinguishable from 0.</dd></div><div><dt>Pooled</dt><dd>Runs are pooled into a cell (arm, operator, rule, handoff) only within one reproducibility group: runs that share model ids, safe-config hash, ledger hash, repo commit and lockfile hash. Other runs are counted as not comparable.</dd></div><div><dt>Clustered</dt><dd>Forked runs share a source run. They are counted, not deduplicated, so a cell that contains forks is marked clustered and its intervals are too narrow.</dd></div><div><dt>Ungraded rules</dt><dd>A rule with no compiled check is never rated; its runs are only counted.</dd></div></dl><p class="note">Format version 2.</p></details></footer></main></body></html>
+</details></section><section aria-labelledby="coverage-h"><details class="fold"><summary><h2 id="coverage-h">Coverage</h2></summary><p class="note">How much of the ledger these numbers speak for. A constraint without a compiled check cannot be graded; one that never came up in a run has no rate.</p><div class="tablewrap" tabindex="0" role="region" aria-label="Coverage of the ledger"><table class="plain"><tbody><tr><th scope="row">Declared in the ledger</th><td class="num">5</td></tr><tr><th scope="row">With a compiled check</th><td class="num">4 of 5</td></tr><tr><th scope="row">Exercised: at least one counted run</th><td class="num">0 of 5</td></tr><tr><th scope="row">Exercised and checked: the only ones with a verdict</th><td class="num">0 of 5</td></tr><tr><th scope="row">Extraction recall</th><td class="num">not measured</td></tr></tbody></table></div><h3>Without a compiled check (cannot be graded)</h3><p class="note">None.</p><p class="note">5 declared constraints were never exercised, and constraints that never ran are missing from the list above. Pass <code>--ledger</code> to list them.</p></details></section><div class="empty"><strong>No runs were counted.</strong> There is nothing to chart yet: no boundary, no constraint and no rate. Nothing here is a zero.</div><section aria-labelledby="patch-h"><details class="fold"><summary><h2 id="patch-h">The repair patch</h2></summary><div class="empty"><strong>No repair run yet.</strong> Pass <code>--repair DIR</code>, the folder <code>python -m repair</code> wrote, to show the proposed patch and the verdict.</div></details></section><footer><p class="note">Ranges show how uncertain each number is: the fewer runs behind it, the wider the range. Whether a rule was obeyed comes from deterministic checks, never from a model.</p><details class="method"><summary>Method</summary><dl class="kv stack"><div><dt>Intervals</dt><dd>Every rate comes with a 95% Wilson score interval.</dd></div><div><dt>Differences</dt><dd>A difference between two rates uses the Newcombe hybrid-score interval. When it includes 0 the page says the difference is not distinguishable from 0.</dd></div><div><dt>Pooled</dt><dd>Runs are pooled into a cell (arm, operator, rule, handoff) only within one reproducibility group: runs that share model ids, safe-config hash, ledger hash, repo commit and lockfile hash. Other runs are counted as not comparable.</dd></div><div><dt>Clustered</dt><dd>Forked runs share a source run. They are counted, not deduplicated, so a cell that contains forks is marked clustered and its intervals are too narrow.</dd></div><div><dt>Ungraded rules</dt><dd>A rule with no compiled check is never rated; its runs are only counted.</dd></div></dl><p class="note">Format version 2.</p></details></footer></main></body></html>

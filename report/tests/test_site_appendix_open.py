@@ -153,7 +153,7 @@ def test_the_main_part_is_unchanged_by_an_open_appendix(tmp_path):
         tmp_path, [("Research set", with_errors(appendix_data("OPEN-WORDING")), None, True)]
     )
 
-    assert main_part(with_open) == without[without.index("<body>") : without.index("</main>")]
+    assert main_part(with_open) == main_part(without)
     assert "OPEN-WORDING" not in main_part(with_open)
 
 
