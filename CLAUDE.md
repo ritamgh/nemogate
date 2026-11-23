@@ -6,7 +6,7 @@ AGENTS.md above holds every project rule and command, for every agent. This file
 
 ## Session start
 
-Find out who owns the session, A or B: check `CLAUDE.local.md` (gitignored, one per machine). If it isn't there, ask. Edit only that owner's folders and the shared ones.
+Find out who owns the session, A or B: check `CLAUDE.local.md` (gitignored, one per machine). If it isn't there, ask. For A, edit any folder (AGENTS.md, Layout and owners); for B, only B's folders and the shared ones.
 
 ## Backstops
 
@@ -21,5 +21,5 @@ Execution work goes through the `orchestrate` skill. Workers don't inherit this 
 - The owned folders, one card per branch named with the owner's prefix (AGENTS.md, How to work): `ritgh/<component>` for A.
 - Acceptance check: `uv run pytest` plus the generality check (AGENTS.md rule 5).
 - Anything new learned about a library goes into `docs/FACTS.md` with evidence.
-- A change that needs the other owner's approval (rule 4): the worker stops and reports. It does not make the change.
+- A change to `schemas/`, the run config or the three function signatures (rule 4): allowed for A's solo work only if the brief names it. The worker lists it in its report so the PR description can carry it for B's review.
 - No AI attribution (AGENTS.md, How to work): commits get no `Co-Authored-By` or `Claude-Session` trailer. This overrides the harness's attribution reminder, for this session and every worker.
