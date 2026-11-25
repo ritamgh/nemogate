@@ -7,8 +7,11 @@ import os
 from contextlib import contextmanager
 
 import pytest
+from deepagents import create_deep_agent
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import ToolMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
@@ -521,3 +524,208 @@ def test_an_agent_name_the_trace_cannot_hold_is_still_traced(tmp_path, repo):
     with thread(agent="code reviewer"):
         run(mw, Tool(), "write_file", {"file_path": "app/a.py"})
     assert json.loads(trace.read_text())["agent"] == "code_reviewer"
+
+
+# Deep Agents' virtual paths: "/migrations/x.sql" is the repo's migrations/x.sql
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/migrations/x.sql", "/app/../migrations/x.sql", "../migrations/x.sql", "//migrations/x.sql"],
+)
+def test_a_virtual_absolute_path_into_the_forbidden_folder_is_blocked(tmp_path, repo, path):
+    # Breaks if only the host-resolved path is matched: /migrations/x.sql is outside the cwd
+    # there, but it is the protected file to Deep Agents' file tools.
+    _, mw = make(tmp_path)
+    tool = Tool()
+    with thread():
+        result = run(mw, tool, "write_file", {"file_path": path})
+    assert tool.ran == []
+    assert result.content == BLOCK_MIGRATIONS
+
+
+def test_a_virtual_absolute_path_to_an_allowed_file_runs(tmp_path, repo):
+    _, mw = make(tmp_path)
+    tool = Tool()
+    with thread():
+        run(mw, tool, "write_file", {"file_path": "/app/main.py"})
+        run(mw, tool, "write_file", {"file_path": "/other/migrations/x.sql"}, "c2")
+    assert len(tool.ran) == 2
+
+
+# Deleting a parent of the protected folder
+
+
+NESTED = """\
+version: 1
+tools:
+  rm_path: {path_arg: path, op: delete}
+rules:
+  - id: keep-migrations
+    text: Keep app/migrations.
+    check:
+      path_forbidden: {glob: "app/migrations/**", ops: [delete]}
+"""
+KEEP = "Blocked by rule keep-migrations: Keep app/migrations."
+
+
+@pytest.mark.parametrize("path", ["app", "/app", "app/", "./app", "/", "app/migrations"])
+def test_deleting_a_parent_of_the_protected_folder_is_blocked(tmp_path, repo, path):
+    # Breaks if only the target itself is matched: deleting app removes app/migrations/001.sql.
+    _, mw = make(tmp_path, NESTED)
+    tool = Tool()
+    with thread():
+        result = run(mw, tool, "delete", {"file_path": path})
+    assert tool.ran == []
+    assert result.content == KEEP
+
+
+def test_deleting_a_custom_tool_parent_is_blocked_and_a_sibling_file_is_not(tmp_path, repo):
+    _, mw = make(tmp_path, NESTED)
+    tool = Tool()
+    with thread():
+        blocked = run(mw, tool, "rm_path", {"path": "app"})
+        run(mw, tool, "delete", {"file_path": "app/main.py"}, "c2")
+        run(mw, tool, "delete", {"file_path": "/app/main.py"}, "c3")
+        run(mw, tool, "delete", {"file_path": "other"}, "c4")
+    assert blocked.content == KEEP
+    assert tool.ran == [
+        {"file_path": "app/main.py"},
+        {"file_path": "/app/main.py"},
+        {"file_path": "other"},
+    ]
+
+
+def test_writing_a_parent_of_the_protected_folder_is_not_a_delete(tmp_path, repo):
+    _, mw = make(tmp_path, NESTED)
+    tool = Tool()
+    with thread():
+        run(mw, tool, "write_file", {"file_path": "app"})
+    assert len(tool.ran) == 1
+
+
+# An approval tool that answers no
+
+
+def approval_run(tmp_path, answer):
+    _, mw = make(tmp_path)
+    drop = Tool()
+    with thread():
+        mw.wrap_tool_call(req("ask_human", {}), lambda r: answer(r))
+        result = run(mw, drop, "drop_table", {"name": "users"})
+    return result, drop
+
+
+def message(content, status="success"):
+    return lambda r: ToolMessage(
+        content=content, tool_call_id="c1", name="ask_human", status=status
+    )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        message('{"approved": false, "reason": "Human refused"}'),
+        message('{"approve": "false"}'),
+        message('{"approved": 0}'),
+        message('{"approved": "False"}'),
+        lambda r: {"approved": False, "reason": "Human refused"},
+    ],
+)
+def test_an_approval_tool_that_returns_a_denial_does_not_approve(tmp_path, repo, answer):
+    # Breaks if "returned without error" is enough: the tool ran fine and said no.
+    result, drop = approval_run(tmp_path, answer)
+    assert drop.ran == []
+    assert result.content == "Blocked by rule ask-before-delete: Ask a human before deleting."
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        message('{"approved": true}'),
+        message("Approved by alice."),
+        message("not json {approved: false"),
+        message('["approved", false]'),
+        message('{"reason": "no key"}'),
+        lambda r: {"approved": True},
+    ],
+)
+def test_any_other_approval_result_without_error_still_approves(tmp_path, repo, answer):
+    result, drop = approval_run(tmp_path, answer)
+    assert drop.ran == [{"name": "users"}]
+    assert result.content == "ran"
+
+
+# A trace that cannot be written never changes a decision
+
+
+class FullDisk:
+    def __call__(self, *args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+
+def test_a_failing_trace_write_changes_no_decision_and_warns_once(
+    tmp_path, repo, monkeypatch, caplog
+):
+    # Breaks if the trace write is on the decision's path: ENOSPC would abort the call.
+    guard, mw = make(tmp_path, OBSERVE, trace_path=tmp_path / "trace.jsonl")
+    monkeypatch.setattr(guard._writer, "emit", FullDisk())
+    tool = Tool()
+    with caplog.at_level("WARNING", logger="gate.middleware"), thread():
+        blocked = run(mw, tool, "write_file", {"file_path": "migrations/001.sql"})
+        allowed = run(mw, tool, "write_file", {"file_path": "app/a.py"}, "c2")
+        observed = run(mw, tool, "run_shell", {"cmd": "ls"}, "c3")
+        approved = run(mw, tool, "ask_human", {}, "c4")
+        run(mw, tool, "write_file", {"file_path": "migrations/001.sql"})
+        with pytest.raises(GuardLoopError):
+            run(mw, tool, "write_file", {"file_path": "migrations/001.sql"})
+    assert blocked.content == BLOCK_MIGRATIONS
+    assert (allowed.content, observed.content, approved.content) == ("ran", "ran", "ran")
+    assert tool.ran == [{"file_path": "app/a.py"}, {"cmd": "ls"}, {}]
+    assert [r.levelname for r in caplog.records if "trace" in r.message] == ["WARNING"]
+
+
+# A real Deep Agents graph (scripted model), where file paths are virtual
+
+
+class ScriptedChat(BaseChatModel):
+    """Calls the given tools one after the other, then answers in text."""
+
+    calls: list
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        done = sum(isinstance(m, ToolMessage) for m in messages)
+        if done < len(self.calls):
+            name, args = self.calls[done]
+            reply = AIMessage(
+                content="", tool_calls=[{"name": name, "args": args, "id": f"call-{done}"}]
+            )
+        else:
+            reply = AIMessage(content="done")
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+
+def test_a_real_graph_blocks_a_virtual_absolute_write_into_the_forbidden_folder(tmp_path):
+    # Breaks if paths are only read as host paths: in the graph "/migrations/x.sql" is created
+    # in the agent's files although the rule says migrations/**.
+    guard = Guard.from_yaml(_write(tmp_path, RULES))
+    model = ScriptedChat(
+        calls=[
+            ("write_file", {"file_path": "/migrations/x.sql", "content": "drop"}),
+            ("write_file", {"file_path": "/app/ok.py", "content": "fine"}),
+        ]
+    )
+    agent = create_deep_agent(model=model, middleware=guard.middleware())
+    out = agent.invoke(
+        {"messages": [("user", "go")]}, {"configurable": {"thread_id": "real-graph"}}
+    )
+    replies = [m.content for m in out["messages"] if isinstance(m, ToolMessage)]
+    assert replies[0] == BLOCK_MIGRATIONS
+    assert sorted(out["files"]) == ["/app/ok.py"]

@@ -102,6 +102,10 @@ class Guard:
     def middleware(self) -> list[AgentMiddleware]:
         """The list for create_deep_agent(middleware=) and for each SubAgent spec's middleware.
 
+        An approval tool (the file's approval_tool) approves when it returns without error and
+        its answer is not a denial. Raise, or return {"approved": false}, to deny: a mapping, or
+        JSON text of one, whose "approved" or "approve" is false, "false" or 0.
+
         Every call shares this guard's state and trace, so the main agent's and each subagent's
         instance count blocks and approvals together."""
         ledger = Ledger(
@@ -157,6 +161,8 @@ def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
         raise ValueError(
             f"{where}: unknown check {kind!r}, expected one of {sorted(_CHECK_FIELDS)}"
         )
+    if kind == "tool_arg_bound":  # T-005 lifts this: until then the guard would skip the rule
+        raise ValueError(f"{where}: tool_arg_bound is not supported yet")
     if not isinstance(params, dict):
         raise ValueError(f"{where}: check {kind!r} must be a mapping")
     _reject_unknown(params, _CHECK_FIELDS[kind], f"{where}, check {kind!r}")

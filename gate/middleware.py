@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import os
+import posixpath
 import re
 import threading
 from collections.abc import Callable, Sequence
@@ -406,6 +407,52 @@ def resolve_path(path: str, root: str | None) -> str:
     return repo_relative(resolved, real_root)
 
 
+def virtual_path(path: str) -> str:
+    """`path` as Deep Agents' file tools read it: "/" is the repo root, so a leading "/" only
+    means "from the root". `..` cannot climb above the root, so an escape lands on its tail."""
+    return posixpath.normpath("/" + path.replace("\\", "/")).lstrip("/") or "."
+
+
+def _deletes_protected_parent(check: PathForbidden, calls: list[ToolCall]) -> bool:
+    """True if a delete in `calls` removes a folder that holds what `check` protects: its target
+    is the static part of the glob (its leading segments with no wildcard) or a parent of it."""
+    if "delete" not in check.ops:
+        return False
+    static = []
+    for segment in check.glob.split("/"):
+        if any(c in segment for c in "*?[]"):
+            break
+        static.append(segment)
+    for call in calls:
+        path = call.args.get(PATH_ARG)
+        if FILE_OPS.get(call.tool) != "delete" or not isinstance(path, str):
+            continue
+        if path.startswith("/") or path == ".." or path.startswith("../"):
+            continue  # outside the repo; the virtual reading of the same call is checked too
+        parts = [] if path == "." else path.split("/")
+        if static[: len(parts)] == parts:
+            return True
+    return False
+
+
+def _denied(answer: Any) -> bool:
+    """True if an approval tool's answer says no: a mapping (or a JSON object in a string) whose
+    "approved" or "approve" key is false, "false" or 0."""
+    if isinstance(answer, list):
+        answer = _text(answer)
+    if isinstance(answer, str):
+        try:
+            answer = json.loads(answer)
+        except ValueError:
+            return False
+    if not isinstance(answer, dict):
+        return False
+    return any(
+        key in answer and str(answer[key]).strip().lower() in ("false", "0")
+        for key in ("approved", "approve")
+    )
+
+
 def _run_config() -> dict | None:
     try:
         return get_config()
@@ -445,15 +492,19 @@ class GuardMiddleware(AgentMiddleware):
         self._state = state
         self._tool_map = tool_map
         self._writer = writer
+        self._trace_warned = False
         self._approval_rules = [r for r in rules if isinstance(r.constraint.check, ApprovalBefore)]
         self._pinned = [r.constraint for r in rules if r.mode == "block"]
         self._single = {
             r.id: ledger.model_copy(update={"constraints": (r.constraint,)}) for r in rules
         }
 
-    def _path_call(self, raw: ToolCall, agent: str) -> ToolCall:
+    def _path_calls(self, raw: ToolCall, agent: str) -> list[ToolCall]:
         """The call as a path_forbidden rule reads it: a file tool (a built-in, or one the rules
-        file maps) with its path argument resolved, named as the built-in tool of its operation."""
+        file maps), named as the built-in tool of its operation, once per way its path can be
+        read: resolved on the filesystem, and as a Deep Agents virtual path (the leading "/" is
+        the repo root, so "/docs/x" is docs/x). A rule is broken if either breaks it.
+        """
         mapped = self._tool_map.get(raw.tool)
         if mapped is not None:
             tool = next(t for t, op in FILE_OPS.items() if op == mapped["op"])
@@ -461,17 +512,20 @@ class GuardMiddleware(AgentMiddleware):
         elif raw.tool in FILE_OPS:
             tool, arg = raw.tool, PATH_ARG
         else:
-            return raw
+            return [raw]
         value = raw.args.get(arg)
-        args = (
-            {PATH_ARG: resolve_path(value, self._ledger.app.repo_root)}
-            if isinstance(value, str)
-            else {}
-        )
-        return self._writer.preview(ToolCall, step=1, agent=agent, tool=tool, args=args)
+        if not isinstance(value, str):
+            paths = [{}]
+        else:
+            real = resolve_path(value, self._ledger.app.repo_root)
+            paths = [{PATH_ARG: p} for p in dict.fromkeys([real, virtual_path(value)])]
+        return [
+            self._writer.preview(ToolCall, step=1, agent=agent, tool=tool, args=args)
+            for args in paths
+        ]
 
     def _violated(self, raw: ToolCall, agent: str, thread: str) -> list["Rule"]:
-        path_call = self._path_call(raw, agent)
+        path_calls = self._path_calls(raw, agent)
         hit = []
         for rule in self._rules:
             check = rule.constraint.check
@@ -484,10 +538,22 @@ class GuardMiddleware(AgentMiddleware):
                         Approval, step=0, agent=agent, action=check.tool, approved=True
                     )
                 ]
-            call = path_call if isinstance(check, PathForbidden) else raw
-            if blocking_constraint(self._single[rule.id], prior, call) is not None:
+            calls = path_calls if isinstance(check, PathForbidden) else [raw]
+            single = self._single[rule.id]
+            if any(blocking_constraint(single, prior, call) is not None for call in calls) or (
+                isinstance(check, PathForbidden) and _deletes_protected_parent(check, calls)
+            ):
                 hit.append(rule)
         return hit
+
+    def _emit(self, model: type, **fields: Any) -> None:
+        """Write a trace line; a trace that cannot be written never changes a decision."""
+        try:
+            self._writer.emit(model, **fields)
+        except (OSError, ValueError) as exc:  # ENOSPC, a closed file; a line the schema refuses
+            if not self._trace_warned:
+                self._trace_warned = True
+                log.warning("the guard cannot write its trace, decisions go on without it: %s", exc)
 
     def _before(self, request: Any) -> tuple[Any, ToolMessage | None, str, str]:
         """(the request to run, the reply if the call is blocked, thread, agent)."""
@@ -506,11 +572,11 @@ class GuardMiddleware(AgentMiddleware):
         if blocking:
             return request, self._block(call, agent, thread, blocking), thread, agent
         if not hits:
-            self._writer.emit(ToolCall, agent=agent, tool=call["name"], args=args, blocked=False)
+            self._emit(ToolCall, agent=agent, tool=call["name"], args=args, blocked=False)
         return self._repinned(request), None, thread, agent
 
     def _emit_block(self, agent: str, tool: str, rule: "Rule", reason: str) -> None:
-        self._writer.emit(GateBlock, agent=agent, tool=tool, constraint_id=rule.id, reason=reason)
+        self._emit(GateBlock, agent=agent, tool=tool, constraint_id=rule.id, reason=reason)
 
     def _block(self, call: dict, agent: str, thread: str, rules: list["Rule"]) -> ToolMessage:
         counts = [
@@ -539,13 +605,15 @@ class GuardMiddleware(AgentMiddleware):
     def _after(self, call: dict, agent: str, thread: str, result: Any) -> Any:
         if call["name"] == self._ledger.app.approval_tool:
             message = _message(result)
-            approved = message is None or message.status != "error"
+            approved = (message is None or message.status != "error") and not _denied(
+                message.content if message is not None else result
+            )
             if approved:
                 for rule in self._approval_rules:
                     self._state.record_approval(thread, rule.id)
             args = call["args"]
             reason = args.get("reason")
-            self._writer.emit(
+            self._emit(
                 Approval,
                 agent=agent,
                 action=str(args.get("action", json.dumps(args, default=str))),

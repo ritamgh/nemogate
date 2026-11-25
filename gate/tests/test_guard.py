@@ -8,7 +8,7 @@ import pytest
 from gate.errors import GuardLoopError
 from gate.guard import Guard
 from gate.state import GuardState
-from schemas.ledger import ApprovalBefore, PathForbidden, ToolArgBound, ToolForbidden
+from schemas.ledger import ApprovalBefore, PathForbidden, ToolForbidden
 
 MINIMAL = """\
 version: 1
@@ -29,6 +29,8 @@ rules:
     text: Ask a human before deleting.
     check:
       approval_before: {tool: delete_file}
+"""
+SMALL_PAGES = """\
   - id: small-pages
     text: Page size stays at 50 or below.
     check:
@@ -49,13 +51,11 @@ def test_minimal_file_loads_one_rule_of_each_check_type_with_defaults_filled(tmp
         "no-migrations",
         "no-shell",
         "ask-before-delete",
-        "small-pages",
     ]
     assert [type(r.constraint.check) for r in guard.rules] == [
         PathForbidden,
         ToolForbidden,
         ApprovalBefore,
-        ToolArgBound,
     ]
     first = guard.rules[0].constraint
     assert first.check.glob == "migrations/**"
@@ -69,11 +69,22 @@ def test_minimal_file_loads_one_rule_of_each_check_type_with_defaults_filled(tmp
         "declared",
     )
     assert first.scope == ("all",)
-    assert [r.mode for r in guard.rules] == ["block", "observe", "block", "block"]
-    assert guard.rules[3].constraint.check.value == 50
+    assert [r.mode for r in guard.rules] == ["block", "observe", "block"]
     assert guard.approval_tool == "ask_human"
     assert guard.tool_map == {"save_note": {"path_arg": "file", "op": "write"}}
     assert isinstance(guard.state, GuardState)
+
+
+def test_tool_arg_bound_is_rejected_until_the_guard_can_enforce_it(tmp_path):
+    # Breaks if the loader accepts a rule the guard silently skips: a numeric limit that
+    # protects nothing.
+    path = write_rules(tmp_path, MINIMAL + SMALL_PAGES)
+
+    with pytest.raises(ValueError, match="tool_arg_bound is not supported yet") as raised:
+        Guard.from_yaml(path)
+
+    assert str(path) in str(raised.value)
+    assert "small-pages" in str(raised.value)
 
 
 def test_optional_top_level_keys_default_to_none_and_empty(tmp_path):
