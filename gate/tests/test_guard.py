@@ -197,13 +197,6 @@ def test_version_other_than_1_is_rejected(tmp_path):
         Guard.from_yaml(write_rules(tmp_path, MINIMAL.replace("version: 1", "version: 2")))
 
 
-def test_middleware_is_not_wired_yet(tmp_path):
-    guard = Guard.from_yaml(write_rules(tmp_path, MINIMAL))
-
-    with pytest.raises(NotImplementedError, match="wired in T-001b"):
-        guard.middleware()
-
-
 # GuardState
 
 

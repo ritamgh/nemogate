@@ -25,23 +25,35 @@ having waited.
 
 import asyncio
 import json
+import logging
+import os
 import re
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.config import get_config
 from langgraph.types import Command
 
+from gate.errors import GuardLoopError
 from gate.operators import MutationFailed
-from gate.policy import blocking_constraint
+from gate.policy import blocking_constraint, checkable_before_the_call
+from gate.state import GuardState
 from gate.text import message_text as _text
 from gate.trace import TraceWriter
+from oracle.evaluate import FILE_OPS
 from oracle.paths import PATH_ARG, repo_relative
-from schemas.ledger import Constraint, Ledger, OutputMustInclude, OutputMustNotInclude
+from schemas.ledger import (
+    ApprovalBefore,
+    Constraint,
+    Ledger,
+    OutputMustInclude,
+    OutputMustNotInclude,
+    PathForbidden,
+)
 from schemas.run import RunConfig
 from schemas.trace import (
     Approval,
@@ -54,6 +66,11 @@ from schemas.trace import (
     ToolResult,
 )
 
+if TYPE_CHECKING:
+    from gate.guard import Rule
+
+log = logging.getLogger(__name__)
+
 TASK_TOOL = "task"  # Deep Agents' delegation tool (docs/FACTS.md section 4)
 _NAME = re.compile(r"[A-Za-z0-9_-]+")
 # Replies a gated run may hold back before passing one on to be graded. Without a cap, a reply
@@ -64,6 +81,7 @@ MAX_FAIL_CLOSED = 2
 BLOCKED = "This action was blocked by policy."
 BLOCKED_GATED = "This action was blocked because it breaks a rule from the user: {rule}"
 REPIN = "\n\nRules from the user that apply to this work:\n{rules}"
+ALL_SCOPE = "all"  # the rules file loader's scope: every agent (AgentName rejects "*")
 FAILED_CLOSED = (
     "The reply from {agent} was not passed on because it does not meet a requirement from the "
     "user: {rule}\nDelegate the work again and pass this requirement on."
@@ -77,6 +95,14 @@ def main_agent_name(target_boundary: str) -> str:
         return rest
     sender, _, receiver = rest.partition("->")
     return sender if kind == "delegation" else receiver
+
+
+def repin(text: str, sub: str, constraints: Sequence[Constraint]) -> str:
+    """`text`, a delegation's description, with the rules that apply to agent `sub` appended."""
+    rules = [c.text for c in constraints if sub in c.scope or ALL_SCOPE in c.scope]
+    if not rules:
+        return text
+    return text + REPIN.format(rules="\n".join(f"- {rule}" for rule in rules))
 
 
 def _message(result: Any) -> ToolMessage | None:
@@ -198,10 +224,7 @@ class GateMiddleware(AgentMiddleware):
         return out
 
     def _repinned(self, sub: str, text: str) -> str:
-        rules = [c.text for c in self._ledger.constraints if sub in c.scope]
-        if not self._gated or not rules:
-            return text
-        return text + REPIN.format(rules="\n".join(f"- {rule}" for rule in rules))
+        return repin(text, sub, self._ledger.constraints) if self._gated else text
 
     def _delegate(self, request: Any, call: dict, agent: str, sub: str) -> tuple[Any, _Pending]:
         boundary = f"delegation:{agent}->{sub}"
@@ -365,3 +388,181 @@ class GateMiddleware(AgentMiddleware):
 
     async def aafter_agent(self, state: Any, runtime: Any) -> None:
         return self.after_agent(state, runtime)
+
+
+def resolve_path(path: str, root: str | None) -> str:
+    """`path` the way the filesystem sees it, repo-relative when it is under `root`.
+
+    Made absolute against `root` (the working directory when None) with symlinks resolved, so
+    `../` escapes, absolute aliases and symlinks into a folder match that folder's rules. A path
+    that cannot be resolved is matched as written."""
+    base = root if root is not None else os.getcwd()
+    try:
+        real_root = os.path.realpath(base)
+        # Deep Agents' file tools turn backslashes into `/` before acting (oracle/paths.py).
+        resolved = os.path.realpath(os.path.join(real_root, path.replace("\\", "/")))
+    except (OSError, ValueError):  # ValueError: an embedded null character
+        return repo_relative(path, root)
+    return repo_relative(resolved, real_root)
+
+
+def _run_config() -> dict | None:
+    try:
+        return get_config()
+    except RuntimeError:  # called outside a runnable context
+        return None
+
+
+def _agent_name(config: dict | None) -> str:
+    name = ((config or {}).get("metadata") or {}).get("lc_agent_name")
+    return re.sub(r"[^A-Za-z0-9_-]", "_", name) if isinstance(name, str) and name else "main"
+
+
+class GuardMiddleware(AgentMiddleware):
+    """The rule guard (Guard.middleware()): one instance per agent stack, one shared state.
+
+    Before a tool call it checks every rule that can be checked before the call, with the same
+    oracle predicates the pipeline's block_only and gated arms use (gate/policy.py). A block-mode
+    rule that fails returns its text as the tool result and the tool never runs; the same call
+    blocked MAX_BLOCKS times in one thread raises GuardLoopError. An observe-mode rule only logs
+    what it would have blocked. A task delegation gets the block-mode rules appended to its
+    description. It calls no model.
+    """
+
+    MAX_BLOCKS = 3
+
+    def __init__(
+        self,
+        rules: Sequence["Rule"],
+        ledger: Ledger,
+        state: GuardState,
+        tool_map: dict[str, dict[str, str]],
+        writer: TraceWriter,
+    ) -> None:
+        super().__init__()
+        self._rules = rules
+        self._ledger = ledger
+        self._state = state
+        self._tool_map = tool_map
+        self._writer = writer
+        self._approval_rules = [r for r in rules if isinstance(r.constraint.check, ApprovalBefore)]
+        self._pinned = [r.constraint for r in rules if r.mode == "block"]
+        self._single = {
+            r.id: ledger.model_copy(update={"constraints": (r.constraint,)}) for r in rules
+        }
+
+    def _path_call(self, raw: ToolCall, agent: str) -> ToolCall:
+        """The call as a path_forbidden rule reads it: a file tool (a built-in, or one the rules
+        file maps) with its path argument resolved, named as the built-in tool of its operation."""
+        mapped = self._tool_map.get(raw.tool)
+        if mapped is not None:
+            tool = next(t for t, op in FILE_OPS.items() if op == mapped["op"])
+            arg = mapped["path_arg"]
+        elif raw.tool in FILE_OPS:
+            tool, arg = raw.tool, PATH_ARG
+        else:
+            return raw
+        value = raw.args.get(arg)
+        args = (
+            {PATH_ARG: resolve_path(value, self._ledger.app.repo_root)}
+            if isinstance(value, str)
+            else {}
+        )
+        return self._writer.preview(ToolCall, step=1, agent=agent, tool=tool, args=args)
+
+    def _violated(self, raw: ToolCall, agent: str, thread: str) -> list["Rule"]:
+        path_call = self._path_call(raw, agent)
+        hit = []
+        for rule in self._rules:
+            check = rule.constraint.check
+            if not checkable_before_the_call(rule.constraint):
+                continue
+            prior = []
+            if isinstance(check, ApprovalBefore) and self._state.has_approval(thread, rule.id):
+                prior = [
+                    self._writer.preview(
+                        Approval, step=0, agent=agent, action=check.tool, approved=True
+                    )
+                ]
+            call = path_call if isinstance(check, PathForbidden) else raw
+            if blocking_constraint(self._single[rule.id], prior, call) is not None:
+                hit.append(rule)
+        return hit
+
+    def _before(self, request: Any) -> tuple[Any, ToolMessage | None, str, str]:
+        """(the request to run, the reply if the call is blocked, thread, agent)."""
+        call = request.tool_call
+        config = _run_config()
+        thread, agent = self._state.thread_key(config), _agent_name(config)
+        args = json.loads(self._state.canonical_args(call["args"]))  # what the trace can hold
+        raw = self._writer.preview(ToolCall, step=1, agent=agent, tool=call["name"], args=args)
+        hits = self._violated(raw, agent, thread)
+        blocking = [r for r in hits if r.mode == "block"]
+        for rule in hits:
+            if rule.mode == "observe":
+                reason = f"would block (observe mode): {rule.text}"
+                log.info("rule %s: %s (%s)", rule.id, reason, call["name"])
+                self._emit_block(agent, call["name"], rule, reason)
+        if blocking:
+            return request, self._block(call, agent, thread, blocking), thread, agent
+        if not hits:
+            self._writer.emit(ToolCall, agent=agent, tool=call["name"], args=args, blocked=False)
+        return self._repinned(request), None, thread, agent
+
+    def _emit_block(self, agent: str, tool: str, rule: "Rule", reason: str) -> None:
+        self._writer.emit(GateBlock, agent=agent, tool=tool, constraint_id=rule.id, reason=reason)
+
+    def _block(self, call: dict, agent: str, thread: str, rules: list["Rule"]) -> ToolMessage:
+        counts = [
+            (rule, self._state.record_block(thread, rule.id, call["name"], call["args"]))
+            for rule in rules
+        ]
+        reason = "\n".join(f"Blocked by rule {r.id}: {r.text}" for r in rules)
+        self._emit_block(agent, call["name"], rules[0], reason)
+        for rule, count in counts:
+            if count >= self.MAX_BLOCKS:
+                raise GuardLoopError(rule.id, call["name"], thread)
+        return ToolMessage(
+            content=reason, tool_call_id=call["id"], name=call["name"], status="error"
+        )
+
+    def _repinned(self, request: Any) -> Any:
+        call = request.tool_call
+        description = call["args"].get("description")
+        if call["name"] != TASK_TOOL or not isinstance(description, str):
+            return request
+        pinned = repin(description, str(call["args"].get("subagent_type", "")), self._pinned)
+        if pinned == description:
+            return request
+        return request.override(tool_call={**call, "args": {**call["args"], "description": pinned}})
+
+    def _after(self, call: dict, agent: str, thread: str, result: Any) -> Any:
+        if call["name"] == self._ledger.app.approval_tool:
+            message = _message(result)
+            approved = message is None or message.status != "error"
+            if approved:
+                for rule in self._approval_rules:
+                    self._state.record_approval(thread, rule.id)
+            args = call["args"]
+            reason = args.get("reason")
+            self._writer.emit(
+                Approval,
+                agent=agent,
+                action=str(args.get("action", json.dumps(args, default=str))),
+                reason=reason if isinstance(reason, str) else None,
+                approved=approved,
+            )
+        return result
+
+    def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        request, reply, thread, agent = self._before(request)
+        if reply is not None:
+            return reply
+        return self._after(request.tool_call, agent, thread, handler(request))
+
+    async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
+        # The decision is cheap local work (no model, no network), so it runs on the loop.
+        request, reply, thread, agent = self._before(request)
+        if reply is not None:
+            return reply
+        return self._after(request.tool_call, agent, thread, await handler(request))
