@@ -82,7 +82,7 @@ class EventType(StrEnum):
 
 # At least one non-whitespace character; the value is stored unstripped.
 NonEmptyStr = Annotated[str, StringConstraints(pattern=r"\S")]
-ConstraintId = Annotated[str, StringConstraints(pattern=r"^C-\d{3,}$")]
+ConstraintId = Annotated[str, StringConstraints(pattern=r"^(C-\d{3,}|[a-z0-9]+(-[a-z0-9]+)*)$")]
 # Agent names are free-form identifiers, never an enum of names.
 BoundaryId = Annotated[
     str,
