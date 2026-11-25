@@ -65,12 +65,19 @@ def test_load_task_rejects_bad_ids(tmp_path, task_id):
         load_task(task_dir)
 
 
-@pytest.mark.parametrize("constraint", ["C-01", "c-001", "T1", "C001", "C-001x"])
+@pytest.mark.parametrize("constraint", ["C-01", "T1", "C001", "C-001x"])
 def test_load_task_rejects_bad_constraint_ids(tmp_path, constraint):
     task_dir = write_task(tmp_path, "T1", constraint=constraint)
 
     with pytest.raises(ValueError, match="constraint"):
         load_task(task_dir)
+
+
+def test_load_task_accepts_a_slug_constraint_id(tmp_path):
+    # Slug rule ids became valid ledger ids (guard rules file); a task may name one.
+    task_dir = write_task(tmp_path, "T1", constraint="no-migrations")
+
+    assert load_task(task_dir).constraint == "no-migrations"
 
 
 @pytest.mark.parametrize(

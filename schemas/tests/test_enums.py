@@ -67,7 +67,29 @@ def test_constraint_id_accepts_three_or_more_digits(value):
     assert CONSTRAINT_ID.validate_python(value) == value
 
 
-@pytest.mark.parametrize("value", ["C1", "C-01", "c-001", "C-001x", "C-001\n", " C-001", ""])
+@pytest.mark.parametrize("value", ["no-migrations", "c-001", "rule1", "a-b-c-2"])
+def test_constraint_id_accepts_lowercase_slugs(value):
+    # Catches a pattern that rejects the slug rule ids of the drop-in guard's rules file.
+    assert CONSTRAINT_ID.validate_python(value) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "C1",
+        "C-1",
+        "C-01",
+        "C-",
+        "C-001x",
+        "C-001\n",
+        " C-001",
+        "",
+        "No-Migrations",
+        "rule-",
+        "-rule",
+    ]
+    + ["two words", "a--b", "no_migrations"],
+)
 def test_constraint_id_rejects_malformed(value):
     # Catches a loose pattern (e.g. unanchored or \d*) that lets bad ids into the ledger.
     with pytest.raises(ValidationError):
