@@ -1,0 +1,12 @@
+version: 1
+tools:
+  delete_record: {path_arg: path, op: delete}
+rules:
+  - id: payment-limit
+    text: Never send a payment of more than 100.
+    check:
+      tool_arg_bound: {tool: send_payment, arg: amount, op: "<=", value: 100}
+  - id: keep-protected-records
+    text: Never delete anything under records/protected.
+    check:
+      path_forbidden: {glob: "records/protected/**", ops: [delete]}
