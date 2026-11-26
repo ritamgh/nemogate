@@ -25,11 +25,13 @@ having waited.
 
 import asyncio
 import fnmatch
+import functools
 import json
 import logging
 import os
 import posixpath
 import re
+import string
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -415,6 +417,13 @@ def virtual_path(path: str) -> str:
     return posixpath.normpath("/" + path.replace("\\", "/")).lstrip("/") or "."
 
 
+MAX_PATH_SEGMENTS = 256  # a longer path is blocked: fail closed, and the glob walk stays cheap
+
+
+def _segment_count(path: str) -> int:
+    return len([s for s in path.replace("\\", "/").split("/") if s])
+
+
 def glob_may_match_below(glob: str, target: str) -> bool:
     """True if some path at or below `target` (a repo-relative path, "." for the root) can match
     `glob`: deleting `target` could then remove a protected path.
@@ -423,10 +432,13 @@ def glob_may_match_below(glob: str, target: str) -> bool:
     target segments, since fnmatch lets `*` cross `/` (oracle/paths.py), and `**` stands for any
     number of them: so a leading `**` makes every directory delete match (over-blocking, never
     under-blocking). A target already below a match is not this function's case: the oracle's
-    own check covers it."""
+    own check covers it. A target with more than MAX_PATH_SEGMENTS segments is True: fail closed."""
     segments = [s for s in glob.split("/") if s]
     parts = [s for s in target.split("/") if s and s != "."]
+    if len(parts) > MAX_PATH_SEGMENTS:
+        return True
 
+    @functools.cache  # each (i, j) is walked once, not once per way to reach it
     def walk(i: int, j: int) -> bool:
         if i == len(parts):
             return True  # the glob matches here, or something below could match the rest
@@ -476,20 +488,54 @@ def _is_no(value: Any) -> bool:
     return False
 
 
-def _denied(answer: Any) -> bool:
-    """True if an approval tool's answer says no: a mapping (or a JSON object in a string) whose
-    "approved" or "approve" key is false, 0 (also 0.0), or the text "false", "no", "denied" or "0".
-    Text that is not JSON, or JSON that cannot be read, is not a denial."""
-    if isinstance(answer, list):
-        answer = _text(answer)
-    if isinstance(answer, str):
+_DENIAL_WORDS = frozenset(
+    "no n deny denied reject rejected decline declined refuse refused cancel cancelled canceled "
+    "stop abort aborted disapproved".split()
+)
+_DECISION_NO = frozenset("deny denied reject rejected no false".split())
+
+
+def _denial_text(text: str) -> bool:
+    """True if `text` reads as a denial: its first word (lowercased, punctuation stripped) is a
+    denial word, or it starts with "not approved"."""
+    text = text.strip().lower()
+    words = text.split(maxsplit=1)
+    first = words[0].strip(string.punctuation) if words else ""
+    return first in _DENIAL_WORDS or text.startswith("not approved")
+
+
+def approval_denied(result: Any) -> bool:
+    """True if an approval tool's result reads as a denial, so it is never recorded as an approval.
+
+    A denial is: an error message; a mapping (or a JSON object in a string) whose "approved" or
+    "approve" key is false, 0 (also 0.0), or the text "false", "no", "denied" or "0", or whose
+    "decision" is false or one of deny, denied, reject, rejected, no, false; or text (also a JSON
+    string) whose first word is no, n, deny, denied, reject, rejected, decline, declined, refuse,
+    refused, cancel, cancelled, canceled, stop, abort, aborted or disapproved, or which starts
+    with "not approved". Everything else, including text that is not JSON, counts as an approval:
+    an approval tool should return an explicit yes or no."""
+    message = _message(result)
+    if message is not None:
+        if message.status == "error":
+            return True
+        result = message.content
+    if isinstance(result, list):
+        result = _text(result)
+    if isinstance(result, str):
         try:
-            answer = json.loads(answer)
-        except (ValueError, TypeError, RecursionError):  # deeply nested JSON: RecursionError
-            return False
-    if not isinstance(answer, dict):
+            result = json.loads(result)
+        except (ValueError, TypeError, RecursionError):  # plain text; deep JSON: RecursionError
+            pass
+    if isinstance(result, str):
+        return _denial_text(result)
+    if not isinstance(result, dict):
         return False
-    return any(key in answer and _is_no(answer[key]) for key in ("approved", "approve"))
+    if any(key in result and _is_no(result[key]) for key in ("approved", "approve")):
+        return True
+    decision = result.get("decision")
+    if isinstance(decision, str):
+        return decision.strip().lower() in _DECISION_NO
+    return decision is False
 
 
 def _run_config() -> dict | None:
@@ -558,9 +604,17 @@ class GuardMiddleware(AgentMiddleware):
 
     def _path_problem(self, tool: str, args: dict) -> tuple[str, str] | None:
         """(operation, reason) when a file tool's path argument cannot be read as a path or a list
-        of paths: a path_forbidden rule cannot tell what the call touches, so it fails closed."""
+        of paths, or a path has more than MAX_PATH_SEGMENTS segments: a path_forbidden rule cannot
+        tell what the call touches, so it fails closed."""
         info = self._file_tool(tool)
-        if info is None or self._paths(args.get(info[1])) is not None:
+        if info is None:
+            return None
+        paths = self._paths(args.get(info[1]))
+        if paths is not None:
+            if any(_segment_count(p) > MAX_PATH_SEGMENTS for p in paths):
+                return info[2], (
+                    f"tool {tool}: path has too many segments (more than {MAX_PATH_SEGMENTS})"
+                )
             return None
         what = "is not a path or list of paths" if info[1] in args else "is missing"
         return info[2], f"tool {tool}: argument {info[1]} {what}"
@@ -688,10 +742,7 @@ class GuardMiddleware(AgentMiddleware):
 
     def _after(self, call: dict, agent: str, thread: str, result: Any) -> Any:
         if call["name"] == self._ledger.app.approval_tool:
-            message = _message(result)
-            approved = (message is None or message.status != "error") and not _denied(
-                message.content if message is not None else result
-            )
+            approved = not approval_denied(result)
             if approved:
                 for rule in self._approval_rules:
                     self._state.record_approval(thread, rule.id)
