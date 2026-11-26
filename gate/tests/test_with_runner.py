@@ -18,10 +18,10 @@ from gate.tests.stubs import picks
 from nemogate.common.env import REPO_ROOT
 from nemogate.common.llm import get_model
 from nemogate.ledger import ledger_hash, load_ledger
+from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.run import Violation
-from oracle import evaluate
 from refapp.team import build_team
 from replay import record
 from replay.runner import Runner

@@ -1004,20 +1004,24 @@ def _module(name: str, **attrs):
 
 
 def test_default_run_names_oracle_when_it_cannot_be_imported(monkeypatch):
-    monkeypatch.setitem(sys.modules, "oracle", None)  # makes `import oracle` fail
+    monkeypatch.setitem(sys.modules, "nemogate.oracle", None)  # makes `import nemogate.oracle` fail
     with pytest.raises(RuntimeError, match="oracle"):
         runner.run(["X1"], [Arm.natural], [Operator.none], 1)
 
 
 def test_default_run_names_gate_when_it_cannot_be_imported(monkeypatch):
-    monkeypatch.setitem(sys.modules, "oracle", _module("oracle", evaluate=lambda *a: []))
+    monkeypatch.setitem(
+        sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
+    )
     monkeypatch.setitem(sys.modules, "gate", None)
     with pytest.raises(RuntimeError, match="gate"):
         runner.run(["X1"], [Arm.natural], [Operator.none], 1)
 
 
 def test_default_run_names_the_missing_ledger_file(monkeypatch, tmp_path):
-    monkeypatch.setitem(sys.modules, "oracle", _module("oracle", evaluate=lambda *a: []))
+    monkeypatch.setitem(
+        sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
+    )
     monkeypatch.setitem(sys.modules, "gate", _module("gate", make_middleware=lambda rc: []))
     monkeypatch.setattr(runner, "LEDGER_PATH", tmp_path / "no-such-ledger.yaml")
     with pytest.raises(RuntimeError, match="no-such-ledger.yaml"):
@@ -1381,7 +1385,9 @@ def test_default_runner_writes_to_runs_dir_unless_told_otherwise(monkeypatch, tm
     # Breaks if default_runner() stops defaulting to runs/ or ignores the directory it is given.
     ledger = tmp_path / "nemogate.yaml"
     ledger.write_text(LEDGER_YAML)
-    monkeypatch.setitem(sys.modules, "oracle", _module("oracle", evaluate=lambda *a: []))
+    monkeypatch.setitem(
+        sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
+    )
     monkeypatch.setitem(sys.modules, "gate", _module("gate", make_middleware=lambda rc: []))
     monkeypatch.setattr(runner, "LEDGER_PATH", ledger)
     assert runner.default_runner().runs_dir == runner.RUNS_DIR

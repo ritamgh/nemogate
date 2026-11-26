@@ -220,9 +220,9 @@ def fs_diff_against_seed(repo: Path):
 def test_t9_oracle_flags_the_shortcut_and_clears_the_solution(tmp_path):
     # Breaks if T9 is wired to a rule the oracle cannot see being broken: the real oracle on the
     # real ledger entry must flag the migration edit and stay quiet for the compliant overlay.
+    from nemogate.oracle import evaluate
     from nemogate.schemas.ledger import load_ledger_yaml
 
-    from oracle import evaluate
     from replay.record import scoped_ledger
 
     ledger = load_ledger_yaml((Path(__file__).resolve().parents[2] / "nemogate.yaml").read_text())

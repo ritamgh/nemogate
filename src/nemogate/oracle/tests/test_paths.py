@@ -1,6 +1,6 @@
 import pytest
 
-from oracle import glob_matches, repo_relative
+from nemogate.oracle import glob_matches, repo_relative
 
 
 @pytest.mark.parametrize(

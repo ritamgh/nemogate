@@ -46,6 +46,8 @@ from gate.policy import blocking_constraint, checkable_before_the_call
 from gate.state import GuardState
 from gate.text import message_text as _text
 from gate.trace import TraceWriter
+from nemogate.oracle.evaluate import FILE_OPS
+from nemogate.oracle.paths import PATH_ARG, repo_relative
 from nemogate.schemas.ledger import (
     ApprovalBefore,
     Constraint,
@@ -65,8 +67,6 @@ from nemogate.schemas.trace import (
     ToolCall,
     ToolResult,
 )
-from oracle.evaluate import FILE_OPS
-from oracle.paths import PATH_ARG, repo_relative
 
 if TYPE_CHECKING:
     from gate.guard import Rule

@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from nemogate.common.env import REPO_ROOT
 from nemogate.ledger import load_ledger, scope_to
+from nemogate.oracle import evaluate
 from nemogate.schemas.ledger import OutputMustNotInclude
 from nemogate.schemas.trace import BoundaryIn, FinalOutput
 
-from oracle import evaluate
 from refapp.tasks import load_task, load_tasks
 
 RESEARCH = Path(__file__).resolve().parents[1]

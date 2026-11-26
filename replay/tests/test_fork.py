@@ -27,6 +27,7 @@ from gate import NothingToMutate, build_middleware
 from gate.tests.stubs import picks
 from nemogate.common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
 from nemogate.common.llm import get_model
+from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.ledger import (
@@ -40,7 +41,6 @@ from nemogate.schemas.ledger import (
 )
 from nemogate.schemas.run import RunRecord, is_comparable
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, ToolCall, parse_trace_jsonl
-from oracle import evaluate
 from replay.boundaries import Recording
 from replay.carriage import classify_folder
 from replay.runner import Runner

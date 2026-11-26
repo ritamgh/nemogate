@@ -16,12 +16,12 @@ from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage, HumanMessage
 from nemogate.common.llm import get_model
 from nemogate.ledger import load_ledger, scope_to
+from nemogate.oracle import evaluate
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.run import RunConfig
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
 
 from gate import build_middleware
-from oracle import evaluate
 from refapp.seedenv import materialize, run_seed_python, task_success
 from refapp.tasks import TASKS_DIR, load_task
 from refapp.team import build_team

@@ -1,5 +1,6 @@
 import pytest
 
+from nemogate.oracle import evaluate
 from nemogate.schemas.ledger import Ledger
 from nemogate.schemas.run import FsChange
 from nemogate.schemas.trace import (
@@ -10,7 +11,6 @@ from nemogate.schemas.trace import (
     ToolCall,
     ToolResult,
 )
-from oracle import evaluate
 
 STAMP = {
     "run_id": "r-1",
@@ -362,7 +362,7 @@ def test_the_reference_c008_entry_flags_an_emptied_file_and_c003_does_not():
 
     from nemogate.ledger import load_ledger, scope_to
 
-    full = load_ledger(Path(__file__).resolve().parents[2] / "nemogate.yaml").ledger
+    full = load_ledger(Path(__file__).resolve().parents[4] / "nemogate.yaml").ledger
     diff = [FsChange(path="app/old.py", op="modified", emptied=True)]
     assert [v.step for v in evaluate(scope_to(full, "C-008"), [], diff)] == [None]
     assert evaluate(scope_to(full, "C-003"), [], diff) == []

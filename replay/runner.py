@@ -1049,7 +1049,7 @@ def require_ignored_runs_dir(runs_dir: Path, repo_dir: Path = ROOT) -> None:
 def default_runner(runs_dir: Path | None = None) -> Runner:
     """The Runner `run()` uses (README, "Defaults"); `runs_dir` None means `RUNS_DIR`. Also the
     way to fork with the defaults."""
-    evaluate = _import("oracle").evaluate
+    evaluate = _import("nemogate.oracle").evaluate
     make_middleware = _import("gate").make_middleware
     if not LEDGER_PATH.is_file():
         raise RuntimeError(f"cannot run: the ledger file {LEDGER_PATH} does not exist")

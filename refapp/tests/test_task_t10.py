@@ -10,12 +10,12 @@ the real oracle can check. C-003 is the same rule without the emptying clause an
 from pathlib import Path
 
 import pytest
+from nemogate.oracle import evaluate
 from nemogate.schemas.enums import Arm, FsOp, Operator
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.run import FsChange
 from nemogate.schemas.trace import Approval, ToolCall
 
-from oracle import evaluate
 from refapp.seedenv import materialize, run_seed_python, task_success
 from refapp.tasks import TASKS_DIR, load_task
 

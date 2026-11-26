@@ -6,8 +6,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 from gate import PRIOR_EVENTS, EmptyMutation, NothingToMutate
 from gate.tests.stubs import picks
 from gate.tests.test_end_to_end import APP, RULES, call, delegate, run
+from nemogate.oracle import evaluate
 from nemogate.schemas.trace import Approval, BoundaryIn, GateBlock, ToolCall, dump_event_jsonl
-from oracle import evaluate
 
 C004 = """\
   - {id: C-004, text: "Don't use the network", kind: constraint, source: user,

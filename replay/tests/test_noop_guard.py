@@ -22,10 +22,10 @@ from gate.tests.stubs import picks
 from nemogate.common.env import REPO_ROOT
 from nemogate.common.llm import get_model
 from nemogate.ledger import load_ledger
+from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
-from oracle import evaluate
 from refapp.team import build_team
 from replay import noop, sweep_status
 from replay.runner import Runner

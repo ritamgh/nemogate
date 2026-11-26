@@ -6,6 +6,7 @@ the gate has already made in-repo tool-call paths repo-relative and emitted appr
 
 import re
 
+from nemogate.oracle.paths import PATH_ARG, glob_matches, repo_relative
 from nemogate.schemas.enums import FsOp
 from nemogate.schemas.ledger import (
     ApprovalBefore,
@@ -27,7 +28,6 @@ from nemogate.schemas.trace import (
     ToolCall,
     ToolResult,
 )
-from oracle.paths import PATH_ARG, glob_matches, repo_relative
 
 # Deep Agents' built-in file tools (docs/FACTS.md section 4) and the operation each performs.
 FILE_OPS = {"write_file": "write", "edit_file": "write", "delete": "delete"}

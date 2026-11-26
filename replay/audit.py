@@ -16,10 +16,10 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
+from nemogate.oracle import evaluate
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.run import FS_DIFF, RunRecord, Violation
 from nemogate.schemas.trace import parse_trace_jsonl
-from oracle import evaluate
 from replay import record
 from replay.carriage import check_trace, fork_scored, fork_trace
 

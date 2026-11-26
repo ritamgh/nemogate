@@ -258,8 +258,8 @@ def test_the_cap_ends_a_run_through_the_real_gate_and_recorder(tmp_path):
     from gate.tests.stubs import picks
     from nemogate.common.env import REPO_ROOT
     from nemogate.ledger import load_ledger
+    from nemogate.oracle import evaluate
     from nemogate.schemas.config import load_config
-    from oracle import evaluate
     from refapp.team import build_team
     from replay.tests.test_noop_guard import BASE, FINAL, WITH_RULE, FakeClient, Task
 

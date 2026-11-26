@@ -5,9 +5,9 @@ violation at this call's step. Only checks SPEC marks as checkable before the ca
 so the gate and the oracle can never disagree about a blocked call.
 """
 
+from nemogate.oracle import evaluate
 from nemogate.schemas.ledger import ApprovalBefore, Constraint, Ledger, PathForbidden, ToolForbidden
 from nemogate.schemas.trace import Event, ToolCall
-from oracle import evaluate
 
 _BEFORE_THE_CALL = (PathForbidden, ToolForbidden, ApprovalBefore)
 

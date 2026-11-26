@@ -10,6 +10,7 @@ from gate.tests.stubs import picks
 from nemogate.common.env import REPO_ROOT
 from nemogate.common.llm import get_model
 from nemogate.ledger import load_ledger, scope_to
+from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
 from nemogate.schemas.contracts import MakeMiddlewareFn
 from nemogate.schemas.enums import Role
@@ -23,7 +24,6 @@ from nemogate.schemas.trace import (
     ToolResult,
     parse_trace_jsonl,
 )
-from oracle import evaluate
 from refapp.team import build_team
 
 APP = "app: {repo_root: /repo, approval_tool: request_approval}\n"

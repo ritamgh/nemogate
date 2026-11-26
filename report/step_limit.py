@@ -25,10 +25,10 @@ from typing import Any
 import yaml
 from langgraph.errors import GraphRecursionError
 
+from nemogate.oracle.evaluate import evaluate
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.run import FsChange
 from nemogate.schemas.trace import parse_trace_jsonl
-from oracle.evaluate import evaluate
 from replay import stats
 from replay.carriage import fork_scored, fork_trace
 from replay.intervals import wilson
