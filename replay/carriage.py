@@ -34,18 +34,18 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from gate.middleware import REPIN
-from replay.app import load_app
-from schemas.enums import Arm, Operator
-from schemas.ledger import (
+from nemogate.gate.middleware import REPIN
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import (
     ApprovalBefore,
     FilesFrozen,
     PathForbidden,
     ToolForbidden,
     load_ledger_yaml,
 )
-from schemas.run import RunConfig, Violation
-from schemas.trace import BoundaryIn, BoundaryOut, ToolCall, parse_trace_jsonl
+from nemogate.schemas.run import RunConfig, Violation
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, ToolCall, parse_trace_jsonl
+from replay.app import load_app
 
 SUMMARIZATION_EVENT_KEY = "_summarization_event"  # deepagents/middleware/summarization.py:135
 DELEGATION_TOOL = "task"  # the Deep Agents subagent tool the planner calls to delegate

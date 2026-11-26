@@ -15,7 +15,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from common.llm import get_model
+from nemogate.common.llm import get_model
 from refapp.team import AGENTS, REPO, build_team
 
 PLANNER_TOOLS = {

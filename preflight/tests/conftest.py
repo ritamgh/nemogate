@@ -6,10 +6,10 @@ from collections.abc import Collection
 import pytest
 from langchain_core.messages import AIMessage
 
-import common.env
-from common.llm import StubChatModel
+import nemogate.common.env
+from nemogate.common.llm import StubChatModel
+from nemogate.schemas.enums import Role
 from preflight.probes import ESCAPE_SAMPLE, EXTRACTION_FIELDS, Variant
-from schemas.enums import Role
 
 FAKE_KEY = "fake-key-sentinel-7f3a91c2"
 
@@ -17,7 +17,7 @@ FAKE_KEY = "fake-key-sentinel-7f3a91c2"
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     # Breaks if a test reads the developer's real .env or spend log, or runs with live mode on.
-    monkeypatch.setattr(common.env, "REPO_ROOT", tmp_path / "no-repo-root")
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", tmp_path / "no-repo-root")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("NEMOGATE_SPEND_LOG", str(tmp_path / "spend.jsonl"))
     monkeypatch.delenv("NEMOGATE_LIVE", raising=False)

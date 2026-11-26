@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.schemas.enums import Role
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import RunRecord
 from replay.stats import LoadedRun, aggregate, load_runs, main, newcombe_diff, wilson
-from schemas.enums import Role
-from schemas.ledger import load_ledger_yaml
-from schemas.run import RunRecord
 
 B1 = "delegation:planner->coder"
 B2 = "delegation:planner->reviewer"

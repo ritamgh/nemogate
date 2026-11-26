@@ -16,16 +16,16 @@ from uuid import UUID
 import pytest
 from langchain_core.messages import AIMessage
 
-from common import ConfigError, MissingEnvError, SpendCapReached, env
-from common.spend import append_spend
+from nemogate.common import ConfigError, MissingEnvError, SpendCapReached, env
+from nemogate.common.spend import append_spend
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Arm, FsOp, Operator, Role
+from nemogate.schemas.ledger import Constraint, Ledger, ToolForbidden, load_ledger_yaml
+from nemogate.schemas.run import FsChange, RunConfig, RunRecord, Violation
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, ToolCall, dump_event_jsonl
 from replay import record, runner
 from replay.app import pairs
 from replay.runner import Runner
-from schemas.config import load_config
-from schemas.enums import Arm, FsOp, Operator, Role
-from schemas.ledger import Constraint, Ledger, ToolForbidden, load_ledger_yaml
-from schemas.run import FsChange, RunConfig, RunRecord, Violation
-from schemas.trace import BoundaryIn, BoundaryOut, ToolCall, dump_event_jsonl
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "00000000-0000-0000-0000-00000000000b"
@@ -456,8 +456,8 @@ def test_run_one_writes_emptied_true_for_a_file_the_run_wiped_and_old_diffs_stil
 ):
     # Break caught: the runner's diff not carrying `emptied` from the real in-image script to
     # fs_diff.json, so an edit that wipes a file is invisible to the oracle's also_empty check.
+    from nemogate.schemas.run import FS_DIFF
     from replay.fsdiff import SCRIPT
-    from schemas.run import FS_DIFF
 
     def snap(root: Path, files: dict[str, bytes]) -> dict:
         for name, data in files.items():
@@ -1004,21 +1004,27 @@ def _module(name: str, **attrs):
 
 
 def test_default_run_names_oracle_when_it_cannot_be_imported(monkeypatch):
-    monkeypatch.setitem(sys.modules, "oracle", None)  # makes `import oracle` fail
+    monkeypatch.setitem(sys.modules, "nemogate.oracle", None)  # makes `import nemogate.oracle` fail
     with pytest.raises(RuntimeError, match="oracle"):
         runner.run(["X1"], [Arm.natural], [Operator.none], 1)
 
 
 def test_default_run_names_gate_when_it_cannot_be_imported(monkeypatch):
-    monkeypatch.setitem(sys.modules, "oracle", _module("oracle", evaluate=lambda *a: []))
-    monkeypatch.setitem(sys.modules, "gate", None)
+    monkeypatch.setitem(
+        sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
+    )
+    monkeypatch.setitem(sys.modules, "nemogate.gate", None)
     with pytest.raises(RuntimeError, match="gate"):
         runner.run(["X1"], [Arm.natural], [Operator.none], 1)
 
 
 def test_default_run_names_the_missing_ledger_file(monkeypatch, tmp_path):
-    monkeypatch.setitem(sys.modules, "oracle", _module("oracle", evaluate=lambda *a: []))
-    monkeypatch.setitem(sys.modules, "gate", _module("gate", make_middleware=lambda rc: []))
+    monkeypatch.setitem(
+        sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
+    )
+    monkeypatch.setitem(
+        sys.modules, "nemogate.gate", _module("nemogate.gate", make_middleware=lambda rc: [])
+    )
     monkeypatch.setattr(runner, "LEDGER_PATH", tmp_path / "no-such-ledger.yaml")
     with pytest.raises(RuntimeError, match="no-such-ledger.yaml"):
         runner.run(["X1"], [Arm.natural], [Operator.none], 1)
@@ -1381,8 +1387,12 @@ def test_default_runner_writes_to_runs_dir_unless_told_otherwise(monkeypatch, tm
     # Breaks if default_runner() stops defaulting to runs/ or ignores the directory it is given.
     ledger = tmp_path / "nemogate.yaml"
     ledger.write_text(LEDGER_YAML)
-    monkeypatch.setitem(sys.modules, "oracle", _module("oracle", evaluate=lambda *a: []))
-    monkeypatch.setitem(sys.modules, "gate", _module("gate", make_middleware=lambda rc: []))
+    monkeypatch.setitem(
+        sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
+    )
+    monkeypatch.setitem(
+        sys.modules, "nemogate.gate", _module("nemogate.gate", make_middleware=lambda rc: [])
+    )
     monkeypatch.setattr(runner, "LEDGER_PATH", ledger)
     assert runner.default_runner().runs_dir == runner.RUNS_DIR
     assert runner.default_runner(tmp_path / "other").runs_dir == tmp_path / "other"
@@ -1672,7 +1682,7 @@ def test_arun_stops_on_any_failure_during_setup_whatever_its_type(tmp_path, brok
 def test_arun_stops_when_the_real_gate_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
     # The real gate.make_middleware raises ValueError (not ConfigError) for a stale hash.
     # Breaks if that is carried past: three error.json attempts for n=3 and nothing measured.
-    import gate
+    from nemogate import gate
 
     monkeypatch.setattr(gate, "safe_config_hash", lambda config: "stale0000000")
     h = Harness(tmp_path, make_middleware=gate.make_middleware)

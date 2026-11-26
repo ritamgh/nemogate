@@ -13,12 +13,15 @@ import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage
 
-from common.env import REPO_ROOT
-from common.llm import get_model
-from gate import build_middleware
-from gate.tests.stubs import picks
-from ledger import load_ledger
-from oracle import evaluate
+from nemogate.common.env import REPO_ROOT
+from nemogate.common.llm import get_model
+from nemogate.gate import build_middleware
+from nemogate.gate.tests.stubs import picks
+from nemogate.ledger import load_ledger
+from nemogate.oracle import evaluate
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.trace import parse_trace_jsonl
 from refapp.research import sandbox
 from refapp.research.app import APP, ResearchApp
 from refapp.research.search import CachedSearch
@@ -27,9 +30,6 @@ from replay import app as replay_app
 from replay import record
 from replay.app import App
 from replay.runner import Runner, refusals
-from schemas.config import load_config
-from schemas.enums import Arm, Operator
-from schemas.trace import parse_trace_jsonl
 
 BASE = "00000000-0000-0000-0000-00000000000b"
 FINAL = "00000000-0000-0000-0000-0000000000f1"

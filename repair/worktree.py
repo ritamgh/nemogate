@@ -15,8 +15,8 @@ import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 
+from nemogate.schemas.run import RunRecord
 from repair.patch import Patch
-from schemas.run import RunRecord
 
 _IDENTITY = ["-c", "user.name=NemoGate repair", "-c", "user.email=repair@nemogate.invalid"]
 

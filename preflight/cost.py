@@ -13,8 +13,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from schemas.enums import Arm
-from schemas.run import RunRecord
+from nemogate.schemas.enums import Arm
+from nemogate.schemas.run import RunRecord
 
 
 @dataclass(frozen=True)

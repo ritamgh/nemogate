@@ -16,12 +16,12 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from oracle import evaluate
+from nemogate.oracle import evaluate
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import FS_DIFF, RunRecord, Violation
+from nemogate.schemas.trace import parse_trace_jsonl
 from replay import record
 from replay.carriage import check_trace, fork_scored, fork_trace
-from schemas.ledger import load_ledger_yaml
-from schemas.run import FS_DIFF, RunRecord, Violation
-from schemas.trace import parse_trace_jsonl
 
 RECORD = "record.json"
 FILES = (RECORD, "trace.jsonl", "fs_diff.json", "ledger.yaml", "violations.json")

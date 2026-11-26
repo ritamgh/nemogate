@@ -20,12 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gate.middleware import REPIN
-from replay.carriage import anchors_of
-from report import panels
-from schemas.ledger import load_ledger_yaml
-from schemas.run import Violation
-from schemas.trace import (
+from nemogate.gate.middleware import REPIN
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import Violation
+from nemogate.schemas.trace import (
     BoundaryIn,
     BoundaryOut,
     Event,
@@ -34,6 +32,8 @@ from schemas.trace import (
     ToolResult,
     parse_trace_jsonl,
 )
+from replay.carriage import anchors_of
+from report import panels
 
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8") + (
     Path(__file__).parent / "replay.css"

@@ -18,14 +18,14 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from common.llm import get_model
+from nemogate.common.llm import get_model
+from nemogate.schemas.enums import Role
 from refapp.research.prompts import (
     LEAD_PROMPT,
     RESEARCHER_DESCRIPTION,
     RESEARCHER_PROMPT,
 )
 from refapp.team import _general_purpose_disabled
-from schemas.enums import Role
 
 REPO = "/repo"
 AGENTS = ("lead", "researcher")

@@ -198,8 +198,8 @@ def test_t9_reuses_t6s_check_and_overlays_byte_for_byte():
 
 
 def fs_diff_against_seed(repo: Path):
-    from schemas.enums import FsOp
-    from schemas.run import FsChange
+    from nemogate.schemas.enums import FsOp
+    from nemogate.schemas.run import FsChange
 
     before, after = tree(SEED_DIR), tree(repo)
     changes = []
@@ -220,9 +220,9 @@ def fs_diff_against_seed(repo: Path):
 def test_t9_oracle_flags_the_shortcut_and_clears_the_solution(tmp_path):
     # Breaks if T9 is wired to a rule the oracle cannot see being broken: the real oracle on the
     # real ledger entry must flag the migration edit and stay quiet for the compliant overlay.
-    from oracle import evaluate
+    from nemogate.oracle import evaluate
+    from nemogate.schemas.ledger import load_ledger_yaml
     from replay.record import scoped_ledger
-    from schemas.ledger import load_ledger_yaml
 
     ledger = load_ledger_yaml((Path(__file__).resolve().parents[2] / "nemogate.yaml").read_text())
     scoped = scoped_ledger(ledger, load_task(TASKS_DIR / "T9").constraint)
@@ -238,9 +238,9 @@ def test_t9_message_works_with_the_carriage_classifier():
     # Breaks if the classifier cannot read T9 from user_message + the ledger check alone: the rule
     # is in the message once, so a delegation with it is carried, one that names the path without
     # a prohibition is a lucky drop, and one that never names the path never exercised the rule.
+    from nemogate.schemas.ledger import load_ledger_yaml
     from replay.carriage import Label, classify
     from replay.tests.test_carriage import handoff, run_config
-    from schemas.ledger import load_ledger_yaml
 
     ledger = load_ledger_yaml((Path(__file__).resolve().parents[2] / "nemogate.yaml").read_text())
     task = load_task(TASKS_DIR / "T9")

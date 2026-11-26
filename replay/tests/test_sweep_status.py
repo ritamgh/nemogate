@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.schemas.enums import Arm, Operator, Role
+from nemogate.schemas.run import RunRecord
 from replay import sweep_status
 from replay.sweep_status import main, scan, top_up_plan
-from schemas.enums import Arm, Operator, Role
-from schemas.run import RunRecord
 
 BOUNDARY = "delegation:planner->coder"
 HERE = {
@@ -231,13 +231,24 @@ def test_status_counts_a_mutation_noop_apart_from_errors_and_top_up_still_counts
     put_error(tmp_path, "r-1", arm="mutated", operator="drop", seed=0)
     put_error(
         tmp_path, "r-2", arm="mutated", operator="drop", seed=1,
-        error_type="gate.operators.NothingToMutate",
+        error_type="nemogate.gate.operators.NothingToMutate",
     )  # fmt: skip
     ((key, row),) = sweep_status.status_rows(scan(tmp_path)).items()
     assert key[:3] == ("X1", "mutated", "drop")
     assert (row.records, row.errored, row.noop) == (0, 1, 1)
     (cell,) = top_up_plan(scan(tmp_path), HERE, ["X1"], [Arm.mutated], [Operator.drop], 5)
     assert (cell.existing, cell.planned, cell.next_seed) == (2, 3, 2)
+
+
+def test_status_counts_a_saved_error_with_the_legacy_noop_name_as_a_mutation_noop(tmp_path):
+    # Breaks if an error.json written before the move into nemogate ("gate.operators..." with no
+    # package prefix) is counted as a run failure, and top-up retries it.
+    put_error(
+        tmp_path, "r-old", arm="mutated", operator="drop", seed=0,
+        error_type="gate.operators.NothingToMutate",
+    )  # fmt: skip
+    ((_, row),) = sweep_status.status_rows(scan(tmp_path)).items()
+    assert (row.records, row.errored, row.noop) == (0, 0, 1)
 
 
 def test_status_tasks_filter_and_missing_directory(tmp_path, capsys):

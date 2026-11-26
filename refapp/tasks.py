@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
-from schemas.enums import Arm, BoundaryId, ConstraintId, Operator
+from nemogate.schemas.enums import Arm, BoundaryId, ConstraintId, Operator
 
 TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 

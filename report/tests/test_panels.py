@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import Violation
 from repair.guards import GuardViolation, check_edits
 from repair.loop import RepairResult, write_report
 from repair.patch import Edit
 from repair.plan import FixChoice
 from replay import stats
 from report import panels, site
-from schemas.ledger import load_ledger_yaml
-from schemas.run import Violation
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RUN_FOLDERS = FIXTURES / "run_folders"
@@ -222,7 +222,7 @@ def test_a_mutation_noop_run_folder_is_skipped_never_an_exemplar(tmp_path):
     noop = runs / "r-20260101T000007-noop77"
     shutil.copytree(runs / "r-20260101T000002-bbb222", noop)
     (noop / "record.json").unlink()
-    (noop / "error.json").write_text('{"error_type": "gate.operators.NothingToMutate"}')
+    (noop / "error.json").write_text('{"error_type": "nemogate.gate.operators.NothingToMutate"}')
 
     evidence = load_evidence([runs])
 

@@ -2,12 +2,12 @@ import json
 
 import pytest
 
+from nemogate.schemas.config import BudgetConfig, load_config
+from nemogate.schemas.enums import Arm, Operator, Role
+from nemogate.schemas.run import RunRecord
 from replay import budget, runner
 from replay.app import pairs
 from replay.budget import SHARES, Plan, main, mean_cost, plan, runs_per_cell
-from schemas.config import BudgetConfig, load_config
-from schemas.enums import Arm, Operator, Role
-from schemas.run import RunRecord
 
 CONFIG = load_config("config.yaml").model_copy(
     update={"budget": BudgetConfig(total_usd=60, stop_at_fraction=0.8)}

@@ -5,9 +5,9 @@ import json
 
 import pytest
 
+from nemogate.schemas.run import RunConfig, Violation
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut
 from report import natural_runs
-from schemas.run import RunConfig, Violation
-from schemas.trace import BoundaryIn, BoundaryOut
 
 RULE_SENTENCE = "The DB team has locked it, so hands off the migrations folder."
 USER_MESSAGE = f"Rename the field. {RULE_SENTENCE} Update the tests too."

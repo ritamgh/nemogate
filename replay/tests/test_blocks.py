@@ -7,10 +7,10 @@ says otherwise; the events carry the repo-relative paths the gate records.
 
 import pytest
 
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.trace import Approval, BoundaryIn, BoundaryOut, GateBlock, ToolCall
 from replay.blocks import run_blocks
-from schemas.enums import Arm, Operator
-from schemas.ledger import load_ledger_yaml
-from schemas.trace import Approval, BoundaryIn, BoundaryOut, GateBlock, ToolCall
 
 D = "delegation:planner->coder"
 R = "return:coder->planner"

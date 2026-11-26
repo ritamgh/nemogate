@@ -8,18 +8,18 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage
 
-from replay import carriage
-from replay.carriage import Label, anchors_of, classify
-from schemas.enums import Arm, Operator
-from schemas.ledger import (
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import (
     ApprovalBefore,
     FilesFrozen,
     OutputMustInclude,
     PathForbidden,
     ToolForbidden,
 )
-from schemas.run import RunConfig, Violation
-from schemas.trace import BoundaryIn, BoundaryOut, GateBlock, ToolCall
+from nemogate.schemas.run import RunConfig, Violation
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, GateBlock, ToolCall
+from replay import carriage
+from replay.carriage import Label, anchors_of, classify
 
 BOUNDARY = "delegation:planner->coder"
 USER_MESSAGE = "Add a priority field. Heads up: nothing under Migrations/ may be touched."

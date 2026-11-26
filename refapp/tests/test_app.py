@@ -14,7 +14,7 @@ from langgraph.config import get_config
 
 import refapp.sandbox
 import refapp.team
-from common.llm import get_model
+from nemogate.common.llm import get_model
 from refapp.app import APP, RefApp
 from refapp.tasks import load_tasks
 from replay.app import App

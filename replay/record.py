@@ -13,11 +13,11 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel
 
+from nemogate.schemas.config import AppConfig
+from nemogate.schemas.enums import Arm, Operator, Role
+from nemogate.schemas.ledger import Ledger
+from nemogate.schemas.run import RunConfig
 from replay.app import AppTask
-from schemas.config import AppConfig
-from schemas.enums import Arm, Operator, Role
-from schemas.ledger import Ledger
-from schemas.run import RunConfig
 
 ROOT = Path(__file__).resolve().parents[1]  # the checkout this code runs from
 

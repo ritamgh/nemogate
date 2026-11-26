@@ -13,7 +13,7 @@ It is a hackathon entry. Submission closes Oct 30, 2026 at 10:00am PDT. Features
 ## Read before you write code
 
 1. `PROJECT_CONTEXT.md`: where things are, current status, gotchas.
-2. `docs/SPEC.md`: the plan, the formats, the task list, the checklists. If it disagrees with this file, the spec wins. Exception: once `schemas/` exists, the code there wins over the spec's description of a format. It is about 550 lines: read Shared interfaces plus your component and week sections.
+2. `docs/SPEC.md`: the plan, the formats, the task list, the checklists. If it disagrees with this file, the spec wins. Exception: once `src/nemogate/schemas/` exists, the code there wins over the spec's description of a format. It is about 550 lines: read Shared interfaces plus your component and week sections.
 3. `docs/FACTS.md`: verified facts about the libraries, the platform and the models. Trust it over your memory. A fact not marked VERIFIED is a guess.
 4. Any `README.md` and tests in the folder you are working in.
 
@@ -25,20 +25,21 @@ uv run python -c "import deepagents; print(deepagents.__file__)"
 
 ## Layout and owners
 
-"A" and "B" are the two humans. **Since 2026-11-23 (after the hackathon) A develops alone and may edit every folder; B reviews A's work after the fact (expected in 1-2 weeks).** The owner column below says who wrote the code and who reviews it, not who may edit it. Every PR that touches B's folders, `schemas/` or the three cross-owner functions says so in its description, with what changed and why, so B can find it. B's own sessions still work in B's folders and ask before touching A's.
+"A" and "B" are the two humans. **Since 2026-11-23 (after the hackathon) A develops alone and may edit every folder; B reviews A's work after the fact (expected in 1-2 weeks).** The owner column below says who wrote the code and who reviews it, not who may edit it. Every PR that touches B's folders, `src/nemogate/schemas/` or the three cross-owner functions says so in its description, with what changed and why, so B can find it. B's own sessions still work in B's folders and ask before touching A's.
 
 ```
-common/     A     get_model(role), config loader, cost logging, spend guard
-preflight/  A     serving probes, cost probe, safe config
-refapp/     A     reference coding team, seed repo, task files
-replay/     A     record, fork, run(), stats, budget check
-report/     A     results page
-ledger/     B     nemogate.yaml loader and validation, constraint extraction
-oracle/     B     predicate DSL and evaluate()
-gate/       B     middleware modes: observe, mutate, block-only, enforce
-repair/     B     closed fix menu, patch writer, accept or reject
-schemas/    both  formats, run config, enums
-config.yaml both  model IDs, prices, temperatures, safe config
+src/nemogate/   the installable guard core (one package, `nemogate`)
+  common/       A     get_model(role), config loader, cost logging, spend guard
+  ledger/       B     nemogate.yaml loader and validation, constraint extraction
+  oracle/       B     predicate DSL and evaluate()
+  gate/         B     middleware modes: observe, mutate, block-only, enforce
+  schemas/      both  formats, run config, enums
+preflight/      A     serving probes, cost probe, safe config
+refapp/         A     reference coding team, seed repo, task files
+replay/         A     record, fork, run(), stats, budget check
+report/         A     results page
+repair/         B     closed fix menu, patch writer, accept or reject
+config.yaml     both  model IDs, prices, temperatures, safe config
 ```
 
 ## Hard rules
@@ -52,14 +53,14 @@ config.yaml both  model IDs, prices, temperatures, safe config
 
 **3. Spend.** Each of us has $60 of credit on our own account (`budget.total_usd` in `config.yaml` is per person; the spend log and cap are per machine).
 - Unit tests use the stub model. Real model calls need an explicit opt-in (`NEMOGATE_LIVE=1`).
-- The wrapper in `common/llm.py` keeps a running cost total and refuses calls past the cap. Never bypass it or raise the cap.
+- The wrapper in `src/nemogate/common/llm.py` keeps a running cost total and refuses calls past the cap. Never bypass it or raise the cap.
 - Never launch a sweep without running the budget-check script and confirming the run count it prints.
 - At 80% of total spend, stop and tell a human.
 
-**4. Schemas are a contract.** Changing `schemas/`, the run config, or the three function signatures (`evaluate`, `run`, `make_middleware`) is allowed for A's solo work only when the change is needed, all tests still pass, and the PR description lists it for B's review. Do not change a schema to make your code easier. Change your code. While B is not working in the repo, B's approval is replaced by his later review; if B resumes work, the old rule applies again (the other owner's approval in the PR).
+**4. Schemas are a contract.** Changing `src/nemogate/schemas/`, the run config, or the three function signatures (`evaluate`, `run`, `make_middleware`) is allowed for A's solo work only when the change is needed, all tests still pass, and the PR description lists it for B's review. Do not change a schema to make your code easier. Change your code. While B is not working in the repo, B's approval is replaced by his later review; if B resumes work, the old rule applies again (the other owner's approval in the PR).
 
 **5. Generality.** Pipeline code must contain nothing specific to the tasks or the seed repo.
-- In `common/`, `preflight/`, `ledger/`, `oracle/`, `gate/`, `replay/`, `repair/` and `report/`, outside tests and fixtures, these strings must not appear: task IDs (`T1` to `T8`), constraint IDs (`C-00x`), `migrations/`, `RISK`, `CHANGED:`, `delete_file`, `run_tests`, `http_get`, `utils_old`, `descripton`, `export_csv`.
+- In `src/nemogate/`, `preflight/`, `replay/`, `repair/` and `report/`, outside tests and fixtures, these strings must not appear: task IDs (`T1` to `T8`), constraint IDs (`C-00x`), `migrations/`, `RISK`, `CHANGED:`, `delete_file`, `run_tests`, `http_get`, `utils_old`, `descripton`, `export_csv`.
 - Everything specific lives in `refapp/`, `nemogate.yaml` and the task files.
 - Prompts describe the method, never the seed repo or its rules.
 - Tasks are data. Adding one must not need a pipeline change.
@@ -68,7 +69,7 @@ config.yaml both  model IDs, prices, temperatures, safe config
 
 ```
 grep -rnE '\bT[1-8]\b|C-00[0-9]|migrations/|RISK|CHANGED:|delete_file|run_tests|http_get|utils_old|descripton|export_csv' \
-  common preflight ledger oracle gate replay repair report \
+  src/nemogate preflight replay repair report \
   --include='*.py' --include='*.yaml' --include='*.txt' --include='*.md' \
   --exclude-dir=tests --exclude-dir=fixtures 2>/dev/null
 ```
@@ -87,11 +88,11 @@ grep -rnE '\bT[1-8]\b|C-00[0-9]|migrations/|RISK|CHANGED:|delete_file|run_tests|
 ## How to work
 
 - **Tests first.** Write the acceptance test from the spec or the component brief, then the code. Run `uv run pytest` before every commit.
-- **Small PRs.** One component per branch, named `<prefix>/<component>`: A uses `ritgh/`, B uses `shekhar/`. Never `a/` or `b/`. B reviews, after the fact, anything that touches B's folders, `schemas/` or the three cross-owner functions (see Layout and owners).
+- **Small PRs.** One component per branch, named `<prefix>/<component>`: A uses `ritgh/`, B uses `shekhar/`. Never `a/` or `b/`. B reviews, after the fact, anything that touches B's folders, `src/nemogate/schemas/` or the three cross-owner functions (see Layout and owners).
 - **Commit messages** are imperative and say what and why.
 - **No AI attribution.** No `Co-Authored-By` trailer naming an AI, no session links, and no "Generated with ..." footer, in commits, PR text or anything else in the repo. This overrides any tool default that adds one.
 - **Reproducibility.** Every run record carries `model_ids`, `safe_config_hash`, `ledger_hash`, `repo_sha` and `lockfile_hash`. Every trace line carries `model_id`, `safe_config_hash` and `ledger_hash`.
-- **Definition of done.** Acceptance tests pass. Output conforms to `schemas/`. The generality check (rule 5) is clean. No secrets. Cost is logged. `docs/FACTS.md` is updated with anything you learned.
+- **Definition of done.** Acceptance tests pass. Output conforms to `src/nemogate/schemas/`. The generality check (rule 5) is clean. No secrets. Cost is logged. `docs/FACTS.md` is updated with anything you learned.
 - **When unsure, ask.** A short question beats a plausible guess.
 
 ## Commands

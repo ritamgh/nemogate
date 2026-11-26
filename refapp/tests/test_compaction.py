@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 import refapp.app
-from common.llm import StubChatModel, get_model
+from nemogate.common.llm import StubChatModel, get_model
 from refapp.team import build_team
 from replay.carriage import compaction_evidence
 

@@ -24,7 +24,7 @@ one_line() { tr '\n' ' ' | sed 's/  */ /g; s/ $//'; }
 # --- Q1 ---------------------------------------------------------------------------------------
 q1_fail=""
 direct="ok"
-if ! uv run --python 3.11 pytest gate oracle schemas -q >"$LOG/direct.txt" 2>&1; then
+if ! uv run --python 3.11 pytest src/nemogate/gate src/nemogate/oracle src/nemogate/schemas -q >"$LOG/direct.txt" 2>&1; then
     direct="refused ($(grep -m1 '^error:' "$LOG/direct.txt" | cut -c1-220))"
 fi
 
@@ -39,9 +39,10 @@ if [ -z "$q1_fail" ]; then
 fi
 versions=""
 if [ -z "$q1_fail" ]; then
-    "$VENV/bin/python" -c '
+    PYTHONPATH=src "$VENV/bin/python" -c '
 import deepagents, langchain, langgraph  # noqa: F401
-import gate.middleware, oracle.evaluate, schemas.ledger, schemas.run, schemas.trace  # noqa: F401
+import nemogate.gate.middleware, nemogate.oracle.evaluate  # noqa: F401
+import nemogate.schemas.ledger, nemogate.schemas.run, nemogate.schemas.trace  # noqa: F401
 from importlib.metadata import version
 print(" ".join(f"{n} {version(n)}" for n in ("deepagents", "langgraph", "langchain")))
 ' >"$LOG/imports.txt" 2>&1 || q1_fail="import: $(tail -1 "$LOG/imports.txt" | cut -c1-200)"
@@ -49,7 +50,7 @@ print(" ".join(f"{n} {version(n)}" for n in ("deepagents", "langgraph", "langcha
 fi
 tests=""
 if [ -z "$q1_fail" ]; then
-    if "$VENV/bin/python" -m pytest gate oracle schemas -q -p no:cacheprovider >"$LOG/pytest.txt" 2>&1; then
+    if "$VENV/bin/python" -m pytest src/nemogate/gate src/nemogate/oracle src/nemogate/schemas -q -p no:cacheprovider >"$LOG/pytest.txt" 2>&1; then
         tests="$(tail -1 "$LOG/pytest.txt")"
     else
         q1_fail="pytest: $(tail -1 "$LOG/pytest.txt"); $(grep '^FAILED\|^ERROR' "$LOG/pytest.txt" | head -5 | cut -c1-120 | one_line)"

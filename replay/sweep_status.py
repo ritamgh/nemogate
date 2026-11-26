@@ -22,10 +22,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.run import RunRecord
 from replay.app import pairs
 from replay.noop import is_noop_error, text_noop
-from schemas.enums import Arm, Operator
-from schemas.run import RunRecord
 
 REPRODUCIBILITY_FIELDS = (
     "model_ids",

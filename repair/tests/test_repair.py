@@ -12,7 +12,8 @@ import pytest
 import yaml
 from langchain_core.messages import AIMessage
 
-from common.llm import get_model
+from nemogate.common.llm import get_model
+from nemogate.schemas.run import RunRecord
 from repair.__main__ import main
 from repair.evidence import Evidence, load_evidence
 from repair.guards import (
@@ -44,7 +45,6 @@ from repair.patch import (
 from repair.plan import PLAN_PROMPT, BudgetExceeded, CallBudget, FixChoice, choose_fix
 from repair.worktree import WorktreeRerun
 from report.panels import JUDGED_RE, load_repairs
-from schemas.run import RunRecord
 
 STAMP = {
     "arm": "mutated",

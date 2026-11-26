@@ -15,11 +15,11 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from langgraph.errors import GraphRecursionError
 
-from common.llm import StubChatModel, get_model
+from nemogate.common.llm import StubChatModel, get_model
+from nemogate.schemas.enums import Arm, Operator
 from replay.runner import SUBAGENT_STEP_LIMIT, Runner
 from replay.step_cap import StepCap, StepLimitReached
 from replay.tests.test_runner import FakeApp, Harness
-from schemas.enums import Arm, Operator
 
 HARD_STOP = 300  # model calls: far above any limit the tests set, so a miss fails, never hangs
 LIMIT = 40  # supersteps; the looping subagent makes two per model call
@@ -254,14 +254,14 @@ def test_the_cap_ends_a_run_through_the_real_gate_and_recorder(tmp_path):
 
     from deepagents.backends import LocalShellBackend
 
-    from common.env import REPO_ROOT
-    from gate import build_middleware
-    from gate.tests.stubs import picks
-    from ledger import load_ledger
-    from oracle import evaluate
+    from nemogate.common.env import REPO_ROOT
+    from nemogate.gate import build_middleware
+    from nemogate.gate.tests.stubs import picks
+    from nemogate.ledger import load_ledger
+    from nemogate.oracle import evaluate
+    from nemogate.schemas.config import load_config
     from refapp.team import build_team
     from replay.tests.test_noop_guard import BASE, FINAL, WITH_RULE, FakeClient, Task
-    from schemas.config import load_config
 
     class WriteForever(LoopingModel):
         def _generate(self, messages, stop=None, run_manager=None, **kwargs):

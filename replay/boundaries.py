@@ -13,7 +13,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from pydantic import BaseModel, PositiveInt, SerializerFunctionWrapHandler, model_serializer
 
-from schemas.enums import STRICT, BoundaryId, NonEmptyStr
+from nemogate.schemas.enums import STRICT, BoundaryId, NonEmptyStr
 
 TASK_TOOL = "task"  # Deep Agents' delegation tool (docs/FACTS.md section 4)
 _AGENT = re.compile(r"[A-Za-z0-9_-]+")  # an agent name a boundary id can hold

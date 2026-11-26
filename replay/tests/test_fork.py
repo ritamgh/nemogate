@@ -23,17 +23,14 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
-from common.llm import get_model
-from gate import NothingToMutate, build_middleware
-from gate.tests.stubs import picks
-from oracle import evaluate
-from replay.boundaries import Recording
-from replay.carriage import classify_folder
-from replay.runner import Runner
-from schemas.config import load_config
-from schemas.enums import Arm, Operator
-from schemas.ledger import (
+from nemogate.common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
+from nemogate.common.llm import get_model
+from nemogate.gate import NothingToMutate, build_middleware
+from nemogate.gate.tests.stubs import picks
+from nemogate.oracle import evaluate
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import (
     AppInfo,
     ApprovalBefore,
     Constraint,
@@ -42,8 +39,11 @@ from schemas.ledger import (
     PathForbidden,
     ToolForbidden,
 )
-from schemas.run import RunRecord, is_comparable
-from schemas.trace import BoundaryIn, BoundaryOut, ToolCall, parse_trace_jsonl
+from nemogate.schemas.run import RunRecord, is_comparable
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, ToolCall, parse_trace_jsonl
+from replay.boundaries import Recording
+from replay.carriage import classify_folder
+from replay.runner import Runner
 
 REPO = "/repo"
 TARGET = "delegation:planner->coder"
@@ -1078,7 +1078,7 @@ def test_a_helper_that_cannot_answer_leaves_the_cut_where_it_was_asked(tmp_path)
 def test_the_spend_cap_while_choosing_the_cut_stops_the_fork(tmp_path):
     """Catches the cut search swallowing the spend cap (AGENTS.md rule 3: stop and tell a human)
     as it falls back on any other helper failure."""
-    from common import SpendCapReached
+    from nemogate.common import SpendCapReached
 
     class Capped:
         def with_structured_output(self, schema):

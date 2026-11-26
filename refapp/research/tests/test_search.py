@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from tavily.errors import InvalidAPIKeyError, UsageLimitExceededError
 
-from common import env
+from nemogate.common import env
 from refapp.research import search
 from refapp.research.search import CachedSearch, cache_key, make_search_tool
 

@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from oracle import evaluate
+from nemogate.oracle import evaluate
+from nemogate.schemas.enums import Arm, FsOp, Operator
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import FsChange
+from nemogate.schemas.trace import Approval, ToolCall
 from refapp.seedenv import materialize, run_seed_python, task_success
 from refapp.tasks import TASKS_DIR, load_task
-from schemas.enums import Arm, FsOp, Operator
-from schemas.ledger import load_ledger_yaml
-from schemas.run import FsChange
-from schemas.trace import Approval, ToolCall
 
 ROOT = Path(__file__).resolve().parents[2]
 T3, T10 = TASKS_DIR / "T3", TASKS_DIR / "T10"

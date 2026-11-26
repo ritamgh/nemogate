@@ -12,13 +12,13 @@ import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage, HumanMessage
 
-from common.llm import get_model
-from gate import build_middleware
-from ledger import load_ledger, scope_to
-from oracle import evaluate
+from nemogate.common.llm import get_model
+from nemogate.gate import build_middleware
+from nemogate.ledger import load_ledger, scope_to
+from nemogate.oracle import evaluate
+from nemogate.schemas.run import RunConfig
+from nemogate.schemas.trace import Approval, FinalOutput, ToolCall, ToolResult, parse_trace_jsonl
 from refapp.team import build_team
-from schemas.run import RunConfig
-from schemas.trace import Approval, FinalOutput, ToolCall, ToolResult, parse_trace_jsonl
 
 ROOT = Path(__file__).resolve().parents[2]
 PENDING = "Request recorded. Status: pending. No one has approved it."

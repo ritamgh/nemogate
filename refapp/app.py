@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 
-from common.env import compaction_from_env
+from nemogate.common.env import compaction_from_env
 from refapp import sandbox
 from refapp.tasks import Task, load_tasks
 from refapp.team import build_team

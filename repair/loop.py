@@ -15,12 +15,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from nemogate.schemas.run import RunRecord
 from repair.evidence import Evidence
 from repair.guards import GuardViolation, check_append_only, check_edits
 from repair.menu import get_fix
 from repair.patch import Edit, Patch, apply_edits, unified_diff, write_patch
 from repair.plan import CallBudget, FixChoice, choose_fix
-from schemas.run import RunRecord
 
 # Fewest runs on each side before a verdict: one clean patched run must not beat a noisy
 # baseline.

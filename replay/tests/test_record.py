@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Arm, Authority, Operator, Role
+from nemogate.schemas.ledger import Constraint, Ledger, ToolForbidden, load_ledger_yaml
+from nemogate.schemas.run import FsChange, RunConfig
 from replay import record
-from schemas.config import load_config
-from schemas.enums import Arm, Authority, Operator, Role
-from schemas.ledger import Constraint, Ledger, ToolForbidden, load_ledger_yaml
-from schemas.run import FsChange, RunConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

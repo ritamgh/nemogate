@@ -1,7 +1,7 @@
 """Extraction-recall cases for the reference app, built from the task files and the ledger.
 
     uv run python -m refapp.recall_cases --out runs/recall/reference.yaml
-    NEMOGATE_LIVE=1 uv run python -m ledger.recall --cases runs/recall/reference.yaml --reps 3
+    NEMOGATE_LIVE=1 python -m nemogate.ledger.recall --cases runs/recall/reference.yaml --reps 3
 
 One case per task in refapp/tasks/: the task's user message, expecting the check its target
 constraint has in nemogate.yaml. Built, not copied, so the cases can never drift from the tasks.
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from ledger import load_ledger
+from nemogate.ledger import load_ledger
 from refapp.tasks import load_tasks
 from refapp.team import AGENTS
 from refapp.tools import make_tools

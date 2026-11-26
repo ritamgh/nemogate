@@ -9,9 +9,9 @@ from uuid import UUID
 
 import pytest
 
+from nemogate.schemas.run import FsChange
 from replay import fsdiff
 from replay.fsdiff import SCRIPT, diff, snapshot
-from schemas.run import FsChange
 
 IMAGE_UUID = "11111111-2222-3333-4444-555555555555"
 
