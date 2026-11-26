@@ -15,18 +15,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from nemogate.repair.evidence import Evidence
+from nemogate.repair.guards import GuardViolation, check_append_only, check_edits
+from nemogate.repair.menu import get_fix
+from nemogate.repair.patch import Edit, Patch, apply_edits, unified_diff, write_patch
+from nemogate.repair.plan import CallBudget, FixChoice, choose_fix
 from nemogate.schemas.run import RunRecord
-from repair.evidence import Evidence
-from repair.guards import GuardViolation, check_append_only, check_edits
-from repair.menu import get_fix
-from repair.patch import Edit, Patch, apply_edits, unified_diff, write_patch
-from repair.plan import CallBudget, FixChoice, choose_fix
 
 # Fewest runs on each side before a verdict: one clean patched run must not beat a noisy
 # baseline.
 MIN_RUNS = 3
 # Super writes the patch at most this often: once, and once more told why the guards refused it.
-# Ultra's 3-call limit is separate (repair/plan.py).
+# Ultra's 3-call limit is separate (src/nemogate/repair/plan.py).
 MAX_WRITE_TRIES = 2
 
 

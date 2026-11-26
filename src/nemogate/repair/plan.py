@@ -5,8 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from repair.evidence import Evidence
-from repair.menu import MENU, FixId, get_fix
+from nemogate.repair.evidence import Evidence
+from nemogate.repair.menu import MENU, FixId, get_fix
 
 MAX_ULTRA_CALLS = 3  # SPEC Budget rules: "Ultra: repair planning, at most 3 calls per iteration"
 

@@ -1,6 +1,6 @@
-"""`python -m repair`: one repair iteration on a lost rule, from existing run folders.
+"""`python -m nemogate.repair`: one repair iteration on a lost rule, from existing run folders.
 
-    NEMOGATE_LIVE=1 uv run python -m repair --runs runs --constraint <id> --task <id> \
+    NEMOGATE_LIVE=1 uv run python -m nemogate.repair --runs runs --constraint <id> --task <id> \
         --editable <file> [<file> ...] --agents a,b,c --n N [--yes]
 
 Spends credit (Ultra and Super calls, then N re-runs on the patched commit), so it refuses
@@ -29,12 +29,12 @@ from typing import Any
 from nemogate.common.env import REPO_ROOT, is_live
 from nemogate.common.spend import total_spent
 from nemogate.proof.budget import mean_cost, plan
+from nemogate.repair.evidence import load_evidence, load_records
+from nemogate.repair.guards import GuardViolation, check_editable
+from nemogate.repair.loop import MIN_RUNS, RepairResult, repair_once, stopped_result, write_report
+from nemogate.repair.worktree import WorktreeRerun
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator, Role
-from repair.evidence import load_evidence, load_records
-from repair.guards import GuardViolation, check_editable
-from repair.loop import MIN_RUNS, RepairResult, repair_once, stopped_result, write_report
-from repair.worktree import WorktreeRerun
 
 NOT_JUDGED = 3  # exit status of a round that did not finish
 
@@ -70,7 +70,7 @@ def main(
     writer_model: Any = None,
     rerun: Any = None,
 ) -> int:
-    parser = argparse.ArgumentParser(prog="python -m repair", description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m nemogate.repair", description=__doc__)
     parser.add_argument("--runs", required=True, type=Path, help="folder of run folders")
     parser.add_argument("--constraint", required=True, help="the lost rule's id")
     parser.add_argument("--task", required=True, help="task id to re-run")

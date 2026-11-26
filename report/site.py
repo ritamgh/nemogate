@@ -3044,7 +3044,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--repair",
         type=Path,
         metavar="DIR",
-        help="the folder python -m repair wrote: adds the patch",
+        help="the folder python -m nemogate.repair wrote: adds the patch",
     )
     parser.add_argument(
         "--recall",

@@ -3,8 +3,8 @@ the coverage of the ledger. Pure local; no model call, no network.
 
 Inputs are files the pipeline already writes: run folders (`run_config.json`, `record.json`,
 `violations.json`, `trace.jsonl`, and for a fork `fork.json` + `prefix.jsonl`), the folder
-`python -m repair` writes (`repair-<fix>.md` + `repair-<fix>.patch`), and `results.json` with the
-ledger. Everything that came from a model or a trace goes through `html.escape`.
+`python -m nemogate.repair` writes (`repair-<fix>.md` + `repair-<fix>.patch`), and `results.json`
+with the ledger. Everything that came from a model or a trace goes through `html.escape`.
 """
 
 import difflib
@@ -471,7 +471,7 @@ def result_of(lines: list[str]) -> tuple[str, bool] | None:
 
 
 def load_repairs(directory: Path) -> list[RepairView]:
-    """Each `repair-*.md` summary `repair.loop.write_report` wrote, with the diff beside it."""
+    """Each `repair-*.md` summary `nemogate.repair.loop.write_report` wrote, with its diff."""
     if not directory.is_dir():
         raise FileNotFoundError(f"repair folder {directory} does not exist")
     repairs = []
@@ -576,8 +576,8 @@ def render_patch_panel(repairs: list[RepairView] | None) -> str:
     if repairs is None:
         return (
             f'{head}<div class="empty"><strong>No repair run yet.</strong> Pass '
-            "<code>--repair DIR</code>, the folder <code>python -m repair</code> wrote, to show "
-            "the proposed patch and the verdict.</div></section>"
+            "<code>--repair DIR</code>, the folder <code>python -m nemogate.repair</code> wrote, "
+            "to show the proposed patch and the verdict.</div></section>"
         )
     if not repairs:
         return (
