@@ -12,12 +12,12 @@ from pathlib import Path
 import pytest
 
 from nemogate.proof import stats
+from nemogate.repair.guards import GuardViolation, check_edits
+from nemogate.repair.loop import RepairResult, write_report
+from nemogate.repair.patch import Edit
+from nemogate.repair.plan import FixChoice
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.run import Violation
-from repair.guards import GuardViolation, check_edits
-from repair.loop import RepairResult, write_report
-from repair.patch import Edit
-from repair.plan import FixChoice
 from report import panels, site
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -521,8 +521,8 @@ def test_an_empty_repair_dir_is_not_the_same_as_no_repair_dir(tmp_path):
 
 
 def test_the_panel_reads_what_the_repair_writer_writes(tmp_path):
-    # Breaks if repair.loop.write_report changes its summary lines and the panel stops parsing
-    # them: a rejected, guard-refused result must come out rejected with no diff.
+    # Breaks if nemogate.repair.loop.write_report changes its summary lines and the panel stops
+    # parsing them: a rejected, guard-refused result must come out rejected with no diff.
     result = RepairResult(
         accepted=False,
         reason="guard: edit adds nothing",

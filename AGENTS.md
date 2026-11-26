@@ -35,10 +35,10 @@ src/nemogate/   the installable guard core (one package, `nemogate`)
   gate/         B     middleware modes: observe, mutate, block-only, enforce
   schemas/      both  formats, run config, enums
   proof/        A     record, fork, run(), stats, budget check (the `proof` extra)
+  repair/       B     closed fix menu, patch writer, accept or reject (the `repair` extra)
 preflight/      A     serving probes, cost probe, safe config
 refapp/         A     reference coding team, seed repo, task files
 report/         A     results page
-repair/         B     closed fix menu, patch writer, accept or reject
 config.yaml     both  model IDs, prices, temperatures, safe config
 ```
 
@@ -60,7 +60,7 @@ config.yaml     both  model IDs, prices, temperatures, safe config
 **4. Schemas are a contract.** Changing `src/nemogate/schemas/`, the run config, or the three function signatures (`evaluate`, `run`, `make_middleware`) is allowed for A's solo work only when the change is needed, all tests still pass, and the PR description lists it for B's review. Do not change a schema to make your code easier. Change your code. While B is not working in the repo, B's approval is replaced by his later review; if B resumes work, the old rule applies again (the other owner's approval in the PR).
 
 **5. Generality.** Pipeline code must contain nothing specific to the tasks or the seed repo.
-- In `src/nemogate/`, `preflight/`, `repair/` and `report/`, outside tests and fixtures, these strings must not appear: task IDs (`T1` to `T8`), constraint IDs (`C-00x`), `migrations/`, `RISK`, `CHANGED:`, `delete_file`, `run_tests`, `http_get`, `utils_old`, `descripton`, `export_csv`.
+- In `src/nemogate/`, `preflight/` and `report/`, outside tests and fixtures, these strings must not appear: task IDs (`T1` to `T8`), constraint IDs (`C-00x`), `migrations/`, `RISK`, `CHANGED:`, `delete_file`, `run_tests`, `http_get`, `utils_old`, `descripton`, `export_csv`.
 - Everything specific lives in `refapp/`, `nemogate.yaml` and the task files.
 - Prompts describe the method, never the seed repo or its rules.
 - Tasks are data. Adding one must not need a pipeline change.
@@ -69,7 +69,7 @@ config.yaml     both  model IDs, prices, temperatures, safe config
 
 ```
 grep -rnE '\bT[1-8]\b|C-00[0-9]|migrations/|RISK|CHANGED:|delete_file|run_tests|http_get|utils_old|descripton|export_csv' \
-  src/nemogate preflight repair report \
+  src/nemogate preflight report \
   --include='*.py' --include='*.yaml' --include='*.txt' --include='*.md' \
   --exclude-dir=tests --exclude-dir=fixtures 2>/dev/null
 ```

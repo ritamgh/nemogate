@@ -172,7 +172,7 @@ What it shows:
   The gate blocks a tool call that breaks a rule checkable before the call (path, tool and
   approval rules), whatever the cause, and gated also holds back a reply that misses an output
   rule (`gate/policy.py`, `gate/middleware.py`); repair targets rules lost in the handoff
-  (`repair/menu.py`); rules checked on the filesystem diff are graded after the run and not
+  (`src/nemogate/repair/menu.py`); rules checked on the filesystem diff are graded after the run and not
   blocked (docs/SPEC.md, predicate table). A fourth line says that for a path, tool or approval
   rule a 0 broken in the block-only and gated arms comes from blocking (the gate refuses with the
   check that grades the run, so both get it by construction), that for other rules a 0 is a
@@ -316,7 +316,7 @@ outcome-first section is tested in `test_site_outcome_first.py`.
   `output_must_include` rule, where it means the graded agent's reply never arrived (none sent,
   or the gate withheld every one) and the page says that.
   The comparison side says "No such call" when it never made the call. Trace text is escaped.
-- **Repair patch** (`--repair`, the folder `python -m repair` writes): reads `repair-*.md` and the
+- **Repair patch** (`--repair`, the folder `python -m nemogate.repair` writes): reads `repair-*.md` and the
   `.patch` beside it, one block per summary in file-name order (a folder can hold several rounds:
   the verdict, the reason a refused patch was refused, the judged numbers and the diff each
   show). Without `--repair` it says "No repair run yet". `repair` writes no

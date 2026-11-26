@@ -10,7 +10,7 @@ and an append-only ledger.
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import PurePosixPath
 
-from repair.patch import Edit
+from nemogate.repair.patch import Edit
 
 MAX_ADDED_TOKENS = 400
 CHARS_PER_TOKEN = 4  # the same deliberately rough ratio family as common/llm.py's estimate

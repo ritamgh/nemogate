@@ -7,8 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from repair.evidence import Evidence
-from repair.menu import Fix
+from nemogate.repair.evidence import Evidence
+from nemogate.repair.menu import Fix
 
 WRITE_PROMPT = """\
 You change the instructions of a team of AI agents to apply one fix.

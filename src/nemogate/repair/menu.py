@@ -1,7 +1,7 @@
 """The closed fix menu (SPEC C5 guard): the only kinds of change the repair agent may make.
 
 Each fix changes an agent's instructions; none removes anything (patches are insert-only, see
-repair/guards.py), and none names a task, a rule or an app.
+src/nemogate/repair/guards.py), and none names a task, a rule or an app.
 """
 
 from dataclasses import dataclass

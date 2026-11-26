@@ -163,7 +163,7 @@ use:** NeMo Guardrails and the NeMo Agent Toolkit. We read their documentation t
    its edit quoted a line with the wrong quotes and backslash (0 occurrences), and our guard refused
    it twice. The second round inserted text after a backslash line-continuation, so the patched prompt
    read "...for the user.Copy every rule...". Our fixes: show the model the real lines on retry, and
-   reject an insert that runs into its neighbour (`repair/guards.py`). Exact string copying is where
+   reject an insert that runs into its neighbour (`src/nemogate/repair/guards.py`). Exact string copying is where
    we saw it fail.
 3. **Tool-call-as-text did not occur.** We were looking for the failure class behind NeMo Agent Toolkit
    issue 2274 and found none (0 in 1,474 messages). We report it because it is a result: the failure

@@ -6,19 +6,21 @@ import sys
 SCRIPT = """
 import sys
 import nemogate
+import nemogate.gate
 from nemogate import Guard
 heavy = [
     name for name in sys.modules
     if name.split(".")[0] in {"contree", "contree_sdk", "aiosqlite"}
-    or name.startswith(("langgraph.checkpoint.sqlite", "nemogate.proof"))
+    or name.startswith(("langgraph.checkpoint.sqlite", "nemogate.proof", "nemogate.repair"))
 ]
 print(sorted(heavy))
 """
 
 
-def test_importing_the_guard_loads_neither_the_proof_package_nor_its_extra():
+def test_importing_the_guard_loads_neither_the_proof_nor_the_repair_package_nor_the_extra():
     # Breaks if nemogate/__init__ or nemogate.gate (or anything they import) pulls in
-    # nemogate.proof, contree_sdk or the sqlite checkpointer: a core install would fail on import.
+    # nemogate.proof, nemogate.repair, contree_sdk or the sqlite checkpointer: a core install
+    # would fail on import.
     # A fresh interpreter, so modules other tests loaded do not hide it; -I keeps the checkout's
     # current directory off sys.path.
     done = subprocess.run(

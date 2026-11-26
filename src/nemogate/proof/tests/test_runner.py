@@ -1175,11 +1175,11 @@ def test_cli_runs_each_arm_from_its_own_recording_unless_asked_to_pair(monkeypat
 
 
 def test_the_repair_loops_command_line_still_runs_independent_arms(tmp_path, monkeypatch, capsys):
-    """Catches the runner's default changing under repair.worktree, which pools every
+    """Catches the runner's default changing under nemogate.repair.worktree, which pools every
     record.json of its re-run: natural sources in there would dilute the arm being repaired and
     double the spend the repair CLI priced."""
-    from repair.patch import Patch
-    from repair.worktree import WorktreeRerun
+    from nemogate.repair.patch import Patch
+    from nemogate.repair.worktree import WorktreeRerun
 
     repo = tmp_path / "repo"
     repo.mkdir()

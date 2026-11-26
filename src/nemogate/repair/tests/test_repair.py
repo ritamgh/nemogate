@@ -13,17 +13,17 @@ import yaml
 from langchain_core.messages import AIMessage
 
 from nemogate.common.llm import get_model
-from nemogate.schemas.run import RunRecord
-from repair.__main__ import main
-from repair.evidence import Evidence, load_evidence
-from repair.guards import (
+from nemogate.repair.__main__ import main
+from nemogate.repair.evidence import Evidence, load_evidence
+from nemogate.repair.guards import (
     MAX_ADDED_TOKENS,
     GuardViolation,
     check_append_only,
     check_editable,
     check_edits,
+    protected_reason,
 )
-from repair.loop import (
+from nemogate.repair.loop import (
     PENDING_REASON,
     Rates,
     pending_result,
@@ -32,8 +32,8 @@ from repair.loop import (
     stopped_result,
     write_report,
 )
-from repair.menu import MENU, get_fix
-from repair.patch import (
+from nemogate.repair.menu import MENU, get_fix
+from nemogate.repair.patch import (
     WRITE_PROMPT,
     Edit,
     Patch,
@@ -42,8 +42,9 @@ from repair.patch import (
     unified_diff,
     write_patch,
 )
-from repair.plan import PLAN_PROMPT, BudgetExceeded, CallBudget, FixChoice, choose_fix
-from repair.worktree import WorktreeRerun
+from nemogate.repair.plan import PLAN_PROMPT, BudgetExceeded, CallBudget, FixChoice, choose_fix
+from nemogate.repair.worktree import WorktreeRerun
+from nemogate.schemas.run import RunRecord
 from report.panels import JUDGED_RE, load_repairs
 
 STAMP = {
@@ -264,6 +265,27 @@ def test_protected_paths_can_never_be_edited(path):
         check_edits([bad], files)
     with pytest.raises(GuardViolation, match="protected"):
         check_editable([path])
+
+
+def test_the_packages_own_folders_stay_protected_under_src_nemogate():
+    # Breaks if the guard stops matching folder names as path components (say, by comparing only
+    # the first component): after the move into src/nemogate/, the agent could edit the ledger
+    # loader, the oracle or its own guards.
+    inside = [
+        "src/nemogate/gate/middleware.py",
+        "src/nemogate/oracle/evaluate.py",
+        "src/nemogate/ledger/x.py",
+        "src/nemogate/schemas/x.py",
+        "src/nemogate/proof/x.py",
+        "src/nemogate/repair/x.py",
+        "src/nemogate/common/x.py",
+    ]
+    reasons = {path: protected_reason(path) for path in inside + ["app/notes.md", "app/team.py"]}
+    assert reasons == {
+        **dict.fromkeys(inside, "pipeline, test, task, docs or CI folder"),
+        "app/notes.md": None,
+        "app/team.py": None,
+    }
 
 
 def test_app_prompt_files_are_editable():
@@ -745,7 +767,7 @@ def test_worktree_rerun_refuses_paths_outside_the_worktree(tmp_path, path):
 
 
 def test_baseline_records_filter_to_one_arm_and_operator(tmp_path):
-    from repair.evidence import load_records
+    from nemogate.repair.evidence import load_records
 
     run_folder(tmp_path, "r-1", violated=True)
     data = {**record("r-2", False).model_dump(mode="json"), "arm": "natural", "operator": "none"}
@@ -890,8 +912,9 @@ def test_the_write_prompt_asks_for_a_separated_addition():
 
 # ---- a round that does not finish still leaves a summary -------------------------------------
 #
-# Live repair round 2 (A, 2026-10-19): the worker's timeout killed `python -m repair` after 18 of
-# its 20 re-runs, and because the summary was written only after the re-runs, there was none.
+# Live repair round 2 (A, 2026-10-19): the worker's timeout killed `python -m nemogate.repair`
+# after 18 of its 20 re-runs, and because the summary was written only after the re-runs, there
+# was none.
 
 
 class StoppingRerun(FakeRerun):
@@ -1189,7 +1212,7 @@ def alive(pid: int) -> bool:
 
 
 def test_a_stopped_runner_is_asked_to_stop_not_killed(tmp_path):
-    from repair.worktree import _default_run
+    from nemogate.repair.worktree import _default_run
 
     marker, ready = tmp_path / "marker", tmp_path / "ready"
     cmd = [sys.executable, "-c", CHILD, str(marker), str(ready), "graceful"]
@@ -1202,7 +1225,7 @@ def test_a_stopped_runner_is_asked_to_stop_not_killed(tmp_path):
 
 
 def test_a_runner_that_ignores_the_request_is_killed_after_the_grace_period(tmp_path, monkeypatch):
-    import repair.worktree as worktree
+    import nemogate.repair.worktree as worktree
 
     monkeypatch.setattr(worktree, "STOP_GRACE_SECONDS", 0.5)
     ready = tmp_path / "ready"
@@ -1222,7 +1245,7 @@ sys.exit(subprocess.run([sys.executable, "-c", sys.argv[1], *sys.argv[2:]]).retu
 
 def test_the_kill_after_the_grace_period_reaches_the_runner_behind_a_wrapper(tmp_path, monkeypatch):
     # `uv run` -> python: killing only the process we started leaves the python child alive.
-    import repair.worktree as worktree
+    import nemogate.repair.worktree as worktree
 
     monkeypatch.setattr(worktree, "STOP_GRACE_SECONDS", 0.5)
     ready = tmp_path / "ready"
@@ -1244,7 +1267,7 @@ def test_the_kill_after_the_grace_period_reaches_the_runner_behind_a_wrapper(tmp
 
 
 def test_the_default_runner_raises_with_the_exit_status_of_a_failed_runner(tmp_path):
-    from repair.worktree import _default_run
+    from nemogate.repair.worktree import _default_run
 
     _default_run([sys.executable, "-c", "pass"], tmp_path, dict(os.environ))
     with pytest.raises(subprocess.CalledProcessError) as caught:
@@ -1298,7 +1321,7 @@ def test_the_cli_records_the_worktree_in_the_summary_as_soon_as_it_exists(
 ):
     # If the process is killed outright nothing runs after that, so the summary written before
     # the re-runs must already say where the re-run records will be.
-    import repair.__main__ as cli
+    import nemogate.repair.__main__ as cli
 
     seen = {}
 
@@ -1321,7 +1344,7 @@ def test_the_cli_records_the_worktree_in_the_summary_as_soon_as_it_exists(
 
 
 def test_a_second_ctrl_c_while_the_runner_winds_down_kills_it_at_once():
-    from repair.worktree import _stop
+    from nemogate.repair.worktree import _stop
 
     class Runner:
         pid = 2**31 - 1  # no process has this as its parent, so nothing below it gets killed
