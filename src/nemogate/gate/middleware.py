@@ -451,21 +451,40 @@ def glob_may_match_below(glob: str, target: str) -> bool:
             return fnmatch.fnmatchcase(parts[i], segment) and walk(i + 1, j + 1)
         literal = re.split(r"[*?\[]", segment, maxsplit=1)[0]
         if not parts[i].startswith(literal):
-            return False
-        return (fnmatch.fnmatchcase(parts[i], segment) and walk(i + 1, j + 1)) or walk(i + 1, j)
+            return False  # only the part a * segment starts on must repeat its literal prefix
+        return (fnmatch.fnmatchcase(parts[i], segment) and walk(i + 1, j + 1)) or crossing(i + 1, j)
+
+    @functools.cache
+    def crossing(i: int, j: int) -> bool:
+        """The * of segment j has taken the parts before i, and may take part i too or end on it
+        (whatever it ends with: this only ever over-blocks)."""
+        if i == len(parts):
+            return True
+        return walk(i + 1, j + 1) or crossing(i + 1, j)
 
     return walk(0, 0)
 
 
-def _deletes_protected_parent(check: PathForbidden, calls: list[ToolCall]) -> bool:
-    """True if a delete in `calls` removes a folder that holds what `check` protects."""
+def _holds_root(path: str, root: str | None) -> bool:
+    """True if the absolute `path` is the working root or one of its ancestors ("/" included)."""
+    real_root = os.path.realpath(root if root is not None else os.getcwd())
+    return path == "/" or real_root == path or real_root.startswith(path.rstrip("/") + "/")
+
+
+def _deletes_protected_parent(
+    check: PathForbidden, calls: list[ToolCall], root: str | None
+) -> bool:
+    """True if a delete in `calls` removes a folder that holds what `check` protects. An absolute
+    path above the root holds the whole root, so it is read as the root itself."""
     if "delete" not in check.ops:
         return False
     for call in calls:
         path = call.args.get(PATH_ARG)
         if FILE_OPS.get(call.tool) != "delete" or not isinstance(path, str):
             continue
-        if path.startswith("/") or path == ".." or path.startswith("../"):
+        if path.startswith("/") and _holds_root(path, root):
+            path = "."
+        elif path.startswith("/") or path == ".." or path.startswith("../"):
             continue  # outside the repo; the virtual reading of the same call is checked too
         if glob_may_match_below(check.glob, path):
             return True
@@ -661,7 +680,10 @@ class GuardMiddleware(AgentMiddleware):
             unreadable = problem is not None and isinstance(check, PathForbidden)
             if (
                 any(blocking_constraint(single, prior, call) is not None for call in calls)
-                or (isinstance(check, PathForbidden) and _deletes_protected_parent(check, calls))
+                or (
+                    isinstance(check, PathForbidden)
+                    and _deletes_protected_parent(check, calls, self._ledger.app.repo_root)
+                )
                 or (unreadable and problem[0] in check.ops)
             ):
                 hit.append(rule)
