@@ -31,8 +31,8 @@ import logging
 import os
 import posixpath
 import re
-import string
 import threading
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -49,7 +49,7 @@ from nemogate.gate.state import GuardState
 from nemogate.gate.text import message_text as _text
 from nemogate.gate.trace import TraceWriter
 from nemogate.oracle.evaluate import FILE_OPS, arg_bound_problem
-from nemogate.oracle.paths import PATH_ARG, repo_relative
+from nemogate.oracle.paths import PATH_ARG, glob_matches, repo_relative
 from nemogate.schemas.ledger import (
     ApprovalBefore,
     Constraint,
@@ -418,6 +418,7 @@ def virtual_path(path: str) -> str:
 
 
 MAX_PATH_SEGMENTS = 256  # a longer path is blocked: fail closed, and the glob walk stays cheap
+MAX_PATH_CHARS = 4096  # so is a longer string: checked before any path work, which is not free
 
 
 def _segment_count(path: str) -> int:
@@ -471,6 +472,16 @@ def _holds_root(path: str, root: str | None) -> bool:
     return path == "/" or real_root == path or real_root.startswith(path.rstrip("/") + "/")
 
 
+def _is_plain_file(path: str, root: str | None) -> bool:
+    """True if the repo-relative `path` exists and is not a folder. One that does not exist is
+    False: it may be created, or may be a folder by the time the delete runs."""
+    full = os.path.join(os.path.realpath(root if root is not None else os.getcwd()), path)
+    try:
+        return os.path.exists(full) and not os.path.isdir(full)
+    except (OSError, ValueError):
+        return False
+
+
 def _deletes_protected_parent(
     check: PathForbidden, calls: list[ToolCall], root: str | None
 ) -> bool:
@@ -486,57 +497,77 @@ def _deletes_protected_parent(
             path = "."
         elif path.startswith("/") or path == ".." or path.startswith("../"):
             continue  # outside the repo; the virtual reading of the same call is checked too
+        if _is_plain_file(path, root):
+            # Nothing lies below a file: only a direct match counts. The oracle's own check ran
+            # already; this adds `**/x` matching a root-level x, which fnmatch misses.
+            if glob_matches(check.glob, "/" + path):
+                return True
+            continue
         if glob_may_match_below(check.glob, path):
             return True
     return False
 
 
-def _is_no(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value is False
-    if isinstance(value, int | float):
-        return value == 0  # NaN is not 0
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in ("false", "no", "denied"):
-            return True
-        try:
-            return float(text) == 0
-        except ValueError:
-            return False
-    return False
-
-
-_DENIAL_WORDS = frozenset(
-    "no n deny denied reject rejected decline declined refuse refused cancel cancelled canceled "
-    "stop abort aborted disapproved".split()
+_YES_WORDS = frozenset(
+    "yes y yep yeah ok okay approve approved allow allowed grant granted accept accepted confirm "
+    "confirmed proceed true sure go".split()
 )
-_DECISION_NO = frozenset("deny denied reject rejected no false".split())
+_NO_WORDS = frozenset(
+    "not no never nope deny denied reject rejected decline declined refuse refused cancel "
+    "cancelled canceled disallowed forbidden stop abort aborted disapproved".split()
+)
+_APPROVED_VALUES = frozenset("true yes approved".split())
 
 
-def _denial_text(text: str) -> bool:
-    """True if `text` reads as a denial: its first word (lowercased, punctuation stripped) is a
-    denial word, or it starts with "not approved"."""
-    text = text.strip().lower()
-    words = text.split(maxsplit=1)
-    first = words[0].strip(string.punctuation) if words else ""
-    return first in _DENIAL_WORDS or text.startswith("not approved")
+def _normalised(text: str) -> str:
+    """`text` NFKC-normalised, lowercased, with zero-width and other format characters (Unicode
+    category Cf) dropped."""
+    text = unicodedata.normalize("NFKC", text)
+    return "".join(c for c in text if unicodedata.category(c) != "Cf").lower()
 
 
-def approval_denied(result: Any) -> bool:
-    """True if an approval tool's result reads as a denial, so it is never recorded as an approval.
+def _words(text: str) -> list[str]:
+    """The words of `text`, split on anything that is not a word character, so curly quotes,
+    dashes and tabs separate words the way spaces do."""
+    return re.findall(r"\w+", _normalised(text))
 
-    A denial is: an error message; a mapping (or a JSON object in a string) whose "approved" or
-    "approve" key is false, 0 (also 0.0), or the text "false", "no", "denied" or "0", or whose
-    "decision" is false or one of deny, denied, reject, rejected, no, false; or text (also a JSON
-    string) whose first word is no, n, deny, denied, reject, rejected, decline, declined, refuse,
-    refused, cancel, cancelled, canceled, stop, abort, aborted or disapproved, or which starts
-    with "not approved". Everything else, including text that is not JSON, counts as an approval:
-    an approval tool should return an explicit yes or no."""
+
+def _yes_text(text: str) -> bool:
+    """True if `text` is an explicit yes: its first word is a yes word and no word of it is a
+    denial word or a contraction of one ("don't", "isn't")."""
+    words = _words(text)
+    if not words or words[0] not in _YES_WORDS:
+        return False
+    return _NO_WORDS.isdisjoint(words) and not re.search(r"n['\u2019]t\b", _normalised(text))
+
+
+def _yes_value(value: Any) -> bool:
+    if value is True:
+        return True
+    return isinstance(value, str) and "".join(_words(value)) in _APPROVED_VALUES
+
+
+def approval_granted(result: Any) -> bool:
+    """True only if an approval tool's reply is an explicit yes. Anything else, including an
+    error, silence, an unknown wording or a denial, is not an approval: it fails closed.
+
+    The reply is a ToolMessage (or a Command holding one), text, or a plain value. A ToolMessage
+    with status "error" is never an approval. Its text may be JSON, and then:
+    - an object: "approved" must be true, or the text "true", "yes" or "approved" (punctuation
+      and case ignored); any other value, null and 0 included, is a no. Without an "approved"
+      key, every one of "decision", "status" and "result" that is present must be true or an
+      explicit yes text, and at least one must be present;
+    - a scalar: only `true`, or a string that is an explicit yes text;
+    - anything else (a list, a number, null) is a no.
+    Plain text is an explicit yes when its first word is one of yes, y, yep, yeah, ok, okay,
+    approve(d), allow(ed), grant(ed), accept(ed), confirm(ed), proceed, true, sure or go, and no
+    word anywhere in it is not, no, never, nope, deny/denied, reject(ed), decline(d), refuse(d),
+    cancel(led), disallowed, forbidden, stop, abort(ed) or disapproved. Text is read as Unicode
+    words (NFKC, zero-width characters dropped, lowercased), so "“No”" and "No—stop" are noes."""
     message = _message(result)
     if message is not None:
         if message.status == "error":
-            return True
+            return False
         result = message.content
     if isinstance(result, list):
         result = _text(result)
@@ -544,17 +575,19 @@ def approval_denied(result: Any) -> bool:
         try:
             result = json.loads(result)
         except (ValueError, TypeError, RecursionError):  # plain text; deep JSON: RecursionError
-            pass
+            return _yes_text(result)
     if isinstance(result, str):
-        return _denial_text(result)
+        return _yes_text(result)
+    if result is True:
+        return True
     if not isinstance(result, dict):
         return False
-    if any(key in result and _is_no(result[key]) for key in ("approved", "approve")):
-        return True
-    decision = result.get("decision")
-    if isinstance(decision, str):
-        return decision.strip().lower() in _DECISION_NO
-    return decision is False
+    if "approved" in result:
+        return _yes_value(result["approved"])
+    answers = [result[k] for k in ("decision", "status", "result") if k in result]
+    return bool(answers) and all(
+        a is True or (isinstance(a, str) and _yes_text(a)) for a in answers
+    )
 
 
 def _run_config() -> dict | None:
@@ -634,6 +667,10 @@ class GuardMiddleware(AgentMiddleware):
                 return info[2], (
                     f"tool {tool}: path has too many segments (more than {MAX_PATH_SEGMENTS})"
                 )
+            if any(len(p) > MAX_PATH_CHARS for p in paths):
+                return info[2], (
+                    f"tool {tool}: path is too long (more than {MAX_PATH_CHARS} characters)"
+                )
             return None
         what = "is not a path or list of paths" if info[1] in args else "is missing"
         return info[2], f"tool {tool}: argument {info[1]} {what}"
@@ -648,9 +685,12 @@ class GuardMiddleware(AgentMiddleware):
         if info is None:
             return [raw]
         tool, arg, _ = info
+        values = self._paths(raw.args.get(arg)) or []
+        if any(_segment_count(v) > MAX_PATH_SEGMENTS or len(v) > MAX_PATH_CHARS for v in values):
+            return []  # _path_problem blocks it: no filesystem work on a path that size
         paths = [
             {PATH_ARG: p}
-            for value in self._paths(raw.args.get(arg)) or []
+            for value in values
             for p in dict.fromkeys(
                 [resolve_path(value, self._ledger.app.repo_root), virtual_path(value)]
             )
@@ -764,7 +804,7 @@ class GuardMiddleware(AgentMiddleware):
 
     def _after(self, call: dict, agent: str, thread: str, result: Any) -> Any:
         if call["name"] == self._ledger.app.approval_tool:
-            approved = not approval_denied(result)
+            approved = approval_granted(result)
             if approved:
                 for rule in self._approval_rules:
                     self._state.record_approval(thread, rule.id)

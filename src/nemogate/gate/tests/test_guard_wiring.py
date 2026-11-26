@@ -51,7 +51,8 @@ BLOCK_MIGRATIONS = "Blocked by rule no-migrations: Never touch the migrations fo
 
 
 class Tool:
-    """A stand-in tool: records how often the handler (the real tool) actually ran."""
+    """A stand-in tool: records how often the handler (the real tool) actually ran. Called as
+    the approval tool (ask_human) it answers "yes": only an explicit yes counts as an approval."""
 
     def __init__(self, status="success"):
         self.ran = []
@@ -60,8 +61,9 @@ class Tool:
     def __call__(self, request):
         self.ran.append(request.tool_call["args"])
         call = request.tool_call
+        content = "yes" if call["name"] == "ask_human" else "ran"
         return ToolMessage(
-            content="ran", tool_call_id=call["id"], name=call["name"], status=self.status
+            content=content, tool_call_id=call["id"], name=call["name"], status=self.status
         )
 
     async def acall(self, request):
@@ -644,16 +646,28 @@ def test_an_approval_tool_that_returns_a_denial_does_not_approve(tmp_path, repo,
     [
         message('{"approved": true}'),
         message("Approved by alice."),
-        message("not json {approved: false"),
-        message('["approved", false]'),
-        message('{"reason": "no key"}'),
         lambda r: {"approved": True},
     ],
 )
-def test_any_other_approval_result_without_error_still_approves(tmp_path, repo, answer):
+def test_an_explicit_yes_from_the_approval_tool_approves(tmp_path, repo, answer):
     result, drop = approval_run(tmp_path, answer)
     assert drop.ran == [{"name": "users"}]
     assert result.content == "ran"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        message("not json {approved: false"),
+        message('["approved", false]'),
+        message('{"reason": "no key"}'),
+    ],
+)
+def test_an_unknown_wording_without_error_does_not_approve(tmp_path, repo, answer):
+    # Breaks if "returned without error" is enough: only an explicit yes unlocks the tool.
+    result, drop = approval_run(tmp_path, answer)
+    assert drop.ran == []
+    assert result.content == "Blocked by rule ask-before-delete: Ask a human before deleting."
 
 
 # A trace that cannot be written never changes a decision
@@ -680,7 +694,7 @@ def test_a_failing_trace_write_changes_no_decision_and_warns_once(
         with pytest.raises(GuardLoopError):
             run(mw, tool, "write_file", {"file_path": "migrations/001.sql"})
     assert blocked.content == BLOCK_MIGRATIONS
-    assert (allowed.content, observed.content, approved.content) == ("ran", "ran", "ran")
+    assert (allowed.content, observed.content, approved.content) == ("ran", "ran", "yes")
     assert tool.ran == [{"file_path": "app/a.py"}, {"cmd": "ls"}, {}]
     assert [r.levelname for r in caplog.records if "trace" in r.message] == ["WARNING"]
 
@@ -890,12 +904,7 @@ def test_every_spelling_of_no_in_an_approval_answer_denies(tmp_path, repo, conte
     "answer",
     [
         message('{"approved": true}'),
-        message('{"approved": 1}'),
         message('{"approved": "yes"}'),
-        message('{"approved": 0.5}'),
-        message('{"approved": "nan"}'),
-        message('{"approved": null}'),
-        lambda r: {"approved": 1.0},
     ],
 )
 def test_a_yes_in_an_approval_answer_still_approves(tmp_path, repo, answer):
@@ -903,8 +912,24 @@ def test_a_yes_in_an_approval_answer_still_approves(tmp_path, repo, answer):
     assert drop.ran == [{"name": "users"}]
 
 
-def test_a_deeply_nested_approval_answer_is_not_a_denial_and_does_not_crash(tmp_path, repo):
+@pytest.mark.parametrize(
+    "answer",
+    [
+        message('{"approved": 1}'),
+        message('{"approved": 0.5}'),
+        message('{"approved": "nan"}'),
+        message('{"approved": null}'),
+        lambda r: {"approved": 1.0},
+    ],
+)
+def test_an_approved_value_that_is_not_an_explicit_yes_does_not_approve(tmp_path, repo, answer):
+    # Breaks if any non-zero or non-null "approved" value counts as a yes.
+    result, drop = approval_run(tmp_path, answer)
+    assert drop.ran == []
+
+
+def test_a_deeply_nested_approval_answer_is_not_an_approval_and_does_not_crash(tmp_path, repo):
     # Breaks if json.loads' RecursionError escapes the hook and aborts the graph.
     nested = "[" * 10000 + "0" + "]" * 10000
     result, drop = approval_run(tmp_path, message(nested))
-    assert drop.ran == [{"name": "users"}]
+    assert drop.ran == []
