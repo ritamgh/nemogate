@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import Violation
 from repair.guards import GuardViolation, check_edits
 from repair.loop import RepairResult, write_report
 from repair.patch import Edit
 from repair.plan import FixChoice
 from replay import stats
 from report import panels, site
-from schemas.ledger import load_ledger_yaml
-from schemas.run import Violation
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RUN_FOLDERS = FIXTURES / "run_folders"

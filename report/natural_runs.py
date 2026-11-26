@@ -18,10 +18,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import RunConfig
 from replay.carriage import DEFAULT_LIBRARY_TRIGGER, _look_in, classify_folder, load_user_messages
-from schemas.enums import Arm, Operator
-from schemas.ledger import load_ledger_yaml
-from schemas.run import RunConfig
 
 LONG_MESSAGE = 5000  # characters from which a user message counts as "long"
 SHOWN_CHARS = 500  # characters of each delegation shown in the evidence

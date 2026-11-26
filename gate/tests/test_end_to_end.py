@@ -10,13 +10,11 @@ from common.llm import get_model
 from gate import build_middleware, make_middleware
 from gate.tests.stubs import picks
 from ledger import load_ledger, scope_to
-from oracle import evaluate
-from refapp.team import build_team
-from schemas.config import load_config
-from schemas.contracts import MakeMiddlewareFn
-from schemas.enums import Role
-from schemas.run import RunConfig
-from schemas.trace import (
+from nemogate.schemas.config import load_config
+from nemogate.schemas.contracts import MakeMiddlewareFn
+from nemogate.schemas.enums import Role
+from nemogate.schemas.run import RunConfig
+from nemogate.schemas.trace import (
     Approval,
     BoundaryIn,
     BoundaryOut,
@@ -25,6 +23,8 @@ from schemas.trace import (
     ToolResult,
     parse_trace_jsonl,
 )
+from oracle import evaluate
+from refapp.team import build_team
 
 APP = "app: {repo_root: /repo, approval_tool: request_approval}\n"
 RULES = """\
@@ -343,7 +343,7 @@ def test_build_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
     # get_model only checks on live calls, so stub runs and a gate built before the first live
     # call would pool runs made under different settings.
     import gate as gate_module
-    from schemas.config import load_config as real_load
+    from nemogate.schemas.config import load_config as real_load
 
     def stale(path):
         config = real_load(path)

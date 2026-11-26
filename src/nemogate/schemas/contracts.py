@@ -7,10 +7,10 @@ These are signatures only; there are no implementations here.
 
 from typing import Any, Protocol, runtime_checkable
 
-from schemas.enums import Arm, Operator
-from schemas.ledger import Ledger
-from schemas.run import FsChange, RunConfig, RunRecord, Violation
-from schemas.trace import Event
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import Ledger
+from nemogate.schemas.run import FsChange, RunConfig, RunRecord, Violation
+from nemogate.schemas.trace import Event
 
 
 @runtime_checkable

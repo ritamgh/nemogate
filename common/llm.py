@@ -27,8 +27,8 @@ from pydantic import PrivateAttr
 
 from common.env import REPO_ROOT, is_live, require_env
 from common.spend import admit, append_spend, cost_usd
-from schemas.config import AppConfig, ModelConfig, load_config
-from schemas.enums import Role
+from nemogate.schemas.config import AppConfig, ModelConfig, load_config
+from nemogate.schemas.enums import Role
 
 logger = logging.getLogger(__name__)
 

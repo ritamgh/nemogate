@@ -8,8 +8,8 @@ from langchain_core.messages import AIMessage
 
 import common.env
 from common.llm import StubChatModel
+from nemogate.schemas.enums import Role
 from preflight.probes import ESCAPE_SAMPLE, EXTRACTION_FIELDS, Variant
-from schemas.enums import Role
 
 FAKE_KEY = "fake-key-sentinel-7f3a91c2"
 

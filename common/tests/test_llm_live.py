@@ -23,7 +23,7 @@ from common.tests.conftest import (
     sse,
     write_config,
 )
-from schemas.config import load_config
+from nemogate.schemas.config import load_config
 
 # Reserve for the prompt "hi" on sut (1.00 in / 3.00 out per Mtok): 1 input token (2 chars / 3,
 # rounded up) + 4096 reserved output tokens = 1*1/1e6 + 4096*3/1e6.

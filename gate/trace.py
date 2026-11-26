@@ -4,9 +4,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from schemas.enums import Arm, Operator
-from schemas.run import RunConfig
-from schemas.trace import dump_event_jsonl
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.run import RunConfig
+from nemogate.schemas.trace import dump_event_jsonl
 
 # What the guard stamps where the pipeline stamps a model id or a config hash: the guard calls no
 # model and reads no config.yaml, but the event schema needs a non-empty value.

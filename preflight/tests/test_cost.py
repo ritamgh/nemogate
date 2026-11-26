@@ -1,8 +1,8 @@
 import pytest
 
+from nemogate.schemas.enums import Arm, Operator, Role
+from nemogate.schemas.run import RunRecord
 from preflight.cost import main, summarize
-from schemas.enums import Arm, Operator, Role
-from schemas.run import RunRecord
 
 
 def _record(run_id: str, arm: Arm, cost: float) -> RunRecord:

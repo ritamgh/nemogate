@@ -6,7 +6,7 @@ from typing import Annotated, Literal, Self
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from schemas.enums import STRICT, NonEmptyStr, Role
+from nemogate.schemas.enums import STRICT, NonEmptyStr, Role
 
 NonNegativeFinite = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 Temperature = Annotated[float, Field(ge=0, le=2, allow_inf_nan=False)]

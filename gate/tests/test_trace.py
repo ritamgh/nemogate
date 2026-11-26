@@ -2,8 +2,8 @@ import pytest
 from pydantic import ValidationError
 
 from gate.trace import TraceWriter
-from schemas.run import RunConfig
-from schemas.trace import FinalOutput, ToolCall, parse_trace_jsonl
+from nemogate.schemas.run import RunConfig
+from nemogate.schemas.trace import FinalOutput, ToolCall, parse_trace_jsonl
 
 
 def config(tmp_path, **over):

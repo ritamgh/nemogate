@@ -18,7 +18,7 @@ from gate.operators import (
     sentences,
 )
 from gate.tests.stubs import picks, rewrites
-from schemas.enums import Operator
+from nemogate.schemas.enums import Operator
 
 
 class Spy:

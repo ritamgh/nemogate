@@ -9,11 +9,11 @@ import pytest
 from common.llm import get_model
 from gate import build_middleware
 from gate.operators import make_operator
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import RunConfig
 from replay import runner
 from replay.tests.test_runner import Harness, stub_run_one
-from schemas.enums import Arm, Operator
-from schemas.ledger import load_ledger_yaml
-from schemas.run import RunConfig
 
 LEDGER_YAML = """\
 version: 1

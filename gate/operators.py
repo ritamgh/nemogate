@@ -23,7 +23,7 @@ from openai import ContentFilterFinishReasonError, LengthFinishReasonError
 from pydantic import BaseModel, ValidationError
 
 from gate.text import message_text
-from schemas.enums import Operator
+from nemogate.schemas.enums import Operator
 
 SELECT_PROMPT = """\
 Below are a rule and a message one agent hands to another, split into numbered sentences. Give \

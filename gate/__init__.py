@@ -18,17 +18,17 @@ from gate.middleware import GateMiddleware
 from gate.operators import EmptyMutation, MutationFailed, NothingToMutate, make_operator
 from gate.trace import TraceWriter
 from ledger import load_ledger, scope_to
-from schemas.config import load_config
-from schemas.enums import Arm, Operator, Role
-from schemas.ledger import (
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Arm, Operator, Role
+from nemogate.schemas.ledger import (
     ApprovalBefore,
     Ledger,
     OutputMustInclude,
     OutputMustNotInclude,
     PathForbidden,
 )
-from schemas.run import RunConfig
-from schemas.trace import Event, parse_trace_jsonl
+from nemogate.schemas.run import RunConfig
+from nemogate.schemas.trace import Event, parse_trace_jsonl
 
 # A fork's run folder holds the source's events before the fork point under this name, next to
 # trace.jsonl (replay/runner.py writes it before the gate is built; replay/README.md "Forks").

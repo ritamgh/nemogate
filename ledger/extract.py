@@ -21,8 +21,8 @@ import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from common.env import is_live
-from schemas.enums import Role
-from schemas.ledger import (
+from nemogate.schemas.enums import Role
+from nemogate.schemas.ledger import (
     ApprovalBefore,
     Check,
     Constraint,

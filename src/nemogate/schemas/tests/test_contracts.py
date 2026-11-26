@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from schemas.contracts import EvaluateFn, MakeMiddlewareFn, RunFn
-from schemas.enums import Arm, Operator
-from schemas.ledger import Ledger
-from schemas.run import FsChange, RunConfig, RunRecord, Violation
-from schemas.trace import Event
+from nemogate.schemas.contracts import EvaluateFn, MakeMiddlewareFn, RunFn
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import Ledger
+from nemogate.schemas.run import FsChange, RunConfig, RunRecord, Violation
+from nemogate.schemas.trace import Event
 
 
 def test_cross_owner_protocols_accept_functions_with_the_agreed_signatures():

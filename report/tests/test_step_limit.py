@@ -5,10 +5,10 @@ import json
 
 import pytest
 
+from nemogate.schemas.enums import Role
+from nemogate.schemas.run import RunRecord
+from nemogate.schemas.trace import Approval, ToolCall
 from report import step_limit
-from schemas.enums import Role
-from schemas.run import RunRecord
-from schemas.trace import Approval, ToolCall
 
 TASK, RULE, OTHER_RULE = "X1", "C-001", "C-002"
 BOUNDARY = "delegation:planner->coder"

@@ -3,9 +3,9 @@ import json
 import pytest
 
 from common.tests.conftest import run_git, write_config
+from nemogate.schemas.enums import Role
 from preflight.__main__ import main
 from preflight.tests.conftest import scripted_factory
-from schemas.enums import Role
 
 SERVED = ["m-helper", "m-sut", "m-planner"]
 

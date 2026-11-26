@@ -3,8 +3,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from schemas.enums import Arm, Operator
-from schemas.trace import (
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.trace import (
     EVENT,
     EVENT_LIST,
     Approval,

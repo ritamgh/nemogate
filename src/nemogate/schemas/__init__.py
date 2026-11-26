@@ -1,9 +1,9 @@
 """Shared formats between A's code and B's code. See docs/SPEC.md, "Shared interfaces"."""
 
-from schemas.config import AppConfig, load_config
-from schemas.contracts import EvaluateFn, MakeMiddlewareFn, RunFn
-from schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation, is_comparable
-from schemas.trace import (
+from nemogate.schemas.config import AppConfig, load_config
+from nemogate.schemas.contracts import EvaluateFn, MakeMiddlewareFn, RunFn
+from nemogate.schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation, is_comparable
+from nemogate.schemas.trace import (
     EVENT,
     EVENT_LIST,
     Approval,

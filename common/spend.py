@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from common import env
-from schemas.config import AppConfig, ModelConfig
-from schemas.enums import Role
+from nemogate.schemas.config import AppConfig, ModelConfig
+from nemogate.schemas.enums import Role
 
 _run_id: ContextVar[str | None] = ContextVar("nemogate_run_id", default=None)
 

@@ -3,8 +3,8 @@
 import pytest
 
 from gate.policy import blocking_constraint, checkable_before_the_call
-from schemas.ledger import Ledger
-from schemas.trace import Approval, ToolCall
+from nemogate.schemas.ledger import Ledger
+from nemogate.schemas.trace import Approval, ToolCall
 
 STAMP = {
     "run_id": "r-1",

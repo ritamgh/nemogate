@@ -8,7 +8,7 @@ import pytest
 from gate.errors import GuardLoopError
 from gate.guard import Guard
 from gate.state import GuardState
-from schemas.ledger import ApprovalBefore, PathForbidden, ToolForbidden
+from nemogate.schemas.ledger import ApprovalBefore, PathForbidden, ToolForbidden
 
 MINIMAL = """\
 version: 1

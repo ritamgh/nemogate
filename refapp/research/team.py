@@ -17,6 +17,7 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from nemogate.schemas.enums import Role
 
 from common.llm import get_model
 from refapp.research.prompts import (
@@ -25,7 +26,6 @@ from refapp.research.prompts import (
     RESEARCHER_PROMPT,
 )
 from refapp.team import _general_purpose_disabled
-from schemas.enums import Role
 
 REPO = "/repo"
 AGENTS = ("lead", "researcher")

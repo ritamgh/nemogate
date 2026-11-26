@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.schemas.enums import Arm, Operator, Role
+from nemogate.schemas.run import RunRecord
 from replay import sweep_status
 from replay.sweep_status import main, scan, top_up_plan
-from schemas.enums import Arm, Operator, Role
-from schemas.run import RunRecord
 
 BOUNDARY = "delegation:planner->coder"
 HERE = {

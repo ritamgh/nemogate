@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
-from schemas.enums import (
+from nemogate.schemas.enums import (
     STRICT,
     AgentName,
     Authority,

@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from schemas.ledger import Ledger, load_ledger_yaml
+from nemogate.schemas.ledger import Ledger, load_ledger_yaml
 
 
 @dataclass(frozen=True)

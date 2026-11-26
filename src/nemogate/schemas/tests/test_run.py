@@ -3,8 +3,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from schemas.enums import Arm, FsOp, Operator, Role
-from schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation, is_comparable
+from nemogate.schemas.enums import Arm, FsOp, Operator, Role
+from nemogate.schemas.run import FS_DIFF, FsChange, RunConfig, RunRecord, Violation, is_comparable
 
 # Verbatim from docs/SPEC.md, "Run config".
 SPEC_RUN_CONFIG = (
@@ -251,7 +251,7 @@ def test_fs_change_emptied_defaults_off_stays_out_of_dumps_and_needs_a_file():
     import pytest
     from pydantic import ValidationError
 
-    from schemas.run import FS_DIFF, FsChange
+    from nemogate.schemas.run import FS_DIFF, FsChange
 
     plain = FsChange(path="a.py", op="modified")
     assert plain.emptied is False

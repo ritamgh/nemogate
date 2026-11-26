@@ -20,8 +20,8 @@ from common.spend import (
     total_spent,
 )
 from common.tests.conftest import make_repo_with_worktree, read_kind, read_log, write_config
-from schemas.config import ModelConfig, load_config
-from schemas.enums import Role
+from nemogate.schemas.config import ModelConfig, load_config
+from nemogate.schemas.enums import Role
 
 
 def test_cost_usd_uses_per_million_prices():

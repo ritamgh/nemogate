@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 from langchain.agents.middleware import AgentMiddleware
 
-from schemas.enums import Arm, Operator
+from nemogate.schemas.enums import Arm, Operator
 
 APP_ENV = "NEMOGATE_APP"
 DEFAULT_APP = "refapp.app:APP"  # what every command used before the selector existed

@@ -7,11 +7,11 @@ literal worked out by hand next to the assertion, never computed by the code und
 
 import json
 
+from nemogate.schemas.trace import dump_event_jsonl
 from replay.stats import LoadedRun, aggregate, load_runs
 from replay.tests.test_blocks import Trace
 from replay.tests.test_stats import B1, LEDGER, make_record
 from replay.tests.test_stats_arm_metrics import write_run
-from schemas.trace import dump_event_jsonl
 
 
 def cells_of(runs):

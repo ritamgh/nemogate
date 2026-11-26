@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Role
 from preflight.probes import ProbeResult
 from preflight.safe_config import derive, diff
-from schemas.config import load_config
-from schemas.enums import Role
 
 CONFIG = load_config(Path(__file__).resolve().parents[2] / "config.yaml")
 ROLES = (Role.helper, Role.sut, Role.planner)

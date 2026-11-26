@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from gate.guard import Guard
+from nemogate.schemas.ledger import ApprovalBefore, PathForbidden, ToolForbidden
 from oracle import glob_matches
-from schemas.ledger import ApprovalBefore, PathForbidden, ToolForbidden
 
 FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "rules_minimal.yaml"
 

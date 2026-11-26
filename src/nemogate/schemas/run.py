@@ -4,7 +4,7 @@ from typing import Annotated, Self
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
-from schemas.enums import (
+from nemogate.schemas.enums import (
     STRICT,
     Arm,
     BoundaryId,

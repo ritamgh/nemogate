@@ -39,16 +39,16 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from oracle.evaluate import FILE_OPS
-from oracle.paths import PATH_ARG, glob_matches, repo_relative
-from schemas.ledger import (
+from nemogate.schemas.ledger import (
     ApprovalBefore,
     Check,
     FilesFrozen,
     PathForbidden,
     ToolForbidden,
 )
-from schemas.trace import Approval, BoundaryOut, Event, ToolCall
+from nemogate.schemas.trace import Approval, BoundaryOut, Event, ToolCall
+from oracle.evaluate import FILE_OPS
+from oracle.paths import PATH_ARG, glob_matches, repo_relative
 
 _TOKEN = re.compile(r"[^\s`'\"()\[\]{},;:<>|]+")
 _CLAUSE = re.compile(r"(?<=[.!?;])\s+|\n+|,\s+|\s+but\s+", re.IGNORECASE)

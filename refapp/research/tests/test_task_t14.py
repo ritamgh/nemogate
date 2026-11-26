@@ -5,13 +5,13 @@ import sys
 from pathlib import Path
 
 import pytest
+from nemogate.schemas.trace import FinalOutput
 
 from common.env import REPO_ROOT
 from ledger import load_ledger, scope_to
 from oracle import evaluate
 from refapp.research.tests.test_task import STAMP, reply
 from refapp.tasks import load_task, load_tasks
-from schemas.trace import FinalOutput
 
 RESEARCH = Path(__file__).resolve().parents[1]
 TASK_DIR = RESEARCH / "tasks" / "T14"

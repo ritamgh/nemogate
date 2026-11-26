@@ -21,8 +21,8 @@ from gate.errors import GuardLoopError
 from gate.guard import Guard
 from gate.middleware import GateMiddleware, glob_may_match_below, repin
 from gate.trace import TraceWriter
-from schemas.ledger import Constraint, Ledger
-from schemas.run import RunConfig
+from nemogate.schemas.ledger import Constraint, Ledger
+from nemogate.schemas.run import RunConfig
 
 RULES = """\
 version: 1

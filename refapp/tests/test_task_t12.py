@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage, HumanMessage
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.run import RunConfig
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
 
 from common.llm import get_model
 from gate import build_middleware
@@ -24,9 +27,6 @@ from refapp.tasks import TASKS_DIR, load_task
 from refapp.team import build_team
 from refapp.tests.test_tasks_files import changed_migrations, requirements_changed
 from replay.app import pairs
-from schemas.enums import Arm, Operator
-from schemas.run import RunConfig
-from schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
 
 ROOT = Path(__file__).resolve().parents[2]
 T12 = TASKS_DIR / "T12"

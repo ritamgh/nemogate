@@ -20,11 +20,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import Ledger
+from nemogate.schemas.run import RunRecord, Violation, is_comparable
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, Event, ToolCall, parse_trace_jsonl
 from replay import stats
-from schemas.enums import Arm, Operator
-from schemas.ledger import Ledger
-from schemas.run import RunRecord, Violation, is_comparable
-from schemas.trace import BoundaryIn, BoundaryOut, Event, ToolCall, parse_trace_jsonl
 
 CLIP_TEXT = 8000  # characters of a delegation shown; the page is for reading, not for archiving
 CLIP_ARGS = 400

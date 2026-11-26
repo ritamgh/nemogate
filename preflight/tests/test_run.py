@@ -3,11 +3,11 @@ import json
 import pytest
 
 from common.tests.conftest import FAKE_KEY, Transport, write_config
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Role
 from preflight.probes import Variant
 from preflight.run import planned_calls, run_probes, variant_models
 from preflight.tests.conftest import scripted_factory
-from schemas.config import load_config
-from schemas.enums import Role
 
 SERVED = {"m-helper", "m-sut", "m-planner"}
 

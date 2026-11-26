@@ -6,9 +6,8 @@ the gate has already made in-repo tool-call paths repo-relative and emitted appr
 
 import re
 
-from oracle.paths import PATH_ARG, glob_matches, repo_relative
-from schemas.enums import FsOp
-from schemas.ledger import (
+from nemogate.schemas.enums import FsOp
+from nemogate.schemas.ledger import (
     ApprovalBefore,
     Constraint,
     FilesFrozen,
@@ -18,8 +17,17 @@ from schemas.ledger import (
     PathForbidden,
     ToolForbidden,
 )
-from schemas.run import FsChange, Violation
-from schemas.trace import Approval, BoundaryIn, Event, FinalOutput, GateBlock, ToolCall, ToolResult
+from nemogate.schemas.run import FsChange, Violation
+from nemogate.schemas.trace import (
+    Approval,
+    BoundaryIn,
+    Event,
+    FinalOutput,
+    GateBlock,
+    ToolCall,
+    ToolResult,
+)
+from oracle.paths import PATH_ARG, glob_matches, repo_relative
 
 # Deep Agents' built-in file tools (docs/FACTS.md section 4) and the operation each performs.
 FILE_OPS = {"write_file": "write", "edit_file": "write", "delete": "delete"}

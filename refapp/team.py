@@ -24,6 +24,7 @@ from deepagents.profiles.harness.harness_profiles import (
 )
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
+from nemogate.schemas.enums import Role
 
 from common.llm import get_model
 from refapp.prompts import (
@@ -34,7 +35,6 @@ from refapp.prompts import (
     REVIEWER_PROMPT,
 )
 from refapp.tools import DEFAULT_TEST_CMD, make_tools
-from schemas.enums import Role
 
 REPO = "/repo"
 AGENTS = ("planner", "coder", "reviewer")

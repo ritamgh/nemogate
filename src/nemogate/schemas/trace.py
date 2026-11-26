@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from schemas.enums import (
+from nemogate.schemas.enums import (
     STRICT,
     AgentName,
     Arm,

@@ -23,8 +23,8 @@ from pydantic import TypeAdapter
 
 from common.env import is_live
 from ledger.extract import propose
-from schemas.enums import Role
-from schemas.ledger import Check
+from nemogate.schemas.enums import Role
+from nemogate.schemas.ledger import Check
 
 _CHECK = TypeAdapter(Check)
 

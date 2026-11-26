@@ -6,9 +6,9 @@ Plain data: counts and one example of the handoff as sent and as received. Nothi
 from dataclasses import dataclass
 from pathlib import Path
 
-from schemas.ledger import load_ledger_yaml
-from schemas.run import RunRecord
-from schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import RunRecord
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
 
 
 @dataclass(frozen=True)

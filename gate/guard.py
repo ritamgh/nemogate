@@ -17,8 +17,8 @@ from gate.middleware import GuardMiddleware
 from gate.state import GuardState
 from gate.trace import GuardTraceWriter
 from ledger import ledger_hash
-from schemas.enums import FileOp
-from schemas.ledger import AppInfo, Constraint, Ledger
+from nemogate.schemas.enums import FileOp
+from nemogate.schemas.ledger import AppInfo, Constraint, Ledger
 
 _TOP_FIELDS = {"version", "approval_tool", "tools", "rules"}
 _RULE_FIELDS = {"id", "text", "check", "mode"}

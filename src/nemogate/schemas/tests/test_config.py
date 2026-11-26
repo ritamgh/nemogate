@@ -4,10 +4,10 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from schemas.config import AppConfig, load_config
-from schemas.enums import Role
+from nemogate.schemas.config import AppConfig, load_config
+from nemogate.schemas.enums import Role
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _committed_config_data():

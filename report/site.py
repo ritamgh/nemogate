@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from nemogate.schemas.ledger import Ledger, load_ledger_yaml
 from report import cost, panels
-from schemas.ledger import Ledger, load_ledger_yaml
 
 FORMAT_VERSION = 2
 Z = 1.96  # the stats file uses 95% Wilson intervals; the graph re-pools cells with the same z

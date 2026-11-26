@@ -4,8 +4,8 @@ import json
 import shlex
 from uuid import UUID
 
-from schemas.enums import FsOp
-from schemas.run import FsChange
+from nemogate.schemas.enums import FsOp
+from nemogate.schemas.run import FsChange
 
 SKIP_DIRS = frozenset({"__pycache__", ".pytest_cache"})
 SKIP_SUFFIXES = frozenset({".pyc"})

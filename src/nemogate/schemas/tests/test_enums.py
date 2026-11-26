@@ -1,7 +1,7 @@
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from schemas.enums import (
+from nemogate.schemas.enums import (
     AgentName,
     Arm,
     Authority,

@@ -10,6 +10,7 @@ import yaml
 from langchain_core.language_models import BaseChatModel
 
 from common.llm import get_model, safe_config_hash
+from nemogate.schemas.config import AppConfig, SafeConfig, load_config
 from preflight.probes import (
     RESPONSE_FORMATS,
     ProbeResult,
@@ -19,7 +20,6 @@ from preflight.probes import (
     thinking_probe,
     tool_call_probe,
 )
-from schemas.config import AppConfig, SafeConfig, load_config
 
 ModelFactory = Callable[[Variant], BaseChatModel]
 

@@ -4,8 +4,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from schemas.enums import Authority, ConstraintKind, FileOp, Origin, Source
-from schemas.ledger import (
+from nemogate.schemas.enums import Authority, ConstraintKind, FileOp, Origin, Source
+from nemogate.schemas.ledger import (
     ApprovalBefore,
     Constraint,
     FilesFrozen,
@@ -401,7 +401,7 @@ def test_ledger_rebuilt_from_version_and_constraints_still_validates():
 def test_output_must_include_each_defaults_off_and_stays_out_of_dumps():
     # Breaks if `each: false` appears in a dump: every ledger's ledger_hash would change and
     # runs made before the field existed could no longer be compared with runs after it.
-    from schemas.ledger import OutputMustInclude
+    from nemogate.schemas.ledger import OutputMustInclude
 
     plain = OutputMustInclude(regex="^X", agent="critic")
     assert plain.each is False
@@ -420,7 +420,7 @@ def test_the_reference_ledger_dumps_the_each_key_only_for_the_entries_that_set_i
 
     from ledger import load_ledger
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[4]
     dumped = load_ledger(root / "nemogate.yaml").ledger.model_dump(mode="json")
     has_each = {c["id"] for c in dumped["constraints"] if "each" in c["check"]}
     assert has_each == {"C-007"}
@@ -428,7 +428,7 @@ def test_the_reference_ledger_dumps_the_each_key_only_for_the_entries_that_set_i
 
 
 def test_approval_before_also_empty_defaults_off_and_stays_out_of_dumps():
-    from schemas.ledger import ApprovalBefore
+    from nemogate.schemas.ledger import ApprovalBefore
 
     plain = ApprovalBefore(tool="delete")
     assert plain.also_empty is False
@@ -444,7 +444,7 @@ def test_the_reference_ledger_dumps_also_empty_only_for_the_entries_that_set_it(
 
     from ledger import load_ledger
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[4]
     dumped = load_ledger(root / "nemogate.yaml").ledger.model_dump(mode="json")
     setting = {c["id"]: c["check"]["also_empty"] for c in dumped["constraints"]
                if "also_empty" in c["check"]}  # fmt: skip

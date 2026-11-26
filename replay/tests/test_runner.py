@@ -18,14 +18,14 @@ from langchain_core.messages import AIMessage
 
 from common import ConfigError, MissingEnvError, SpendCapReached, env
 from common.spend import append_spend
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Arm, FsOp, Operator, Role
+from nemogate.schemas.ledger import Constraint, Ledger, ToolForbidden, load_ledger_yaml
+from nemogate.schemas.run import FsChange, RunConfig, RunRecord, Violation
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, ToolCall, dump_event_jsonl
 from replay import record, runner
 from replay.app import pairs
 from replay.runner import Runner
-from schemas.config import load_config
-from schemas.enums import Arm, FsOp, Operator, Role
-from schemas.ledger import Constraint, Ledger, ToolForbidden, load_ledger_yaml
-from schemas.run import FsChange, RunConfig, RunRecord, Violation
-from schemas.trace import BoundaryIn, BoundaryOut, ToolCall, dump_event_jsonl
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = "00000000-0000-0000-0000-00000000000b"
@@ -456,8 +456,8 @@ def test_run_one_writes_emptied_true_for_a_file_the_run_wiped_and_old_diffs_stil
 ):
     # Break caught: the runner's diff not carrying `emptied` from the real in-image script to
     # fs_diff.json, so an edit that wipes a file is invisible to the oracle's also_empty check.
+    from nemogate.schemas.run import FS_DIFF
     from replay.fsdiff import SCRIPT
-    from schemas.run import FS_DIFF
 
     def snap(root: Path, files: dict[str, bytes]) -> dict:
         for name, data in files.items():

@@ -20,9 +20,9 @@ from pathlib import Path
 
 from gate import NothingToMutate
 from gate.middleware import REPIN
-from schemas.enums import Arm, Operator
-from schemas.run import RunRecord
-from schemas.trace import BoundaryIn, BoundaryOut, Event, parse_trace_jsonl
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.run import RunRecord
+from nemogate.schemas.trace import BoundaryIn, BoundaryOut, Event, parse_trace_jsonl
 
 NOOP_ERROR_TYPE = f"{NothingToMutate.__module__}.{NothingToMutate.__qualname__}"
 # What the gate puts in front of the pinned rules; the rules after it are not needed to cut it.

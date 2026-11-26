@@ -19,7 +19,7 @@ from ledger.extract import (
     to_constraint,
 )
 from ledger.recall import recall
-from schemas.ledger import (
+from nemogate.schemas.ledger import (
     Constraint,
     OutputMustInclude,
     PathForbidden,

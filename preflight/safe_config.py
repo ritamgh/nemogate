@@ -13,9 +13,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from common.llm import safe_config_hash
+from nemogate.schemas.config import AppConfig, SafeConfig
+from nemogate.schemas.enums import Role
 from preflight.probes import RESPONSE_FORMATS, ProbeResult, ResponseFormat
-from schemas.config import AppConfig, SafeConfig
-from schemas.enums import Role
 
 
 @dataclass(frozen=True)

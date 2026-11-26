@@ -18,13 +18,13 @@ from common.llm import get_model
 from gate import build_middleware
 from gate.tests.stubs import picks
 from ledger import ledger_hash, load_ledger
+from nemogate.schemas.config import load_config
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.run import Violation
 from oracle import evaluate
 from refapp.team import build_team
 from replay import record
 from replay.runner import Runner
-from schemas.config import load_config
-from schemas.enums import Arm, Operator
-from schemas.run import Violation
 
 BASE = "00000000-0000-0000-0000-00000000000b"
 FINAL = "00000000-0000-0000-0000-0000000000f1"
