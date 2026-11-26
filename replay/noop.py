@@ -25,12 +25,14 @@ from nemogate.schemas.run import RunRecord
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, Event, parse_trace_jsonl
 
 NOOP_ERROR_TYPE = f"{NothingToMutate.__module__}.{NothingToMutate.__qualname__}"
+# Run folders written before the gate moved into the nemogate package carry this name.
+_LEGACY_NOOP_ERROR_TYPE = "gate.operators.NothingToMutate"
 # What the gate puts in front of the pinned rules; the rules after it are not needed to cut it.
 _PIN_MARK = REPIN.partition("{rules}")[0]
 
 
 def is_noop_error(error_type: object) -> bool:
-    return error_type == NOOP_ERROR_TYPE
+    return error_type in (NOOP_ERROR_TYPE, _LEGACY_NOOP_ERROR_TYPE)
 
 
 def unchanged_at_target(trace: Sequence[Event], boundary: str, *, gated: bool) -> bool:

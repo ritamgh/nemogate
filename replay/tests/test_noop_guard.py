@@ -402,3 +402,17 @@ def test_load_runs_counts_only_the_gates_error_type_as_a_noop(tmp_path):
         (folder / "error.json").write_text(json.dumps({"error_type": error_type}))
     got = load_runs([tmp_path])
     assert (got.runs, got.unreadable, got.errored, got.noop) == ([], 0, 2, 1)
+
+
+@pytest.mark.parametrize(
+    "error_type", ["gate.operators.NothingToMutate", "nemogate.gate.operators.NothingToMutate"]
+)
+def test_load_runs_counts_a_noop_saved_under_either_spelling_of_the_class_name(
+    tmp_path, error_type
+):
+    # Breaks if run folders written before the move into nemogate (legacy name) are counted as
+    # run failures, or the current name stops counting.
+    (tmp_path / "r-noop").mkdir()
+    (tmp_path / "r-noop" / "error.json").write_text(json.dumps({"error_type": error_type}))
+    got = load_runs([tmp_path])
+    assert (got.runs, got.unreadable, got.errored, got.noop) == ([], 0, 0, 1)

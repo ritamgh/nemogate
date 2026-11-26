@@ -540,6 +540,7 @@ recall file is invalid, or a pooled run is for a constraint the ledger does not 
   raises `nemogate.gate.operators.NothingToMutate` while the agents run; the exception reaches the runner
   with its type intact (docs/FACTS.md §4), so `error.json` has `error_type`
   `nemogate.gate.operators.NothingToMutate` and the folder counts as `mutation_noop`, not `run_error`.
+  Folders saved before the move into `nemogate` hold `gate.operators.NothingToMutate`; both spellings are accepted.
   The expected name is derived from the imported class (`replay/noop.py`), so renaming it in
   `gate` breaks a test. Such a run is counted and labelled, never retried (retrying would bias
   the sample towards runs where the planner kept the rule), and is never pooled. A fork cuts at
