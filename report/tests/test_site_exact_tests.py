@@ -1,4 +1,4 @@
-"""report/site.py: the exact tests. `replay.stats` writes an optional `exact_tests` list per
+"""report/site.py: the exact tests. `nemogate.proof.stats` writes an optional `exact_tests` list per
 boundary; the page prints one table per boundary, a row per entry, under the gated-minus-block-only
 interval lines, taking every number and arm name from the entry. Fixture entries are hand-built;
 every expected number below was checked by hand (McNemar: 2 * P(X <= 1 | n = 6, 1/2) = 14/64)."""

@@ -13,8 +13,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 import refapp.app
 from nemogate.common.llm import StubChatModel, get_model
+from nemogate.proof.carriage import compaction_evidence
 from refapp.team import build_team
-from replay.carriage import compaction_evidence
 
 RULE = "Heads up: nothing under migrations/ may be touched."
 USER_MESSAGE = f"Add a priority field to tasks. {RULE}"

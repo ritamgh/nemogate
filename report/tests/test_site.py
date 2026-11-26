@@ -1104,7 +1104,7 @@ def test_a_block_only_cell_without_an_operator_gets_the_grid_and_no_note():
 
 def test_the_blocking_arms_name_the_broke_column_for_blocked_attempts_too():
     # Breaks if a block_only or gated grid says "Agent broke it" over counts that include
-    # blocked attempts (replay/carriage.py: broke = violated or blocked) while the violation
+    # blocked attempts (proof/carriage.py: broke = violated or blocked) while the violation
     # rate beside it counts only what got through: "0% . 0 of 4 runs" over "2 broke it".
     for arm in ("block_only", "gated"):
         text = operator_none_card(arm, {"CARRIED_OBEYED": 3, "DISOBEYED": 1, "DROPPED": 2})
@@ -1119,9 +1119,9 @@ def test_a_gated_run_whose_pinned_rule_has_no_anchor_lands_under_in_the_handoff(
     # pinned rule whose ledger text lacks the anchor as lost: the card would then put it under
     # "Rule lost in the handoff", directly above "in the handoff includes the gate's re-pin".
     # The labels come from the real classifier, through aggregate, into the page.
-    from replay.stats import aggregate
-    from replay.tests.test_carriage import ANCHORLESS, PLAIN_TEXT, pinned_run
-    from replay.tests.test_stats import B1, LEDGER, make_run
+    from nemogate.proof.stats import aggregate
+    from nemogate.proof.tests.test_carriage import ANCHORLESS, PLAIN_TEXT, pinned_run
+    from nemogate.proof.tests.test_stats import B1, LEDGER, make_run
 
     check, user_message, rule_text = ANCHORLESS[0]
     labels = [

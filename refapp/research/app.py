@@ -1,6 +1,6 @@
-"""ResearchApp: the research team seen through replay.app.App (what the runner needs).
+"""ResearchApp: the research team seen through nemogate.proof.app.App (what the runner needs).
 
-Select it with `NEMOGATE_APP=refapp.research.app:APP` (replay/README.md, "Choosing the app").
+Select it with `NEMOGATE_APP=refapp.research.app:APP` (proof/README.md, "Choosing the app").
 """
 
 from collections.abc import Mapping, Sequence

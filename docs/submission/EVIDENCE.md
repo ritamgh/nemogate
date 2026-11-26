@@ -12,8 +12,8 @@ The five sweep folders of the main set are in the release `evidence-2026-10-27` 
 
 ```
 tar xzf nemogate-runs-t6-t10-t11.tar.gz
-uv run python -m replay.stats runs/sweep-2026-10-19 runs/sweep-2026-10-19-t10b runs/sweep-2026-10-19-t11b runs/sweep-2026-10-19-t11c runs/sweep-2026-10-19-t11d --ledger nemogate.yaml --repo-sha T6=b0736bb4da66 --repo-sha T10=f06137eaf4a6 --repo-sha T11=0186900aa6bf --out results.json
-uv run python -m replay.audit runs/sweep-2026-10-19 runs/sweep-2026-10-19-t10b runs/sweep-2026-10-19-t11b runs/sweep-2026-10-19-t11c runs/sweep-2026-10-19-t11d
+uv run python -m nemogate.proof.stats runs/sweep-2026-10-19 runs/sweep-2026-10-19-t10b runs/sweep-2026-10-19-t11b runs/sweep-2026-10-19-t11c runs/sweep-2026-10-19-t11d --ledger nemogate.yaml --repo-sha T6=b0736bb4da66 --repo-sha T10=f06137eaf4a6 --repo-sha T11=0186900aa6bf --out results.json
+uv run python -m nemogate.proof.audit runs/sweep-2026-10-19 runs/sweep-2026-10-19-t10b runs/sweep-2026-10-19-t11b runs/sweep-2026-10-19-t11c runs/sweep-2026-10-19-t11d
 ```
 
 - Without the three `--repo-sha` pins, 182 runs are counted instead of 179.
@@ -29,7 +29,7 @@ uv run python -m replay.audit runs/sweep-2026-10-19 runs/sweep-2026-10-19-t10b r
 - **Source file and path**: a JSON path inside `results.json` (`constraints[<rule>].boundaries[<handoff>].cells[...]`, `.comparisons[...]`, `.exact_tests[...]`) or another file.
 - **Denominator**: what n counts. A "whole run" is one full run of the agents. A "fork" is a run that continues from a saved point of a source run, so only the part after the fork point is new.
 - **Independent sources**: `n_sources`, the number of different source runs the cell was built from. Forks of one source are not independent of each other.
-- **Test**: how the interval or p value is made, from `replay/stats.py`. Whole runs of two arms with nothing in common use Fisher exact. Forks that share sources use McNemar exact on matched pairs, and a sign test over sources for the "counting each source once" p value. Rates have Wilson 95% intervals. Differences use a Newcombe interval, which treats the two cells as independent samples.
+- **Test**: how the interval or p value is made, from `src/nemogate/proof/stats.py`. Whole runs of two arms with nothing in common use Fisher exact. Forks that share sources use McNemar exact on matched pairs, and a sign test over sources for the "counting each source once" p value. Rates have Wilson 95% intervals. Differences use a Newcombe interval, which treats the two cells as independent samples.
 
 
 ## 1. Headline: verdict line, "At a glance", DEVPOST impact table
@@ -209,7 +209,7 @@ uv run python -m replay.audit runs/sweep-2026-10-19 runs/sweep-2026-10-19-t10b r
 These are places where the page, DEVPOST and the files do not agree, or where a claim has no file behind it. Nothing was changed to hide them.
 
 1. **Rules in the ledger: 8 on the page, 9 in the files.** The page's coverage table says 8 rules declared, 8 of 8 with a compiled check, and "8 of 8 rules can be graded". The rebuild command with today's `nemogate.yaml` gives `honesty.constraints_total` 9 and `constraints_with_check` 9, because the second app's rule C-011 was added to the ledger after the sweeps (commits f539c11 and 610d056). Rebuilt with the 8-rule ledger from before those commits, `results.json` says 8, and every other field is identical. `t13.json` and `t14.json` also say 9. So the page's 8 matches the ledger at the time of the sweeps and not today's file.
-2. **Extraction recall is not in `results.json`.** `honesty.extraction_recall` is null there. The page gets 22 of 30 and 11 of 24 from `results/recall/dev.json` and `reference.json` through `report.site --recall`. `replay.stats --extraction-recall` does not accept those two files.
+2. **Extraction recall is not in `results.json`.** `honesty.extraction_recall` is null there. The page gets 22 of 30 and 11 of 24 from `results/recall/dev.json` and `reference.json` through `report.site --recall`. `nemogate.proof.stats --extraction-recall` does not accept those two files.
 3. **Resolved (PR #110 merged).** **DEVPOST on main and PR 110 differ in one number.** Main says "held-out cells have 5 to 6 runs". PR 110 says "1 to 6 runs per cell", which is what the page's limits tile says. The first-run appendix has cells of 1 to 6 runs and the re-run appendix 2 to 5, so main is out of date. The other PR 110 changes are wording and dates (republished 2026-10-27, only `drop` run live, link text, the second-app row now pointing at Appendix 3 and 4), not numbers.
 4. **Resolved (PR #110 merged).** **Stale source column on main.** The DEVPOST "where each number comes from" row for the second app (0 of 33 vs 10 of 32, p = 0.0078) still says "PR #102 description; not yet on the results page". The page now carries it as Appendix 3, and the numbers match `t14.json`.
 5. **Repair numbers: "on T11" is not stated by the repair output.** DEVPOST says 45% → 44% and 90% → 88% are "on T11". The page says the repair output does not state which rule, arm and operator. `PROJECT_CONTEXT.md` says the repair ran on T11 natural, and the baseline matches the T11 natural cell (9 of 20 broke, 18 of 20 passed). The summary file was written by hand from a run log that is not in the repo (`docs/SPEC.md`).

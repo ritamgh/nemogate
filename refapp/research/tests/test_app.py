@@ -1,5 +1,5 @@
-"""ResearchApp implements replay.app.App, and the real runner, gate and oracle drive it offline:
-fake Contree, stub models, a fake search client, a real checkpointer."""
+"""ResearchApp implements nemogate.proof.app.App, and the real runner, gate and oracle drive it
+offline: fake Contree, stub models, a fake search client, a real checkpointer."""
 
 import asyncio
 import inspect
@@ -19,6 +19,10 @@ from nemogate.gate import build_middleware
 from nemogate.gate.tests.stubs import picks
 from nemogate.ledger import load_ledger
 from nemogate.oracle import evaluate
+from nemogate.proof import app as replay_app
+from nemogate.proof import record
+from nemogate.proof.app import App
+from nemogate.proof.runner import Runner, refusals
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.trace import parse_trace_jsonl
@@ -26,10 +30,6 @@ from refapp.research import sandbox
 from refapp.research.app import APP, ResearchApp
 from refapp.research.search import CachedSearch
 from refapp.research.team import AGENTS
-from replay import app as replay_app
-from replay import record
-from replay.app import App
-from replay.runner import Runner, refusals
 
 BASE = "00000000-0000-0000-0000-00000000000b"
 FINAL = "00000000-0000-0000-0000-0000000000f1"

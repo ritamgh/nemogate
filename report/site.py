@@ -4,7 +4,7 @@
 [--runs DIR...] [--repair DIR] [--recall FILE...] [--ledger nemogate.yaml] [--notes FILE]
 [--appendix TITLE RESULTS_FILE [NOTES_FILE]]...`
 
-Reads the file `replay/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
+Reads the file `proof/stats.py` writes (format_version 2, nested constraint -> boundary -> cells)
 and renders, in order: a short reading guide, "What happened, rule by rule" (per rule, each
 cell's runs as done / rule kept, task not finished / broke the rule, and block-only beside
 gated after a block), the largest-effect sentence, the key, the honesty strip and header
@@ -183,7 +183,7 @@ def pp(x: float) -> str:
 
 
 def wilson(k: int, n: int) -> tuple[float, float]:
-    """95% Wilson score interval, the same one replay/stats.py writes per cell."""
+    """95% Wilson score interval, the same one src/nemogate/proof/stats.py writes per cell."""
     p = k / n
     denom = 1 + Z * Z / n
     centre = (p + Z * Z / (2 * n)) / denom
@@ -936,7 +936,7 @@ def presence_grid(cell: dict[str, Any]) -> str:
     )
     parts = [f"{k} {text}" for k, text in unplaced if k]
     foot = f'<span class="count">Not placed: {e(", ".join(parts))}.</span>' if parts else ""
-    # block_only and gated count a blocked attempt as "broke" (replay/carriage.py: broke =
+    # block_only and gated count a blocked attempt as "broke" (proof/carriage.py: broke =
     # violated or blocked), but the violation rate beside the grid counts only what got through
     blocking = cell.get("arm") in ("block_only", "gated")
     broke_header = "Agent broke it or tried to" if blocking else "Agent broke it"
@@ -1031,7 +1031,7 @@ def find_cell(
     cells: list[dict[str, Any]], arm: str, op: str, compaction: Any = ANY
 ) -> dict[str, Any] | None:
     """The first cell for (arm, operator) under `compaction` (the cell's own `compaction` value:
-    None = not recorded). `replay.stats` lists the compaction-off cell first."""
+    None = not recorded). `nemogate.proof.stats` lists the compaction-off cell first."""
     for c in cells:
         if c.get("arm") == arm and c.get("operator") == op:
             if compaction is ANY or c.get("compaction") == compaction:
@@ -1287,7 +1287,8 @@ def whole(x: float) -> str:
     return fixed(x, 0)
 
 
-BOOTSTRAP_FROM = 5  # replay.intervals.MIN_FOR_BOOTSTRAP; used for a cell written without a basis
+# nemogate.proof.intervals.MIN_FOR_BOOTSTRAP; used for a cell written without a basis
+BOOTSTRAP_FROM = 5
 
 
 def mean_text(st: dict[str, Any], fmt: Any, unit: str = "", label: str = "") -> str:
@@ -1319,7 +1320,7 @@ def line(text: str) -> str:
 
 
 def fork_note(cell: dict[str, Any], what: str) -> str:
-    """A fork's cost and time cover only what came after the fork point (replay/README.md, "A
+    """A fork's cost and time cover only what came after the fork point (proof/README.md, "A
     fork record is partial"): say so under any mean that includes one. `n_forks` is left out of
     a cell without forks and of a results file from before it, which get no note."""
     forks = cell.get("n_forks") or 0
@@ -3029,7 +3030,7 @@ class AppendixAction(argparse.Action):
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render results.json as one static HTML page.")
     parser.add_argument(
-        "--results", type=Path, required=True, help="results.json from replay.stats"
+        "--results", type=Path, required=True, help="results.json from nemogate.proof.stats"
     )
     parser.add_argument("--out", type=Path, required=True, help="where to write index.html")
     parser.add_argument(

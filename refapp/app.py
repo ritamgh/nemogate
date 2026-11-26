@@ -1,4 +1,4 @@
-"""RefApp: the reference coding team seen through replay.app.App (what the runner needs)."""
+"""RefApp: the reference coding team seen through nemogate.proof.app.App (what the runner needs)."""
 
 from collections.abc import Sequence
 from typing import Any

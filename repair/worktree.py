@@ -1,6 +1,6 @@
 """Re-run a patch on its own commit: a git worktree on a local branch, then the runner there.
 
-The runner only claims the commit it runs from (replay/record.py), so the patched code must be
+The runner only claims the commit it runs from (proof/record.py), so the patched code must be
 checked out where the runner runs. The branch is local and never pushed; the main checkout is
 untouched. This spends model credit (NEMOGATE_LIVE=1 is set for the runner); callers must check
 the budget first. A rejected patch's worktree and branch are removed with discard_last(); a round
@@ -156,7 +156,7 @@ class WorktreeRerun:
         # --yes: the repair CLI has already checked the run count against the repair bucket
         # and required its own --yes (repair/__main__.py), so the inner runner does not ask.
         cmd = [
-            "uv", "run", "python", "-m", "replay.runner",
+            "uv", "run", "python", "-m", "nemogate.proof.runner",
             "--tasks", *self.tasks, "--arms", *self.arms, "--operators", *self.operators,
             "--n", str(self.n), "--repo-ref", "HEAD", "--yes",
         ]  # fmt: skip

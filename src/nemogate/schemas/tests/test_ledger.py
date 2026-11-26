@@ -377,7 +377,7 @@ def test_unknown_app_key_is_rejected():
 
 def test_ledger_without_app_block_dumps_exactly_as_before():
     # Breaks if an empty app block appears in the dump: every existing ledger_hash would change
-    # (replay/tests/test_record.py pins one as a literal).
+    # (src/nemogate/proof/tests/test_record.py pins one as a literal).
     assert "app" not in load_ledger_yaml(SPEC_LEDGER_YAML).model_dump(mode="json")
 
 
@@ -390,7 +390,7 @@ def test_non_empty_app_block_is_dumped_and_round_trips():
 
 
 def test_ledger_rebuilt_from_version_and_constraints_still_validates():
-    # Breaks if a whole-ledger validator starts depending on app: the runner (replay/record.py)
+    # Breaks if a whole-ledger validator starts depending on app: the runner (proof/record.py)
     # scopes ledgers by rebuilding them from version and constraints only.
     entry = constraint_dict(check={"type": "approval_before", "tool": "remove"})
     full = Ledger.model_validate({**ledger_dict(entry), "app": {"approval_tool": "ask"}})

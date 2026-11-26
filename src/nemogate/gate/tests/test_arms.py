@@ -297,7 +297,7 @@ def test_without_a_prior_approval_the_forks_delete_is_blocked(tmp_path, backend,
 
 
 def test_the_gate_reads_prior_events_where_replay_writes_them():
-    from replay.runner import PREFIX
+    from nemogate.proof.runner import PREFIX
 
     assert PRIOR_EVENTS == PREFIX
 

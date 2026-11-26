@@ -115,8 +115,8 @@ use:** NeMo Guardrails and the NeMo Agent Toolkit. We read their documentation t
   `EXECUTING` with no way out.
 - **A real case.** Deep Agents' `grep` wraps the command in `asyncio.wait_for` (35 s). When it timed
   out, the cancel landed inside the session and the agent's next tool call raised, which ended a whole
-  run. We wrote a wrapper that runs each command as a shielded task (`replay/sandbox.py`,
-  `replay/tests/test_sandbox.py`).
+  run. We wrote a wrapper that runs each command as a shielded task (`src/nemogate/proof/sandbox.py`,
+  `src/nemogate/proof/tests/test_sandbox.py`).
 - **Suggestion.** Let a failed session be reset to its last good image, or document the rebuild pattern
   next to the timeout parameter.
 

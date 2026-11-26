@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from nemogate.proof import stats
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.run import Violation
 from repair.guards import GuardViolation, check_edits
 from repair.loop import RepairResult, write_report
 from repair.patch import Edit
 from repair.plan import FixChoice
-from replay import stats
 from report import panels, site
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -25,7 +25,8 @@ RUN_FOLDERS = FIXTURES / "run_folders"
 REPAIR_OUT = FIXTURES / "repair_out"
 KEY = ("C-001", "delegation:planner->coder")
 # Fixture runs, all task TA / rule C-001 / delegation:planner->coder (results_runs.json is what
-# replay.stats makes of these folders, test_results_fixture_is_what_stats_makes_of_the_run_folders):
+# nemogate.proof.stats makes of these folders,
+# test_results_fixture_is_what_stats_makes_of_the_run_folders):
 #   000aaa natural, kept the rule: the source both forks were taken from
 #   aaa111 mutated drop, violated, a fork of 000aaa (2 prefix events; violation step 4 = trace 2)
 #   bbb222 mutated drop, violated        ccc333 gated drop, kept the rule, a fork, blocked the call
@@ -108,7 +109,7 @@ def clone_run(runs: Path, suffix: str, new_id: str, **record: str) -> None:
 
 def test_results_fixture_is_what_stats_makes_of_the_run_folders(tmp_path):
     # Breaks if results_runs.json is edited by hand, or a run folder changes without the file
-    # being regenerated (uv run python -m replay.stats report/tests/fixtures/run_folders
+    # being regenerated (uv run python -m nemogate.proof.stats report/tests/fixtures/run_folders
     # --ledger report/tests/fixtures/ledger.yaml --out report/tests/fixtures/results_runs.json),
     # so the page's numbers and its trace panel can never describe different runs.
     out = tmp_path / "results.json"
@@ -199,7 +200,7 @@ def test_a_run_folder_stats_cannot_read_is_skipped_not_shown(tmp_path):
 
 
 def test_an_errored_run_folder_is_skipped_never_an_exemplar(tmp_path):
-    # Breaks if a run that crashed (error.json, no record.json: replay.stats counts it as
+    # Breaks if a run that crashed (error.json, no record.json: nemogate.proof.stats counts it as
     # errored, not as a run) is loaded, or if load_run unpacks load_runs' result as two values
     # (it returns runs, unreadable, errored) and every folder is silently skipped.
     runs = runs_without(tmp_path)
@@ -216,8 +217,8 @@ def test_an_errored_run_folder_is_skipped_never_an_exemplar(tmp_path):
 
 def test_a_mutation_noop_run_folder_is_skipped_never_an_exemplar(tmp_path):
     # Breaks if a run the gate refused to record (error.json from NothingToMutate, no
-    # record.json: replay.stats counts it as mutation_noop) is loaded as a run or reported as
-    # something other than skipped.
+    # record.json: nemogate.proof.stats counts it as mutation_noop) is loaded as a run or
+    # reported as something other than skipped.
     runs = runs_without(tmp_path)
     noop = runs / "r-20260101T000007-noop77"
     shutil.copytree(runs / "r-20260101T000002-bbb222", noop)

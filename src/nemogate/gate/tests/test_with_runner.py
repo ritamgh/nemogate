@@ -1,4 +1,4 @@
-"""The real gate and oracle inside replay/runner.py, offline: fake Contree, the real team with
+"""The real gate and oracle inside proof/runner.py, offline: fake Contree, the real team with
 stub models, a real checkpointer. Proves the trace hashes match the record's (else the runner
 raises), that the oracle works on the runner's scoped ledger, and that the hash functions agree.
 """
@@ -19,12 +19,12 @@ from nemogate.gate import build_middleware
 from nemogate.gate.tests.stubs import picks
 from nemogate.ledger import ledger_hash, load_ledger
 from nemogate.oracle import evaluate
+from nemogate.proof import record
+from nemogate.proof.runner import Runner
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.run import Violation
 from refapp.team import build_team
-from replay import record
-from replay.runner import Runner
 
 BASE = "00000000-0000-0000-0000-00000000000b"
 FINAL = "00000000-0000-0000-0000-0000000000f1"

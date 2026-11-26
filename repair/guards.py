@@ -23,7 +23,7 @@ _PROTECTED_DIRS = frozenset(
         "ledger",
         "oracle",
         "gate",
-        "replay",
+        "proof",
         "repair",
         "report",
         "preflight",

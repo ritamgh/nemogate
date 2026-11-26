@@ -31,7 +31,7 @@ from nemogate.schemas.run import RunConfig
 from nemogate.schemas.trace import Event, parse_trace_jsonl
 
 # A fork's run folder holds the source's events before the fork point under this name, next to
-# trace.jsonl (replay/runner.py writes it before the gate is built; replay/README.md "Forks").
+# trace.jsonl (proof/runner.py writes it before the gate is built; proof/README.md "Forks").
 PRIOR_EVENTS = "prefix.jsonl"
 
 
