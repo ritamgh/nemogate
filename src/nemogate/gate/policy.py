@@ -6,10 +6,17 @@ so the gate and the oracle can never disagree about a blocked call.
 """
 
 from nemogate.oracle import evaluate
-from nemogate.schemas.ledger import ApprovalBefore, Constraint, Ledger, PathForbidden, ToolForbidden
+from nemogate.schemas.ledger import (
+    ApprovalBefore,
+    Constraint,
+    Ledger,
+    PathForbidden,
+    ToolArgBound,
+    ToolForbidden,
+)
 from nemogate.schemas.trace import Event, ToolCall
 
-_BEFORE_THE_CALL = (PathForbidden, ToolForbidden, ApprovalBefore)
+_BEFORE_THE_CALL = (PathForbidden, ToolForbidden, ApprovalBefore, ToolArgBound)
 
 
 def checkable_before_the_call(constraint: Constraint) -> bool:

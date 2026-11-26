@@ -4,7 +4,10 @@ Reads only ledger.constraints: the runner passes a ledger rebuilt without its ap
 the gate has already made in-repo tool-call paths repo-relative and emitted approval events.
 """
 
+import math
+import operator
 import re
+from typing import Any
 
 from nemogate.oracle.paths import PATH_ARG, glob_matches, repo_relative
 from nemogate.schemas.enums import FsOp
@@ -16,6 +19,7 @@ from nemogate.schemas.ledger import (
     OutputMustInclude,
     OutputMustNotInclude,
     PathForbidden,
+    ToolArgBound,
     ToolForbidden,
 )
 from nemogate.schemas.run import FsChange, Violation
@@ -110,6 +114,77 @@ def _tool_forbidden(c: Constraint, check: ToolForbidden, trace, diff) -> list[Vi
     ]
 
 
+_COMPARE = {
+    "<": operator.lt,
+    "<=": operator.le,
+    "==": operator.eq,
+    "!=": operator.ne,
+    ">=": operator.ge,
+    ">": operator.gt,
+}
+
+
+def _is_number(value: Any) -> bool:
+    """A finite int or float. inf and NaN are not numbers here: a trace file writes them as
+    null, so the gate and the oracle reading that file would grade the same call differently."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    return not isinstance(value, float) or math.isfinite(value)
+
+
+def _shown(value: Any) -> str:
+    """repr(value), cut at 80 characters: the reason goes to the model, the trace and the log."""
+    text = repr(value)
+    return text if len(text) <= 80 else text[:77] + "..."
+
+
+def _kind(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if _is_number(value):
+        return "number"
+    if isinstance(value, float):
+        return "non-finite number"
+    return "text" if isinstance(value, str) else "other"
+
+
+def arg_bound_problem(check: ToolArgBound, args: dict[str, Any]) -> str | None:
+    """Why a call with `args` breaks `check`, or None when it meets it. The one comparison the
+    oracle and the gate share.
+
+    The rule states the allowed condition: `amount <= 100` is met by 100 and broken by 250. It
+    reads the top-level key `check.arg`, and fails closed: a missing argument, a null, or a type
+    that does not fit breaks the rule. Ordering operators need a number on both sides (a bool is
+    not a number); == and != need the same type on both sides.
+    """
+    name, want = f"argument {check.arg!r}", check.value
+    if check.arg not in args:
+        return f"{name} is missing"
+    got = args[check.arg]
+    if check.op not in ("==", "!=") and not _is_number(want):
+        return (
+            f"{name}: type does not match "
+            f"(the rule value {_shown(want)} is text, {check.op} needs numbers)"
+        )
+    if _kind(got) != _kind(want):
+        needs = "a number" if _is_number(want) else "text"
+        return f"{name}: type does not match (got {_kind(got)}, the rule needs {needs})"
+    if _COMPARE[check.op](got, want):
+        return None
+    return f"{name} is {_shown(got)}, the rule requires {check.op} {_shown(want)}"
+
+
+def _tool_arg_bound(c: Constraint, check: ToolArgBound, trace, diff) -> list[Violation]:
+    out = []
+    for e in _executed(trace):
+        problem = arg_bound_problem(check, e.args) if e.tool == check.tool else None
+        if problem:
+            out.append(_v(c, e.step, f"{e.agent} called {e.tool}: {problem}"))
+    return out
+
+
 def _approval_before(c: Constraint, check: ApprovalBefore, trace, diff) -> list[Violation]:
     approvals = [e.step for e in trace if isinstance(e, Approval) and e.approved]
     out = [
@@ -195,6 +270,7 @@ _CHECKERS = {
     ApprovalBefore: _approval_before,
     OutputMustInclude: _must_include,
     OutputMustNotInclude: _must_not_include,
+    ToolArgBound: _tool_arg_bound,
 }
 
 

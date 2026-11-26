@@ -46,7 +46,7 @@ from nemogate.gate.policy import blocking_constraint, checkable_before_the_call
 from nemogate.gate.state import GuardState
 from nemogate.gate.text import message_text as _text
 from nemogate.gate.trace import TraceWriter
-from nemogate.oracle.evaluate import FILE_OPS
+from nemogate.oracle.evaluate import FILE_OPS, arg_bound_problem
 from nemogate.oracle.paths import PATH_ARG, repo_relative
 from nemogate.schemas.ledger import (
     ApprovalBefore,
@@ -55,6 +55,7 @@ from nemogate.schemas.ledger import (
     OutputMustInclude,
     OutputMustNotInclude,
     PathForbidden,
+    ToolArgBound,
 )
 from nemogate.schemas.run import RunConfig
 from nemogate.schemas.trace import (
@@ -604,24 +605,34 @@ class GuardMiddleware(AgentMiddleware):
         blocking = [r for r in hits if r.mode == "block"]
         for rule in hits:
             if rule.mode == "observe":
-                reason = f"would block (observe mode): {rule.text}"
+                reason = f"would block (observe mode): {self._why(rule, args)}"
                 log.info("rule %s: %s (%s)", rule.id, reason, call["name"])
                 self._emit_block(agent, call["name"], rule, reason)
         if blocking:
-            return request, self._block(call, agent, thread, blocking), thread, agent
+            return request, self._block(call, agent, thread, blocking, args), thread, agent
         if not hits:
             self._emit(ToolCall, agent=agent, tool=call["name"], args=args, blocked=False)
         return self._repinned(request), None, thread, agent
 
+    @staticmethod
+    def _why(rule: "Rule", args: dict) -> str:
+        """The rule's text; a tool_arg_bound rule adds which argument failed and how, so the
+        agent can correct the call."""
+        check = rule.constraint.check
+        problem = arg_bound_problem(check, args) if isinstance(check, ToolArgBound) else None
+        return f"{rule.text} ({problem})" if problem else rule.text
+
     def _emit_block(self, agent: str, tool: str, rule: "Rule", reason: str) -> None:
         self._emit(GateBlock, agent=agent, tool=tool, constraint_id=rule.id, reason=reason)
 
-    def _block(self, call: dict, agent: str, thread: str, rules: list["Rule"]) -> ToolMessage:
+    def _block(
+        self, call: dict, agent: str, thread: str, rules: list["Rule"], args: dict
+    ) -> ToolMessage:
         counts = [
             (rule, self._state.record_block(thread, rule.id, call["name"], call["args"]))
             for rule in rules
         ]
-        reason = "\n".join(f"Blocked by rule {r.id}: {r.text}" for r in rules)
+        reason = "\n".join(f"Blocked by rule {r.id}: {self._why(r, args)}" for r in rules)
         self._emit_block(agent, call["name"], rules[0], reason)
         for rule, count in counts:
             if count >= self.MAX_BLOCKS:

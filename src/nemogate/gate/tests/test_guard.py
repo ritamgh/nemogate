@@ -8,7 +8,7 @@ import pytest
 from nemogate.gate.errors import GuardLoopError
 from nemogate.gate.guard import Guard
 from nemogate.gate.state import GuardState
-from nemogate.schemas.ledger import ApprovalBefore, PathForbidden, ToolForbidden
+from nemogate.schemas.ledger import ApprovalBefore, PathForbidden, ToolArgBound, ToolForbidden
 
 MINIMAL = """\
 version: 1
@@ -75,16 +75,15 @@ def test_minimal_file_loads_one_rule_of_each_check_type_with_defaults_filled(tmp
     assert isinstance(guard.state, GuardState)
 
 
-def test_tool_arg_bound_is_rejected_until_the_guard_can_enforce_it(tmp_path):
-    # Breaks if the loader accepts a rule the guard silently skips: a numeric limit that
-    # protects nothing.
-    path = write_rules(tmp_path, MINIMAL + SMALL_PAGES)
+def test_a_tool_arg_bound_rule_loads_next_to_the_other_rules(tmp_path):
+    # Breaks if the loader still refuses tool_arg_bound, or loads it as another check type.
+    guard = Guard.from_yaml(write_rules(tmp_path, MINIMAL + SMALL_PAGES))
 
-    with pytest.raises(ValueError, match="tool_arg_bound is not supported yet") as raised:
-        Guard.from_yaml(path)
-
-    assert str(path) in str(raised.value)
-    assert "small-pages" in str(raised.value)
+    assert [r.id for r in guard.rules][-1] == "small-pages"
+    assert guard.rules[-1].constraint.check == ToolArgBound(
+        tool="fetch", arg="page_size", op="<=", value=50
+    )
+    assert guard.rules[-1].mode == "block"
 
 
 def test_optional_top_level_keys_default_to_none_and_empty(tmp_path):
