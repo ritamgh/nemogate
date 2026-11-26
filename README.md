@@ -10,6 +10,101 @@ NemoGate finds the rules a [LangChain Deep Agents](https://github.com/langchain-
 
 A user tells the planner agent "don't touch `migrations/`". The planner delegates to a coder subagent and paraphrases. The rule doesn't survive the handoff, and the coder edits a migration with no error anywhere. NemoGate records every handoff and every tool call, checks each rule with deterministic predicates, and compares four experimental arms on two numbers at once: how often the rule is broken, and whether the task still gets done.
 
+## Guard quickstart
+
+The guard is a Deep Agents middleware that reads your rules from a YAML file. Before a tool runs it checks the call against every rule and, if one is broken, returns the rule's text as the tool result and never runs the tool. Each time the main agent hands work to a subagent, it adds the rule text to the task description. It makes no model calls and needs no sandbox.
+
+**Install.** `pip install nemogate` is not published yet. From a checkout run `pip install .` (Python 3.12), or build the wheel with `uv build --wheel` and install the file in `dist/`. That installs the guard alone. `pip install .[proof]` adds the sandbox SDK for the forked-run proof, and `pip install .[repair]` adds the repair extra.
+
+**Rules.** `rules.yaml` is one rule: an id, the sentence the agent is told, and one check.
+
+```yaml
+version: 1
+rules:
+  - id: no-migrations
+    text: Never touch the migrations folder.
+    check:
+      path_forbidden: {glob: "migrations/**", ops: [write]}
+```
+
+**Code.** This is `examples/quickstart/app.py`. It runs offline with a scripted model: no network, no key. Run it from that folder with `python app.py`. Replace the line marked `# swap in your own model here` with your model.
+
+```python
+from deepagents import create_deep_agent
+from deepagents.middleware.subagents import SubAgent
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.checkpoint.memory import InMemorySaver
+
+from nemogate import Guard
+
+
+class ScriptedModel(BaseChatModel):
+    """Offline stand-in: tries a forbidden write, then stops. No network, no key."""
+
+    @property
+    def _llm_type(self):
+        return "scripted"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        if any(isinstance(m, ToolMessage) for m in messages):
+            reply = AIMessage(content="Done.")
+        else:
+            call = {
+                "name": "write_file",
+                "args": {"file_path": "/migrations/001_users.sql", "content": "create table ..."},
+                "id": "call-1",
+            }
+            reply = AIMessage(content="", tool_calls=[call])
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+
+model = ScriptedModel()  # swap in your own model here
+
+guard = Guard.from_yaml("rules.yaml")
+agent = create_deep_agent(
+    model=model,
+    middleware=guard.middleware(),  # the main agent
+    subagents=[
+        SubAgent(  # the default general-purpose subagent does not get the main list
+            name="general-purpose",
+            description="General-purpose agent for multi-step work.",
+            system_prompt="Do the work you are given.",
+            model=model,
+            middleware=guard.middleware(),
+        )
+    ],
+    checkpointer=InMemorySaver(),
+)
+
+out = agent.invoke(
+    {"messages": [{"role": "user", "content": "Add a users table."}]},
+    {"configurable": {"thread_id": "quickstart-1"}},
+)
+for message in out["messages"]:
+    if isinstance(message, ToolMessage):
+        print(f"{message.name} -> {message.status}: {message.content}")
+```
+
+**A block** looks like this. The write never ran, and the agent saw the rule as the tool's error result:
+
+```text
+write_file -> error: Blocked by rule no-migrations: Never touch the migrations folder.
+```
+
+**Observe mode.** Add `mode: observe` to a rule to let its calls run and only log what would have been blocked. Pass `trace_path="trace.jsonl"` to `Guard.from_yaml` to keep a JSONL record of every decision.
+
+**Three strikes.** The same blocked call (same tool, same arguments, same rule) is counted per thread. Attempts 1 and 2 return the rule text. Attempt 3 raises `GuardLoopError` and the tool still does not run. Counts and approvals belong to a `thread_id`, so pass one in the run config; runs without one share a single default thread.
+
+**Limits.**
+- Deep Agents apps only.
+- It blocks the file tools it knows (`write_file`, `edit_file`) and tools you map under `tools:` in the rules file, for example `tools: {save_note: {path_arg: file, op: write}}`. Shell commands are not parsed, so a rule can be bypassed through a shell tool.
+- A subagent is protected only if `guard.middleware()` is in its own `SubAgent` spec. The default general-purpose subagent does not get the main list, which is why the code declares one.
+
 ## Results
 
 Live results page: **https://ritamgh.github.io/nemogate/**
