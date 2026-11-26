@@ -60,7 +60,7 @@ uv run python -m report.site --help       # results page
 - Editing `safe_config` in `config.yaml` means updating its `hash` (`common.llm.safe_config_hash`), or live calls refuse to start.
 - Guard rules go in the main agent's middleware AND in each `SubAgent` spec (FACTS section 13); `tool_arg_bound` is implemented and blocks before the call in every arm.
 - `error_type` for a no-op mutation is `nemogate.gate.operators.NothingToMutate`; `nemogate/proof/noop.py` also accepts the pre-move spelling in old runs.
-- `ConstraintId` is `C-NNN` or a lowercase slug. `repair/guards.py` protects folders by path component.
+- `ConstraintId` is `C-NNN` or a lowercase slug. `repair/guards.py` protects named folders by path component and everything under `src/nemogate/`.
 - Quote `outcomes.done` first: a run can break the rule and still pass the task. Details and the other gotchas: `docs/areas/core.md`.
 - Never put `heldout` in a worktree, branch, crew task or output path: `.claude/settings.json` denies reads of `*heldout*`. Use a neutral word such as `appendix`.
 - The live results page was spliced, not rebuilt: `docs/areas/report.md` before touching it.
