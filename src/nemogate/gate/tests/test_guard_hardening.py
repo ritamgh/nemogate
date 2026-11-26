@@ -225,14 +225,35 @@ def test_a_1000_segment_path_against_a_wildcard_glob_returns_fast_and_is_blocked
     assert result is True  # fail closed
 
 
-def test_a_256_segment_path_against_a_failing_wildcard_glob_walks_fast_with_the_memo():
+def test_a_256_segment_path_against_a_wildcard_glob_walks_fast_with_the_memo():
     # Breaks if the walk is not memoised: every way to spread four a* segments over 256 segments
-    # (about 256^4 / 24 of them) is tried before the walk can say no.
+    # (about 256^4 / 24 of them) may be tried. The answer is True since * crosses "/": the path
+    # a/a/.../a/c/b (below the target) matches a*/a*/a*/a*/b* under fnmatch, as the oracle reads it.
     path = "/".join(["a"] * 255 + ["c"])
     start = time.perf_counter()
     result = glob_may_match_below("a*/a*/a*/a*/b*", path)
     assert time.perf_counter() - start < 2
-    assert result is False
+    assert result is True
+
+
+def test_24_star_segments_against_24_non_matching_segments_return_fast():
+    # Breaks if the walk backtracks without a memo: the reviewer's 81-character glob kept the
+    # guard busy for over 3 seconds (0.9 s at 20 segments, doubling per segment).
+    glob = "/".join(["a*"] * 24 + ["protected"])
+    path = "/".join(["a"] * 24 + ["no-match"])
+    start = time.perf_counter()
+    result = glob_may_match_below(glob, path)
+    assert time.perf_counter() - start < 1
+    assert result is True  # the last a* may absorb no-match/..., so a match below can exist
+
+
+def test_a_10000_character_segment_against_many_stars_returns_fast():
+    # Breaks if matching one very long segment against a glob full of stars is not linear-ish.
+    glob = "/".join(["a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b"] * 3)
+    path = "a" * 10_000 + "/" + "a" * 10_000
+    start = time.perf_counter()
+    glob_may_match_below(glob, path)
+    assert time.perf_counter() - start < 1
 
 
 def test_a_path_with_257_segments_is_over_the_limit_and_one_with_256_is_not():

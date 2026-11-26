@@ -288,6 +288,34 @@ def test_the_packages_own_folders_stay_protected_under_src_nemogate():
     }
 
 
+def test_every_module_directly_under_src_nemogate_is_protected():
+    # Breaks if only the named subfolders are protected: the repair agent could add
+    # `nemogate.oracle.evaluate = lambda *a: []` to src/nemogate/__init__.py, or any new module.
+    reasons = {
+        path: protected_reason(path)
+        for path in [
+            "src/nemogate/__init__.py",
+            "src/nemogate/anything.py",
+            "src/nemogate/newpkg/x.py",
+            "src/other/x.py",
+            "src/nemogate_notes.md",
+            "app/nemogate/x.py",
+            "app/src/notes.md",
+        ]
+    }
+    assert reasons == {
+        "src/nemogate/__init__.py": "the package's own code",
+        "src/nemogate/anything.py": "the package's own code",
+        "src/nemogate/newpkg/x.py": "the package's own code",
+        "src/other/x.py": None,
+        "src/nemogate_notes.md": None,
+        "app/nemogate/x.py": None,
+        "app/src/notes.md": None,
+    }
+    with pytest.raises(GuardViolation, match="protected"):
+        check_editable(["src/nemogate/__init__.py"])
+
+
 def test_app_prompt_files_are_editable():
     check_editable(["app/prompts.py", "app/team.py"])
 

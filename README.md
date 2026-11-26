@@ -156,6 +156,7 @@ A mapped tool's path argument may be a string or a list of strings; anything els
 - Deep Agents apps only.
 - Globs are relative to the process working directory, so run the app from the project root. An absolute path to the same file is matched too.
 - Path matching is case-sensitive and does not normalise Unicode. On a case-insensitive filesystem (the macOS default) a different case reaches the same file: add a rule per spelling, or run on Linux.
+- A delete of a folder is blocked when something below it could match a `path_forbidden` glob. This includes an absolute path to a parent of the project root, and `/`.
 - It blocks the file tools it knows (`write_file`, `edit_file`, `delete`) and tools you map under `tools:`. Shell and execute commands are not parsed, so a rule can be bypassed through a shell tool.
 - Counters and approvals live in memory in each `Guard` object and reset when the process restarts. Within one process they persist across invokes of the same thread.
 - Counters and approvals are bounded in memory: the oldest are dropped past 10,000 threads, and past 256 distinct blocked calls in one thread. A path with more than 256 segments is blocked.

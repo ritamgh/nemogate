@@ -753,6 +753,12 @@ def test_a_real_graph_blocks_a_virtual_absolute_write_into_the_forbidden_folder(
         ("data/v?/old", "data/v1", True),
         ("data/v?/old", "data/w1", False),
         ("data/v?/old", "data/v1/old/x", False),  # below the match: the oracle's own check
+        # a * segment is matched as a whole: "src/pkg/private/key" matches src*/private/**
+        ("src*/private/**", "src/pkg", True),
+        ("src*/private/**", "src", True),
+        ("src*/private/**", "srcx/pkg/deep", True),
+        ("src*/private/**", "other/pkg", False),
+        ("src*/private/**", "other", False),
     ],
 )
 def test_glob_may_match_below_says_whether_a_delete_of_target_can_remove_a_match(
@@ -790,6 +796,69 @@ rules:
         result = run(mw, tool, "delete", {"file_path": path})
     assert (tool.ran == []) is blocked
     assert (result.content == "Blocked by rule keep: Keep it.") is blocked
+
+
+def test_a_delete_of_a_parent_the_star_crosses_into_is_blocked_and_an_unrelated_one_runs(
+    tmp_path, repo
+):
+    # Breaks if every directory a * segment crosses must repeat the segment's literal prefix:
+    # delete("src/pkg") removed src/pkg/private/key, which src*/private/** protects.
+    rules = """\
+version: 1
+rules:
+  - id: keep
+    text: Keep it.
+    check:
+      path_forbidden: {glob: "src*/private/**", ops: [delete]}
+"""
+    _, mw = make(tmp_path, rules)
+    tool = Tool()
+    with thread():
+        blocked = run(mw, tool, "delete", {"file_path": "src/pkg"})
+        run(mw, tool, "delete", {"file_path": "other/pkg"}, "c2")
+    assert blocked.content == "Blocked by rule keep: Keep it."
+    assert tool.ran == [{"file_path": "other/pkg"}]
+
+
+# Deleting an absolute ancestor of the working directory
+
+
+def test_an_absolute_ancestor_of_the_root_is_blocked_like_its_dotdot_form(tmp_path, monkeypatch):
+    # Breaks if an absolute path outside the root is allowed without asking what it contains:
+    # delete("/tmp/...") removed the root and its private/ folder, while delete("..") was blocked.
+    outer = tmp_path.resolve()
+    root = outer / "x"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    rules = """\
+version: 1
+rules:
+  - id: keep
+    text: Keep it.
+    check:
+      path_forbidden: {glob: "private/**", ops: [delete]}
+"""
+    _, mw = make(tmp_path, rules)
+    tool = Tool()
+    kept = "Blocked by rule keep: Keep it."
+    with thread():
+        results = {
+            "outer": run(mw, tool, "delete", {"file_path": str(outer)}, "c1"),
+            "slash": run(mw, tool, "delete", {"file_path": "/"}, "c2"),
+            "dotdot": run(mw, tool, "delete", {"file_path": ".."}, "c3"),
+            "root": run(mw, tool, "delete", {"file_path": str(root)}, "c4"),
+            "private": run(mw, tool, "delete", {"file_path": str(root / "private")}, "c5"),
+            "sibling": run(mw, tool, "delete", {"file_path": str(outer / "y")}, "c6"),
+        }
+    assert {k: v.content == kept for k, v in results.items()} == {
+        "outer": True,
+        "slash": True,
+        "dotdot": True,
+        "root": True,
+        "private": True,
+        "sibling": False,
+    }
+    assert tool.ran == [{"file_path": str(outer / "y")}]
 
 
 # Approval answers that mean no

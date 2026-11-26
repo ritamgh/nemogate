@@ -51,6 +51,8 @@ def protected_reason(path: str) -> str | None:
         return "a ledger, configuration or lock file"
     if any(part in _PROTECTED_DIRS for part in parts.parts[:-1]):
         return "pipeline, test, task, docs or CI folder"
+    if parts.parts[:2] == ("src", "nemogate"):
+        return "the package's own code"  # its modules and any folder not named above
     if name == "conftest.py" or name.startswith(("test_", "check_")) or name.endswith("_test.py"):
         return "a test or check script"
     return None
