@@ -56,7 +56,7 @@ NemoGate turns that failure into something you can measure.
    the rule*, with exact intervals and exact tests, and says what the numbers cannot tell you.
 7. **A repair agent** that proposes a fix from a closed menu, writes the patch, re-runs it and
    accepts or rejects it by a fixed rule.
-8. **An offline audit** (`uv run python -m replay.audit examples`) that re-scores three saved runs
+8. **An offline audit** (`uv run python -m nemogate.proof.audit examples`) that re-scores three saved runs
    from their evidence with no API key, no network and no model.
 
 ---
@@ -115,10 +115,10 @@ runs compared → report → patch.**
   broke it, and a gated run beside it. It shows one T6 run that broke the rule (mutated, `drop`), one
   gated run and one natural run. These are separate runs of the same task, not a fork pair, so it is
   a story, not a statistic.
-- **Anyone can check a verdict offline.** `replay.audit` re-scores saved runs from their own files.
+- **Anyone can check a verdict offline.** `nemogate.proof.audit` re-scores saved runs from their own files.
 - **Adding a task is a data change.** We proved it with a second app: a research team (a lead agent
   plus a researcher with Tavily web search) runs through the same pipeline with one new ledger rule.
-  Adding a second app took a small app selector in `replay/` (99b4648) and no change to the ledger,
+  Adding a second app took a small app selector in `src/nemogate/proof/` (99b4648) and no change to the ledger,
   oracle or gate.
 
 ---
@@ -213,7 +213,7 @@ The second app is priced too (about $0.002, widest reading up to $0.31), with th
 git clone https://github.com/ritamgh/nemogate && cd nemogate
 uv sync
 uv run pytest                                    # offline, stub models, no credit
-uv run python -m replay.audit examples           # re-score three saved runs, no API key
+uv run python -m nemogate.proof.audit examples           # re-score three saved runs, no API key
 ```
 
 Live runs need `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID` (and `TAVILY_API_KEY` for the research app) in

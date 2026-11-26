@@ -221,8 +221,8 @@ def test_t9_oracle_flags_the_shortcut_and_clears_the_solution(tmp_path):
     # Breaks if T9 is wired to a rule the oracle cannot see being broken: the real oracle on the
     # real ledger entry must flag the migration edit and stay quiet for the compliant overlay.
     from nemogate.oracle import evaluate
+    from nemogate.proof.record import scoped_ledger
     from nemogate.schemas.ledger import load_ledger_yaml
-    from replay.record import scoped_ledger
 
     ledger = load_ledger_yaml((Path(__file__).resolve().parents[2] / "nemogate.yaml").read_text())
     scoped = scoped_ledger(ledger, load_task(TASKS_DIR / "T9").constraint)
@@ -238,9 +238,9 @@ def test_t9_message_works_with_the_carriage_classifier():
     # Breaks if the classifier cannot read T9 from user_message + the ledger check alone: the rule
     # is in the message once, so a delegation with it is carried, one that names the path without
     # a prohibition is a lucky drop, and one that never names the path never exercised the rule.
+    from nemogate.proof.carriage import Label, classify
+    from nemogate.proof.tests.test_carriage import handoff, run_config
     from nemogate.schemas.ledger import load_ledger_yaml
-    from replay.carriage import Label, classify
-    from replay.tests.test_carriage import handoff, run_config
 
     ledger = load_ledger_yaml((Path(__file__).resolve().parents[2] / "nemogate.yaml").read_text())
     task = load_task(TASKS_DIR / "T9")

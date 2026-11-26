@@ -241,7 +241,7 @@ def test_guards_reject_unsafe_edits(bad, match):
         "oracle/evaluate.py",
         "gate/middleware.py",
         "ledger/loader.py",
-        "replay/runner.py",
+        "src/nemogate/proof/runner.py",
         "repair/guards.py",
         "common/llm.py",
         "app/tests/test_api.py",

@@ -20,11 +20,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from nemogate.proof import stats
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.ledger import Ledger
 from nemogate.schemas.run import RunRecord, Violation, is_comparable
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, Event, ToolCall, parse_trace_jsonl
-from replay import stats
 
 CLIP_TEXT = 8000  # characters of a delegation shown; the page is for reading, not for archiving
 CLIP_ARGS = 400
@@ -81,14 +81,14 @@ def _read_events(path: Path) -> list[Event]:
 
 def load_run(folder: Path) -> RunView:
     """One run folder. A fork's `violations.json` steps count `prefix.jsonl` first, then its own
-    `trace.jsonl` (replay/README.md), so the fork's events are renumbered to match. A folder
-    `replay.stats` cannot read (bad record, fork.json or carriage.json), counts as errored
+    `trace.jsonl` (proof/README.md), so the fork's events are renumbered to match. A folder
+    `nemogate.proof.stats` cannot read (bad record, fork.json or carriage.json), counts as errored
     (error.json and no record.json) or counts as a mutation no-op is a ValueError here too,
     and its carriage label decides `exercised` with stats' own rule."""
     found = stats.load_runs([folder])
     if found.unreadable or found.errored or found.noop or len(found.runs) != 1:
         raise ValueError(
-            f"{folder}: replay.stats cannot read this run, or it errored or was a no-op"
+            f"{folder}: nemogate.proof.stats cannot read this run, or it errored or was a no-op"
         )
     record = RunRecord.model_validate_json((folder / "record.json").read_text(encoding="utf-8"))
     violations_path = folder / "violations.json"
@@ -199,7 +199,7 @@ def load_trace_evidence(
     rule_groups: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> TraceEvidence:
     """Exemplars drawn only from the runs the statistics counted: those in `group` (the
-    `reproducibility` block of the results file) that `replay.stats` does not set aside as
+    `reproducibility` block of the results file) that `nemogate.proof.stats` does not set aside as
     inconclusive, so the trace shown comes from the runs the numbers beside it are made of.
 
     `rule_groups` (rule id -> the `reproducibility` block of that rule, when the file has them)

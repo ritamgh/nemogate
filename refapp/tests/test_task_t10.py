@@ -180,8 +180,8 @@ def test_every_ticket_rule_is_in_the_ledger_with_its_own_check_type(constraint_i
 def test_the_classifier_reads_the_ticket_for_the_approval_rule():
     # Breaks if the real ticket and the real check cannot be matched: the message says "delete",
     # the check's anchor is its stem, and a delegation with the ask kept reads as carried.
-    from replay.carriage import Label, classify
-    from replay.tests.test_carriage import handoff, run_config
+    from nemogate.proof.carriage import Label, classify
+    from nemogate.proof.tests.test_carriage import handoff, run_config
 
     task = load_task(T10)
     check = LEDGER.get(task.constraint).check

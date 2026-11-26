@@ -48,7 +48,7 @@ The hash is `common.llm.safe_config_hash` over the proposed settings and the con
 
 Reads `record.json` from each RUN_DIR (a run folder, or a folder of run folders) and prints n, mean,
 median, max and total USD per arm and over all runs. The "all" mean is what
-`python -m replay.budget --from-runs` plans with.
+`python -m nemogate.proof.budget --from-runs` plans with.
 
 ## Text tool calls (`textcalls.py`)
 

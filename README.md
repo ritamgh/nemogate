@@ -5,7 +5,7 @@ NemoGate finds the rules a [LangChain Deep Agents](https://github.com/langchain-
 **For judges, in five minutes**
 - **The result:** [results page](https://ritamgh.github.io/nemogate/), starting at "At a glance".
 - **One rule, step by step:** [replay](https://ritamgh.github.io/nemogate/replay.html), which follows one rule from the user's message to the action that broke it.
-- **Check it yourself, no key:** `uv run python -m replay.audit examples` (below), or rebuild the page's numbers from the [evidence release](https://github.com/ritamgh/nemogate/releases/tag/evidence-2026-10-27).
+- **Check it yourself, no key:** `uv run python -m nemogate.proof.audit examples` (below), or rebuild the page's numbers from the [evidence release](https://github.com/ritamgh/nemogate/releases/tag/evidence-2026-10-27).
 - **Every number traced to its source:** [`docs/submission/EVIDENCE.md`](docs/submission/EVIDENCE.md).
 
 A user tells the planner agent "don't touch `migrations/`". The planner delegates to a coder subagent and paraphrases. The rule doesn't survive the handoff, and the coder edits a migration with no error anywhere. NemoGate records every handoff and every tool call, checks each rule with deterministic predicates, and compares four experimental arms on two numbers at once: how often the rule is broken, and whether the task still gets done.
@@ -118,7 +118,7 @@ Scope: one model family (Nemotron), small samples (many comparisons, none correc
 ```bash
 uv sync
 uv run pytest                              # offline: stub models, no credit spent
-uv run python -m replay.audit examples     # 3 saved runs re-scored offline: 3 of 3 match
+uv run python -m nemogate.proof.audit examples     # 3 saved runs re-scored offline: 3 of 3 match
 ```
 
 [`examples/README.md`](examples/README.md) explains what the audit prints, and [`results/natural-runs.md`](results/natural-runs.md) lists 25 natural runs (no sabotage) with how each one handled the rule. The 300 run folders behind the page's main numbers (T6, T10, T11) are in the release [`evidence-2026-10-27`](https://github.com/ritamgh/nemogate/releases/tag/evidence-2026-10-27), with the command that rebuilds the page's `results.json` from them, byte for byte, and the audit that re-scores each finished run (278 of 280 match; the release notes explain the 2 that differ, neither counted on the page). None of it needs a key. [`docs/submission/EVIDENCE.md`](docs/submission/EVIDENCE.md) maps each headline number to its source. The sealed held-out runs are not released, so those numbers can be read on the page but not rebuilt.
@@ -160,7 +160,7 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
   | `gated` (NemoGate) | operator applied, then the rule re-pinned | blocked as above; replies that miss an output rule are held back so the planner re-delegates |
 
   Operators run on delegation boundaries (planner → subagent) and on return boundaries (subagent → planner).
-- **Replay** (`replay/`): the runner writes the run config, starts the team from the seed image with the gate, computes the filesystem diff and the task check, calls the oracle, and writes a run record. The record carries the model ids, the safe-config hash, the ledger hash, the repo commit and the lockfile hash, so only runs made under identical conditions are ever pooled.
+- **Replay** (`src/nemogate/proof/`): the runner writes the run config, starts the team from the seed image with the gate, computes the filesystem diff and the task check, calls the oracle, and writes a run record. The record carries the model ids, the safe-config hash, the ledger hash, the repo commit and the lockfile hash, so only runs made under identical conditions are ever pooled.
 - **Which subagent mode.** Deep Agents' default subagent is isolated: it sees only the description the planner writes for it. An experimental `fork` mode lets a subagent continue the parent's conversation instead. Every result in this repository is for the default mode; we have not measured `fork`.
 - **Reference app** (`refapp/`): a small Flask + sqlite3 task tracker and a Deep Agents coding team (planner, coder, reviewer). It's test data: nothing in the pipeline names it, and adding a task is a data-only change.
 
@@ -174,13 +174,13 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
 
 ## Running it
 
-The offline commands (`uv sync`, `uv run pytest`, `uv run python -m replay.audit examples`) are under "Check it without a key" above. Live runs need `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID` in `.env` (see `.env.example`; never commit it) and an explicit opt-in:
+The offline commands (`uv sync`, `uv run pytest`, `uv run python -m nemogate.proof.audit examples`) are under "Check it without a key" above. Live runs need `NEBIUS_API_KEY` and `NEBIUS_PROJECT_ID` in `.env` (see `.env.example`; never commit it) and an explicit opt-in:
 
 ```bash
-uv run python -m replay.budget --bucket kill_gate --arms natural mutated \
+uv run python -m nemogate.proof.budget --bucket kill_gate --arms natural mutated \
     --operators none drop --tasks T1 T6 --from-runs runs     # how many runs the budget allows
 #   no runs/ folder yet? replace --from-runs runs with --cost-per-run 0.15
-NEMOGATE_LIVE=1 uv run python -m replay.runner --tasks T1 T6 \
+NEMOGATE_LIVE=1 uv run python -m nemogate.proof.runner --tasks T1 T6 \
     --arms natural mutated --operators none drop --n N --yes     # replace N with the number of runs per cell the budget check printed
 NEMOGATE_LIVE=1 uv run python -m nemogate.ledger.extract --ledger nemogate.yaml \
     --text-file PROMPT.txt --agents planner,coder,reviewer --tools write_file,delete,http_get --dry-run
@@ -193,7 +193,7 @@ NEMOGATE_LIVE=1 uv run python -m nemogate.ledger.extract --ledger nemogate.yaml 
 | `schemas/` | The shared formats: ledger, trace events, run config and record, app config |
 | `common/` | `get_model(role)`, the spend log and cap, `.env` loading |
 | `ledger/`, `oracle/`, `gate/` | The rules, the deterministic checks, the middleware |
-| `replay/` | The runner, the filesystem diff, the budget check |
+| `src/nemogate/proof/` | The runner, the filesystem diff, the budget check |
 | `refapp/` | The reference app and its tasks (test data) |
 | `docs/` | `SPEC.md` (the plan and its change log), `FACTS.md` (verified facts about the libraries, the platform and the models, with evidence) |
 

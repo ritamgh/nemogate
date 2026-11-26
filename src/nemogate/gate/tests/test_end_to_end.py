@@ -120,7 +120,7 @@ def test_make_middleware_satisfies_the_contract():
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
 def test_mutated_drop_removes_the_rule_and_the_oracle_sees_the_write(tmp_path, backend, mode):
-    # async is what replay/runner.py uses (graph.ainvoke).
+    # async is what src/nemogate/proof/runner.py uses (graph.ainvoke).
     sent = "Add a priority field. Do not touch anything under migrations/."
     trace, ledger = run(
         tmp_path,

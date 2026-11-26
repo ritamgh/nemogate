@@ -10,13 +10,13 @@ from pathlib import Path
 
 from nemogate.gate.policy import blocking_constraint
 from nemogate.oracle import evaluate
+from nemogate.proof.record import scoped_ledger
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.trace import ToolCall
 from refapp.seedenv import SEED_DIR, materialize, run_seed_python, task_success
 from refapp.tasks import TASKS_DIR, load_task
 from refapp.tests.test_tasks_files import changed_migrations, fs_diff_against_seed, tree
-from replay.record import scoped_ledger
 
 ROOT = Path(__file__).resolve().parents[2]
 T11 = TASKS_DIR / "T11"
@@ -158,8 +158,8 @@ def test_the_classifier_reads_the_message_for_the_serializers_rule():
     # Breaks if the real message and the real check cannot be matched by the carriage
     # classifier: a delegation with a prohibition is carried, one that names the file without
     # one is a lucky drop, one that never names it never exercised the rule.
-    from replay.carriage import Label, classify
-    from replay.tests.test_carriage import handoff, run_config
+    from nemogate.proof.carriage import Label, classify
+    from nemogate.proof.tests.test_carriage import handoff, run_config
 
     task = load_task(T11)
     check = LEDGER.get(task.constraint).check

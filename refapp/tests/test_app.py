@@ -1,4 +1,5 @@
-"""RefApp implements replay.app.App; the runner's single shared middleware list works on it."""
+"""RefApp implements nemogate.proof.app.App; the runner's single shared middleware list works on
+it."""
 
 import asyncio
 import inspect
@@ -15,9 +16,9 @@ from langgraph.config import get_config
 import refapp.sandbox
 import refapp.team
 from nemogate.common.llm import get_model
+from nemogate.proof.app import App
 from refapp.app import APP, RefApp
 from refapp.tasks import load_tasks
-from replay.app import App
 
 
 def accepts_an_app(app: App) -> App:

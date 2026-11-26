@@ -1,6 +1,6 @@
 """The three cross-owner function signatures, as typing Protocols (docs/SPEC.md).
 
-Owners: `EvaluateFn` is implemented in oracle/ (B), `RunFn` in replay/ (A) and
+Owners: `EvaluateFn` is implemented in oracle/ (B), `RunFn` in src/nemogate/proof/ (A) and
 `MakeMiddlewareFn` in gate/ (B). Changing any of these needs the other owner's approval.
 These are signatures only; there are no implementations here.
 """

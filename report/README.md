@@ -11,7 +11,7 @@ uv run python -m report.site --results results/results.json --out results/site/i
     [--link LABEL URL]...
 ```
 
-Reads the `results.json` that `replay/stats.py` writes (`format_version` 2; any other version is
+Reads the `results.json` that `src/nemogate/proof/stats.py` writes (`format_version` 2; any other version is
 refused with exit code 2) and writes one self-contained HTML file: inline CSS and SVG, no script,
 no font, CDN or other network request. The output depends only on the input, so two runs are
 byte-identical. Generated pages are not committed.
@@ -106,7 +106,7 @@ What it shows:
   compaction setting, the sentence names the setting it quotes and says the others have their own
   rows below; "No comparison has enough runs yet" when there is none.
 - Exact tests (p-values), when a boundary of the results file has `exact_tests` (written by
-  `replay/stats.py`; see `replay/README.md`, "Exact tests"). Under the gated-minus-block-only
+  `src/nemogate/proof/stats.py`; see `src/nemogate/proof/README.md`, "Exact tests"). Under the gated-minus-block-only
   attempt lines of each boundary (main set and appendices alike) there is one table, a row per
   entry, built from the entries only. Columns: Outcome ("Broke the rule", "Tried the forbidden
   action", "Did the job and kept the rule"), Operator ("Pooled over operators" for the pooled
@@ -161,7 +161,7 @@ What it shows:
   check holds an open set's notes to its own section too. Use `--appendix` for anything sealed.
   Tests: `report/tests/test_site_appendix_open.py`.
 - Every appendix, open or sealed, with `runs.errored_cost` in its file, gets "Errored runs, by arm"
-  under Run accounting: per arm the errored runs (from `errored_cost.by_arm`; `replay.stats` lists
+  under Run accounting: per arm the errored runs (from `errored_cost.by_arm`; `nemogate.proof.stats` lists
   only the arms that had one, so an arm not listed reads 0) and the runs counted in the rates (the
   cells' runs; a dash for an arm with no cell), plus an "All arms" row (`errored_cost.count` and
   the cells' total), and a line saying an errored run ended in an error before it could be graded
@@ -264,13 +264,13 @@ The second app's results (research team, Tavily; added in PR #102, shown on the 
 the T13 pilot as two separate open sets, never pooled with each other or with the main set. Their
 results files and notes are committed (`results/research/t14.json`, `t13.json`,
 `results/notes/research-t14.txt`, `research-t13.txt`); the run folders are not in git. To rebuild
-them, run `replay.stats` on one task's folders at a time (`replay.stats` pools by rule and T13 and
+them, run `nemogate.proof.stats` on one task's folders at a time (`nemogate.proof.stats` pools by rule and T13 and
 T14 share C-011), with the research app selected, then build:
 
 ```
-NEMOGATE_APP=refapp.research.app:APP uv run python -m replay.stats RUNS/research-t14-a RUNS/research-t14-b \
+NEMOGATE_APP=refapp.research.app:APP uv run python -m nemogate.proof.stats RUNS/research-t14-a RUNS/research-t14-b \
     --ledger nemogate.yaml --out results/research/t14.json
-NEMOGATE_APP=refapp.research.app:APP uv run python -m replay.stats RUNS/research-arms RUNS/research-pilot \
+NEMOGATE_APP=refapp.research.app:APP uv run python -m nemogate.proof.stats RUNS/research-arms RUNS/research-pilot \
     RUNS/research-pilot-drop --ledger nemogate.yaml --out results/research/t13.json
 uv run python -m report.site --results results/results.json --out results/site/index.html \
     --appendix-open "Second app: research team with web search (Tavily), task T14" \
@@ -280,8 +280,8 @@ uv run python -m report.site --results results/results.json --out results/site/i
 ```
 
 Tests: `uv run pytest report/tests/test_site.py`. Fixtures in `report/tests/fixtures/`:
-`results_runs.json` is generated from `run_folders/` and `ledger.yaml` by `replay.stats`
-(`uv run python -m replay.stats report/tests/fixtures/run_folders --ledger
+`results_runs.json` is generated from `run_folders/` and `ledger.yaml` by `nemogate.proof.stats`
+(`uv run python -m nemogate.proof.stats report/tests/fixtures/run_folders --ledger
 report/tests/fixtures/ledger.yaml --out report/tests/fixtures/results_runs.json`; a test
 regenerates it and compares), so the numbers and the trace panel describe the same runs.
 `results_rich.json` is hand-written, has no run folders behind it, and is for page features: (two constraints, a return edge, a clustered cell, a null
@@ -305,7 +305,7 @@ outcome-first section is tested in `test_site_outcome_first.py`.
   comparison run that kept the rule (a gated run with the same operator, else a natural run;
   same task, rule and boundary, and `is_comparable`). Only runs the statistics counted are
   used: those in the rule's own `reproducibility` group (the file's top-level one for an older file
-  without per-rule groups) that `replay.stats` does not set aside
+  without per-rule groups) that `nemogate.proof.stats` does not set aside
   (`stats.is_exercised`; a folder it cannot read is skipped), so the trace comes from the runs
   the numbers are made of.
   Each side shows the planner's text diffed against what the receiver got (a line tagged
@@ -332,7 +332,7 @@ only the built page (`index.html`) and an empty `.nojekyll`. The page is built l
 its trace and patch panels read `runs/`, which is not in git. From the repo root:
 
 ```
-uv run python -m replay.stats runs/r-* --ledger nemogate.yaml --out results/results.json
+uv run python -m nemogate.proof.stats runs/r-* --ledger nemogate.yaml --out results/results.json
 uv run python -m report.site --results results/results.json --out results/site/index.html \
     --runs runs --ledger nemogate.yaml [--repair runs/repair]
 git fetch origin gh-pages && git worktree add /tmp/nemogate-pages gh-pages
@@ -425,8 +425,8 @@ uv run python -m report.step_limit RUN_DIR_OR_PARENT... --ledger nemogate.yaml \
 
 A run that reaches the graph's step limit (`recursion_limit`) has error.json (a
 `GraphRecursionError` or its subclass `StepLimitReached`, matched by class name) and a partial trace but no record.json, so
-`replay.stats` leaves it out of the rates. This writes a two-row table for one cell: the cell as
-published (loaded and pooled by `replay.stats`, so it equals the results page; `--repo-sha` pins the
+`nemogate.proof.stats` leaves it out of the rates. This writes a two-row table for one cell: the cell as
+published (loaded and pooled by `nemogate.proof.stats`, so it equals the results page; `--repo-sha` pins the
 task's commit exactly as `stats --repo-sha TASK=COMMIT` does) and the same cell with its step-limit
 runs counted as finished. Those are counted as task failed, with the rule judged by `oracle.evaluate`
 on the partial trace against the run's own `ledger.yaml` (scoped to the target rule), and the
@@ -464,13 +464,13 @@ of the same folders are byte-identical.
   is left out when the rule run's `violations.json` has no entry for the rule.
 - **Only saved text:** every quote is read from the run folders and escaped; long text is cut
   with a visible `…` and a count of the characters left out. The verdict is `violations.json`,
-  never recomputed. The text anchor comes from `replay.carriage.anchors_of` on the run's own
+  never recomputed. The text anchor comes from `nemogate.proof.carriage.anchors_of` on the run's own
   check, so a rule with no text anchor marks nothing and the page says so.
 - **The runs:** the footer lists them (short id, arm, operator, task, full id) and says whether
   they are forks of one source or separate runs, which are not a matched pair. The page says it
   tells one run's story, not a statistic. The runs must share task, rule and boundary.
 - **The user's message** is not in a run folder. Without `--user-message-file` it is read from
-  the default app's task registry (`replay.carriage.load_user_messages`, by the run's task id);
+  the default app's task registry (`nemogate.proof.carriage.load_user_messages`, by the run's task id);
   with neither, step 1 says it is missing and shows only the ledger's rule.
 - A missing or unreadable file, a trace without the handoff, or runs about different rules is
   exit code 2 with a message naming the file; nothing is written.
