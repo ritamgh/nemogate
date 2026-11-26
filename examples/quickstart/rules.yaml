@@ -1,0 +1,6 @@
+version: 1
+rules:
+  - id: no-migrations
+    text: Never touch the migrations folder.
+    check:
+      path_forbidden: {glob: "migrations/**", ops: [write]}

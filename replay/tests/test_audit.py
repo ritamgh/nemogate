@@ -353,7 +353,10 @@ def test_the_examples_are_small_and_hold_no_sealed_task_or_secret():
     forbidden = [r"T7", r"T8", r"\.env", r"sk-", r"nvapi", r"Bearer", r"[A-Za-z0-9+/=]{80,}"]
     files = [p for p in EXAMPLES.rglob("*") if p.is_file() and p.name != "README.md"]
     assert sum(p.stat().st_size for p in files) < 1_000_000
-    assert {p.name for p in files} <= {
+    # The guard quickstart is not a saved run: it has its own two files, and still gets the scan.
+    quickstart = [p for p in files if "quickstart" in p.relative_to(EXAMPLES).parts[:1]]
+    assert {p.name for p in quickstart} <= {"app.py", "rules.yaml"}
+    assert {p.name for p in files if p not in quickstart} <= {
         "record.json",
         "trace.jsonl",
         "fs_diff.json",
