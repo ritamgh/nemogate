@@ -77,7 +77,10 @@ class Guard:
         The guard writes a JSONL trace of its decisions to `trace_path` when one is given, and
         no file otherwise."""
         path = Path(path)
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError(f"{path}: not valid YAML: {exc}") from exc
         if not isinstance(data, dict):
             raise ValueError(f"{path}: the rules file must be a mapping")
         _reject_unknown(data, _TOP_FIELDS, f"{path}")
@@ -141,6 +144,22 @@ def _load_tools(path: Path, tools: Any) -> dict[str, dict[str, str]]:
     return mapped
 
 
+def _normalise_glob(glob: str, where: str) -> str:
+    """Make a glob comparable with the repo-relative paths the oracle matches it against.
+
+    `./app/**` would otherwise never match `app/x` and silently protect nothing. Drops `.`
+    segments and repeated slashes (a trailing slash stays: `app/` matches the folder itself)."""
+    if glob.startswith("/"):
+        raise ValueError(f"{where}: glob {glob!r} must be relative to the repo, not absolute")
+    segments = glob.split("/")
+    if ".." in segments:
+        raise ValueError(f"{where}: glob {glob!r} must not contain a '..' segment")
+    kept = [s for s in segments if s not in ("", ".")]
+    if not kept:
+        raise ValueError(f"{where}: glob {glob!r} matches no path")
+    return "/".join(kept) + ("/" if glob.endswith("/") else "")
+
+
 def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: each rule must be a mapping, got {raw!r}")
@@ -168,6 +187,8 @@ def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
     _reject_unknown(params, _CHECK_FIELDS[kind], f"{where}, check {kind!r}")
     if kind == "approval_before" and not approval_tool:
         raise ValueError(f"{where}: approval_before needs approval_tool at the top of the file")
+    if kind == "path_forbidden" and isinstance(params.get("glob"), str):
+        params = {**params, "glob": _normalise_glob(params["glob"], where)}
     try:
         constraint = Constraint.model_validate(
             {
