@@ -10,6 +10,8 @@ allowed condition: `{tool: refund, arg: amount, op: "<=", value: 100}` lets amou
 and blocks 250. See oracle.arg_bound_problem for how a missing, null or mistyped argument fails.
 """
 
+import collections.abc
+import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,8 @@ from nemogate.gate.trace import GuardTraceWriter
 from nemogate.ledger import ledger_hash
 from nemogate.schemas.enums import FileOp
 from nemogate.schemas.ledger import AppInfo, Constraint, Ledger
+
+log = logging.getLogger(__name__)
 
 _TOP_FIELDS = {"version", "approval_tool", "tools", "rules"}
 _RULE_FIELDS = {"id", "text", "check", "mode"}
@@ -45,6 +49,31 @@ _DEFAULTS = {
     "scope": ["all"],
     "origin": "declared",
 }
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a mapping key written twice: PyYAML lets the last one win, which
+    would drop rules or change a rule without a word."""
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
+            key = self.construct_object(key_node, deep=True)
+            if isinstance(key, collections.abc.Hashable):
+                if key in seen:
+                    raise yaml.constructor.ConstructorError(
+                        None, None, f"found duplicate key {key!r}", key_node.start_mark
+                    )
+                seen.add(key)
+        return super().construct_mapping(node, deep=deep)
+
+
+def _validation_message(exc: ValidationError) -> str:
+    """The pydantic message without its trailing "For further information visit ..." lines."""
+    lines = str(exc).splitlines()
+    return "\n".join(line for line in lines if "errors.pydantic.dev" not in line)
 
 
 @dataclass(frozen=True)
@@ -84,9 +113,17 @@ class Guard:
         no file otherwise."""
         path = Path(path)
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{path}: not valid UTF-8 text") from exc
+        try:
+            data = yaml.load(text, Loader=_UniqueKeyLoader)
         except yaml.YAMLError as exc:
             raise ValueError(f"{path}: not valid YAML: {exc}") from exc
+        if data is None:
+            raise ValueError(
+                f"{path}: the file is empty; expected a mapping with `version:` and `rules:`"
+            )
         if not isinstance(data, dict):
             raise ValueError(f"{path}: the rules file must be a mapping")
         _reject_unknown(data, _TOP_FIELDS, f"{path}")
@@ -105,7 +142,9 @@ class Guard:
                 constraints=tuple(r.constraint for r in rules),
             )
         except ValidationError as exc:
-            raise ValueError(f"{path}: {exc}") from exc
+            raise ValueError(f"{path}: {_validation_message(exc)}") from exc
+        if not rules:
+            log.warning("%s: no rules: the guard will allow every call", path)
         return cls(rules, approval_tool, tool_map, trace_path)
 
     def middleware(self) -> list[AgentMiddleware]:
@@ -219,6 +258,11 @@ def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
         raise ValueError(f"{where}: approval_before needs approval_tool at the top of the file")
     if kind == "path_forbidden" and isinstance(params.get("glob"), str):
         params = {**params, "glob": _normalise_glob(params["glob"], where)}
+    if kind == "path_forbidden" and "ops" in params and not isinstance(params["ops"], list):
+        raise ValueError(
+            f"{where}, check 'path_forbidden': ops must be a list such as "
+            f"[{', '.join(op.value for op in FileOp)}], got {params['ops']!r}"
+        )
     if kind == "tool_arg_bound":
         _check_arg_bound(params, where)
     try:
@@ -231,5 +275,5 @@ def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
             }
         )
     except ValidationError as exc:
-        raise ValueError(f"{where}: {exc}") from exc
+        raise ValueError(f"{where}: {_validation_message(exc)}") from exc
     return Rule(constraint, mode)

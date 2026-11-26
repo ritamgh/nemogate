@@ -301,3 +301,88 @@ def test_glob_that_normalises_to_nothing_is_rejected(tmp_path):
 
     assert str(path) in message
     assert "no-secrets" in message
+
+
+# Files that are not text, repeated keys, empty files
+
+RULE_ONE = "  - id: a\n    text: T\n    check:\n      tool_forbidden: {name: x}\n"
+
+
+def test_non_utf8_file_raises_a_value_error_naming_the_file(tmp_path):
+    # Breaks if a binary or Latin-1 file escapes as a bare UnicodeDecodeError with no file name.
+    path = tmp_path / "rules.yaml"
+    path.write_bytes(b"\xff\xfe\x00\x01garbage")
+
+    message = load_error(path)
+
+    assert str(path) in message
+    assert "not valid UTF-8 text" in message
+
+
+def test_two_rules_keys_are_rejected_naming_the_file_and_the_key(tmp_path):
+    # Breaks if the second `rules:` silently replaces the first and drops its rules.
+    path = write_rules(tmp_path, f"{RULES_HEAD}{RULE_ONE}rules: []\n")
+
+    message = load_error(path)
+
+    assert str(path) in message
+    assert "duplicate key 'rules'" in message
+
+
+def test_repeated_key_inside_a_rule_is_rejected_naming_the_file_and_the_key(tmp_path):
+    # Breaks if the last `text:` silently wins over the first.
+    path = write_rules(tmp_path, f"{RULES_HEAD}{RULE_ONE}    text: U\n")
+
+    message = load_error(path)
+
+    assert str(path) in message
+    assert "duplicate key 'text'" in message
+
+
+@pytest.mark.parametrize("text", ["", "   \n", "# only a comment\n# and another\n"])
+def test_empty_file_or_comments_only_says_what_to_write(tmp_path, text):
+    path = write_rules(tmp_path, text)
+
+    assert load_error(path) == (
+        f"{path}: the file is empty; expected a mapping with `version:` and `rules:`"
+    )
+
+
+def test_no_rules_loads_but_warns_once_naming_the_file(tmp_path, caplog):
+    # Breaks if an empty rule list is accepted silently: the guard would allow every call.
+    path = write_rules(tmp_path, "version: 1\nrules: []\n")
+
+    with caplog.at_level("WARNING"):
+        guard = Guard.from_yaml(path)
+
+    assert guard.rules == []
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert warnings == [f"{path}: no rules: the guard will allow every call"]
+
+
+def test_ops_written_as_a_string_says_ops_must_be_a_list(tmp_path):
+    # Breaks if `ops: write` surfaces as a pydantic tuple_type message.
+    path = write_rules(tmp_path, one_path_rule("secrets/**").replace("[write]", "write"))
+
+    message = load_error(path)
+
+    assert str(path) in message
+    assert "no-secrets" in message
+    assert "ops must be a list such as [write, delete]" in message
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda t: t.replace("[write]", "[read]"),
+        lambda t: t.replace("[write]", "[]"),
+        lambda t: t.replace("no-secrets", "No Secrets"),
+    ],
+)
+def test_pydantic_validation_messages_carry_no_docs_link(tmp_path, mutate):
+    # Breaks if the "For further information visit https://errors.pydantic.dev/..." line leaks.
+    message = load_error(write_rules(tmp_path, mutate(one_path_rule("secrets/**"))))
+
+    assert "errors.pydantic.dev" not in message
+    assert "For further information" not in message
+    assert "validation error" in message
