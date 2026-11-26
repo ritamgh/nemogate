@@ -28,7 +28,7 @@ from nemogate.common import ConfigError, MissingEnvError, SpendCapReached, env, 
 from nemogate.common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, is_live
 from nemogate.common.spend import run_scope, run_totals
 from nemogate.gate.operators import MutationFailed, NothingToMutate, make_operator
-from nemogate.proof import record, sweep_status
+from nemogate.proof import import_extra, record, sweep_status
 from nemogate.proof.app import App, AppTask, load_app, pairs
 from nemogate.proof.boundaries import (
     BoundaryRecorder,
@@ -84,7 +84,8 @@ SUBAGENT_STEP_LIMIT = 240
 
 
 def _default_client() -> Any:
-    from contree_sdk import Contree  # imported here so tests never need the SDK client
+    # imported here so tests never need the SDK client
+    Contree = import_extra("contree_sdk").Contree
 
     # contree-sdk resolves its credentials when `Contree()` is built and sends an unset
     # variable's name as the credential (FACTS §3, §9), so load `.env` and check first.
@@ -531,7 +532,7 @@ class Runner:
         # Import path, constructor and close: langgraph/checkpoint/sqlite/aio.py:38 (the class),
         # :132-146 (`from_conn_string` is an async context manager that opens an aiosqlite
         # connection and closes it on exit); FACTS §5 ("SQLite checkpointer import path").
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        AsyncSqliteSaver = import_extra("langgraph.checkpoint.sqlite.aio").AsyncSqliteSaver
 
         config = {
             "configurable": {"thread_id": thread_id},

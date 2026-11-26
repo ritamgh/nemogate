@@ -2,8 +2,11 @@
 
 import asyncio
 
-from contree_sdk.langchain.sandbox import ContreeSandbox
 from deepagents.backends.protocol import ExecuteResponse
+
+from nemogate.proof import import_extra
+
+ContreeSandbox = import_extra("contree_sdk.langchain.sandbox").ContreeSandbox
 
 
 def _retrieve(task: asyncio.Future) -> None:
