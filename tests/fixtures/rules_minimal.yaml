@@ -1,0 +1,19 @@
+# One rule of each check type the guard enforces today (tool_arg_bound is rejected by the loader).
+version: 1
+approval_tool: ask_human
+tools:
+  save_note: {path_arg: file, op: write}
+rules:
+  - id: no-secrets-folder
+    text: Never write or delete anything under the secrets folder.
+    check:
+      path_forbidden: {glob: "secrets/**", ops: [write, delete]}
+  - id: no-shell
+    text: Do not run shell commands.
+    mode: observe
+    check:
+      tool_forbidden: {name: run_shell}
+  - id: ask-before-purge
+    text: Ask a human before purging.
+    check:
+      approval_before: {tool: purge_records}
