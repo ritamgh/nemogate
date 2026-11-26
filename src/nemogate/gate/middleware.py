@@ -538,33 +538,58 @@ class GuardMiddleware(AgentMiddleware):
             r.id: ledger.model_copy(update={"constraints": (r.constraint,)}) for r in rules
         }
 
+    def _file_tool(self, tool: str) -> tuple[str, str, str] | None:
+        """(the built-in tool of the operation, the path argument, the operation) for a file tool:
+        a built-in, or one the rules file maps; None for any other tool."""
+        mapped = self._tool_map.get(tool)
+        if mapped is not None:
+            builtin = next(t for t, op in FILE_OPS.items() if op == mapped["op"])
+            return builtin, mapped["path_arg"], mapped["op"]
+        return (tool, PATH_ARG, FILE_OPS[tool]) if tool in FILE_OPS else None
+
+    @staticmethod
+    def _paths(value: Any) -> list[str] | None:
+        """The paths in a path argument: a string, or a list of strings. None for anything else."""
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list | tuple) and all(isinstance(v, str) for v in value):
+            return list(value)
+        return None
+
+    def _path_problem(self, tool: str, args: dict) -> tuple[str, str] | None:
+        """(operation, reason) when a file tool's path argument cannot be read as a path or a list
+        of paths: a path_forbidden rule cannot tell what the call touches, so it fails closed."""
+        info = self._file_tool(tool)
+        if info is None or self._paths(args.get(info[1])) is not None:
+            return None
+        what = "is not a path or list of paths" if info[1] in args else "is missing"
+        return info[2], f"tool {tool}: argument {info[1]} {what}"
+
     def _path_calls(self, raw: ToolCall, agent: str) -> list[ToolCall]:
         """The call as a path_forbidden rule reads it: a file tool (a built-in, or one the rules
-        file maps), named as the built-in tool of its operation, once per way its path can be
-        read: resolved on the filesystem, and as a Deep Agents virtual path (the leading "/" is
-        the repo root, so "/docs/x" is docs/x). A rule is broken if either breaks it.
+        file maps), named as the built-in tool of its operation, once per path and once per way a
+        path can be read: resolved on the filesystem, and as a Deep Agents virtual path (the
+        leading "/" is the repo root, so "/docs/x" is docs/x). A rule is broken if any breaks it.
         """
-        mapped = self._tool_map.get(raw.tool)
-        if mapped is not None:
-            tool = next(t for t, op in FILE_OPS.items() if op == mapped["op"])
-            arg = mapped["path_arg"]
-        elif raw.tool in FILE_OPS:
-            tool, arg = raw.tool, PATH_ARG
-        else:
+        info = self._file_tool(raw.tool)
+        if info is None:
             return [raw]
-        value = raw.args.get(arg)
-        if not isinstance(value, str):
-            paths = [{}]
-        else:
-            real = resolve_path(value, self._ledger.app.repo_root)
-            paths = [{PATH_ARG: p} for p in dict.fromkeys([real, virtual_path(value)])]
+        tool, arg, _ = info
+        paths = [
+            {PATH_ARG: p}
+            for value in self._paths(raw.args.get(arg)) or []
+            for p in dict.fromkeys(
+                [resolve_path(value, self._ledger.app.repo_root), virtual_path(value)]
+            )
+        ]
         return [
             self._writer.preview(ToolCall, step=1, agent=agent, tool=tool, args=args)
-            for args in paths
+            for args in paths or [{}]
         ]
 
     def _violated(self, raw: ToolCall, agent: str, thread: str) -> list["Rule"]:
         path_calls = self._path_calls(raw, agent)
+        problem = self._path_problem(raw.tool, raw.args)
         hit = []
         for rule in self._rules:
             check = rule.constraint.check
@@ -579,8 +604,11 @@ class GuardMiddleware(AgentMiddleware):
                 ]
             calls = path_calls if isinstance(check, PathForbidden) else [raw]
             single = self._single[rule.id]
-            if any(blocking_constraint(single, prior, call) is not None for call in calls) or (
-                isinstance(check, PathForbidden) and _deletes_protected_parent(check, calls)
+            unreadable = problem is not None and isinstance(check, PathForbidden)
+            if (
+                any(blocking_constraint(single, prior, call) is not None for call in calls)
+                or (isinstance(check, PathForbidden) and _deletes_protected_parent(check, calls))
+                or (unreadable and problem[0] in check.ops)
             ):
                 hit.append(rule)
         return hit
@@ -605,7 +633,7 @@ class GuardMiddleware(AgentMiddleware):
         blocking = [r for r in hits if r.mode == "block"]
         for rule in hits:
             if rule.mode == "observe":
-                reason = f"would block (observe mode): {self._why(rule, args)}"
+                reason = f"would block (observe mode): {self._why(rule, call['name'], args)}"
                 log.info("rule %s: %s (%s)", rule.id, reason, call["name"])
                 self._emit_block(agent, call["name"], rule, reason)
         if blocking:
@@ -614,12 +642,17 @@ class GuardMiddleware(AgentMiddleware):
             self._emit(ToolCall, agent=agent, tool=call["name"], args=args, blocked=False)
         return self._repinned(request), None, thread, agent
 
-    @staticmethod
-    def _why(rule: "Rule", args: dict) -> str:
-        """The rule's text; a tool_arg_bound rule adds which argument failed and how, so the
-        agent can correct the call."""
+    def _why(self, rule: "Rule", tool: str, args: dict) -> str:
+        """The rule's text; a tool_arg_bound rule adds which argument failed and how, and a
+        path_forbidden rule a mapped tool's unreadable path argument, so the agent can correct
+        the call."""
         check = rule.constraint.check
-        problem = arg_bound_problem(check, args) if isinstance(check, ToolArgBound) else None
+        problem = None
+        if isinstance(check, ToolArgBound):
+            problem = arg_bound_problem(check, args)
+        elif isinstance(check, PathForbidden):
+            found = self._path_problem(tool, args)
+            problem = found[1] if found and found[0] in check.ops else None
         return f"{rule.text} ({problem})" if problem else rule.text
 
     def _emit_block(self, agent: str, tool: str, rule: "Rule", reason: str) -> None:
@@ -632,7 +665,9 @@ class GuardMiddleware(AgentMiddleware):
             (rule, self._state.record_block(thread, rule.id, call["name"], call["args"]))
             for rule in rules
         ]
-        reason = "\n".join(f"Blocked by rule {r.id}: {self._why(r, args)}" for r in rules)
+        reason = "\n".join(
+            f"Blocked by rule {r.id}: {self._why(r, call['name'], args)}" for r in rules
+        )
         self._emit_block(agent, call["name"], rules[0], reason)
         for rule, count in counts:
             if count >= self.MAX_BLOCKS:

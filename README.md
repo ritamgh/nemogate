@@ -150,6 +150,8 @@ A block, with the reason appended: `refund -> error: Blocked by rule refund-cap:
 
 `mode: block` (the default) blocks. `mode: observe` lets the call run and logs what would have been blocked. The top-level `tools:` map names your own file tools so that `path_forbidden` applies to them: `tools: {save_note: {path_arg: file, op: write}}` (`op` is `write` or `delete`).
 
+A mapped tool's path argument may be a string or a list of strings; anything else, or a missing argument, is blocked.
+
 **Limits you should know.**
 - Deep Agents apps only.
 - Globs are relative to the process working directory, so run the app from the project root. An absolute path to the same file is matched too.
