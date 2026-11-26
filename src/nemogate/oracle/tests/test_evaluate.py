@@ -222,12 +222,6 @@ def test_unverified_constraint_yields_nothing():
     assert evaluate(ledger(None), [call(1, "fetch")], []) == []
 
 
-def test_tool_arg_bound_is_not_silently_passed():
-    check = {"type": "tool_arg_bound", "tool": "t", "arg": "n", "op": "<=", "value": 3}
-    with pytest.raises(NotImplementedError):
-        evaluate(ledger(check), [], [])
-
-
 ASK = {"type": "approval_before", "tool": "delete"}
 
 

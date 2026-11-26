@@ -3,6 +3,11 @@
 A rule names itself with a slug and carries text and one check; the loader fills every other
 ledger field with a fixed default. The guard is driven by the rules file alone: no run config,
 no repo config.yaml, no .env.
+
+A rule's check is one of `path_forbidden: {glob, ops}`, `tool_forbidden: {name}`,
+`approval_before: {tool}` or `tool_arg_bound: {tool, arg, op, value}`. The last states the
+allowed condition: `{tool: refund, arg: amount, op: "<=", value: 100}` lets amount 100 through
+and blocks 250. See oracle.arg_bound_problem for how a missing, null or mistyped argument fails.
 """
 
 from dataclasses import dataclass
@@ -160,6 +165,23 @@ def _normalise_glob(glob: str, where: str) -> str:
     return "/".join(kept) + ("/" if glob.endswith("/") else "")
 
 
+def _check_arg_bound(params: dict, where: str) -> None:
+    """Refuse a bound that would block every call or mean something else than written."""
+    for field in ("tool", "arg"):
+        if isinstance(params.get(field), str) and not params[field].strip():
+            raise ValueError(f"{where}: tool_arg_bound field {field!r} must not be empty")
+    value = params.get("value")
+    if isinstance(value, bool):  # the model would read true as 1
+        raise ValueError(
+            f"{where}: tool_arg_bound field 'value' must be a number or text, got a bool"
+        )
+    if params.get("op") not in ("==", "!=") and isinstance(value, str):
+        raise ValueError(
+            f"{where}: tool_arg_bound field 'value' must be a number for op {params['op']!r}, "
+            f"got the text {value!r}"
+        )
+
+
 def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: each rule must be a mapping, got {raw!r}")
@@ -180,8 +202,6 @@ def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
         raise ValueError(
             f"{where}: unknown check {kind!r}, expected one of {sorted(_CHECK_FIELDS)}"
         )
-    if kind == "tool_arg_bound":  # T-005 lifts this: until then the guard would skip the rule
-        raise ValueError(f"{where}: tool_arg_bound is not supported yet")
     if not isinstance(params, dict):
         raise ValueError(f"{where}: check {kind!r} must be a mapping")
     _reject_unknown(params, _CHECK_FIELDS[kind], f"{where}, check {kind!r}")
@@ -189,6 +209,8 @@ def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
         raise ValueError(f"{where}: approval_before needs approval_tool at the top of the file")
     if kind == "path_forbidden" and isinstance(params.get("glob"), str):
         params = {**params, "glob": _normalise_glob(params["glob"], where)}
+    if kind == "tool_arg_bound":
+        _check_arg_bound(params, where)
     try:
         constraint = Constraint.model_validate(
             {
