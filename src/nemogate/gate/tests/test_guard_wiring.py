@@ -628,6 +628,7 @@ def message(content, status="success"):
     "answer",
     [
         message('{"approved": false, "reason": "Human refused"}'),
+        message("Approved by alice."),
         message('{"approve": "false"}'),
         message('{"approved": 0}'),
         message('{"approved": "False"}'),
@@ -645,7 +646,6 @@ def test_an_approval_tool_that_returns_a_denial_does_not_approve(tmp_path, repo,
     "answer",
     [
         message('{"approved": true}'),
-        message("Approved by alice."),
         lambda r: {"approved": True},
     ],
 )
@@ -904,7 +904,7 @@ def test_every_spelling_of_no_in_an_approval_answer_denies(tmp_path, repo, conte
     "answer",
     [
         message('{"approved": true}'),
-        message('{"approved": "yes"}'),
+        message("yes"),
     ],
 )
 def test_a_yes_in_an_approval_answer_still_approves(tmp_path, repo, answer):
@@ -915,6 +915,7 @@ def test_a_yes_in_an_approval_answer_still_approves(tmp_path, repo, answer):
 @pytest.mark.parametrize(
     "answer",
     [
+        message('{"approved": "yes"}'),
         message('{"approved": 1}'),
         message('{"approved": 0.5}'),
         message('{"approved": "nan"}'),

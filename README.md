@@ -124,7 +124,7 @@ A block: `write_file -> error: Blocked by rule no-secrets-write: Never write to 
 
 A block: `execute -> error: Blocked by rule no-shell: Do not run shell commands.`
 
-`approval_before` stops a tool until the approval tool has answered yes in the same thread. Name that tool once at the top of the file with `approval_tool:`, which is required when any rule uses `approval_before`. One approval, of any call, unlocks every later call of the guarded tool in that thread. A later denial does not revoke it. Use a human-in-the-loop tool as the approval tool: an agent that can call a plain tool itself can approve itself. Only an explicit yes counts as an approval: a reply that starts with yes/ok/approved/allow... and contains no denial word, or JSON `{"approved": true}`. Anything else, including an error, silence or an unknown wording, does not unlock the call. Make your approval tool return `{"approved": true|false}` or `yes`/`no`. This is checked on the approval tool's reply, not on what the model says.
+`approval_before` stops a tool until the approval tool has answered yes in the same thread. Name that tool once at the top of the file with `approval_tool:`, which is required when any rule uses `approval_before`. One approval, of any call, unlocks every later call of the guarded tool in that thread. A later denial does not revoke it. Use a human-in-the-loop tool as the approval tool: an agent that can call a plain tool itself can approve itself. An approval counts only if the approval tool's reply is exactly `yes` / `ok` / `approved` (or `y`, `allow`, `confirm`, `true`), or JSON `{"approved": true}`. Prose such as "Approved by alice", "yes, go ahead" or anything with extra words does not count, on purpose: a guard cannot read free text safely. Make your approval tool return `{"approved": true|false}`. This is checked on the approval tool's reply, not on what the model says.
 
 ```yaml
 approval_tool: ask_human
@@ -161,6 +161,7 @@ A mapped tool's path argument may be a string or a list of strings; anything els
 - Counters and approvals live in memory in each `Guard` object and reset when the process restarts. Within one process they persist across invokes of the same thread.
 - Counters and approvals are bounded in memory: the oldest are dropped past 10,000 threads, and past 256 distinct blocked calls in one thread. A path with more than 256 segments or 4096 characters is blocked, before any filesystem work. An agent that cycles through more than 256 distinct blocked calls in one thread is never stopped by `GuardLoopError`, but every one of those calls is still blocked.
 - A thread that hit the third identical blocked call keeps raising `GuardLoopError` for that call while the same `Guard` holds the count.
+- An approval is an exact match, not a reading of prose: "Approved by alice" or "yes, go ahead" do not unlock a call. Make the approval tool return `{"approved": true|false}`.
 - A subagent is protected only if `guard.middleware()` is in its own `SubAgent` spec. The default general-purpose subagent does not get the main list, which is why the code declares one.
 
 ## Results
