@@ -965,11 +965,11 @@ dependencies = [
 [package.optional-dependencies]
 proof = [
     { name = "contree-sdk" },
+    { name = "langgraph-checkpoint-sqlite" },
 ]
 
 [package.dev-dependencies]
 dev = [
-    { name = "langgraph-checkpoint-sqlite" },
     { name = "nemogate", extra = ["proof"] },
     { name = "pytest" },
     { name = "ruff" },
@@ -985,6 +985,7 @@ requires-dist = [
     { name = "langchain-core", specifier = ">=1.6.9" },
     { name = "langchain-openai", specifier = ">=1.7.0" },
     { name = "langgraph", specifier = ">=1.2.14" },
+    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'proof'", specifier = ">=3.1.1" },
     { name = "openai", specifier = ">=3.27.0" },
     { name = "pydantic", specifier = ">=2.14.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
@@ -993,7 +994,6 @@ provides-extras = ["proof", "repair"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.1" },
     { name = "nemogate", extras = ["proof", "repair"] },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "ruff", specifier = ">=0.16.10" },

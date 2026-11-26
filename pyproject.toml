@@ -23,7 +23,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-proof = ["contree-sdk==0.3.6"]
+proof = [
+    "contree-sdk==0.3.6",
+    "langgraph-checkpoint-sqlite>=3.1.1",
+]
 repair = []
 
 [tool.hatch.build.targets.wheel]
@@ -36,7 +39,6 @@ pythonpath = ["src", "."]
 [dependency-groups]
 dev = [
     "nemogate[proof,repair]",
-    "langgraph-checkpoint-sqlite>=3.1.1",
     "pytest>=9.1.1",
     "ruff>=0.16.10",
     "tavily-python>=0.8.5",
