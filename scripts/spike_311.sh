@@ -65,7 +65,7 @@ if [ -z "$q1_fail" ]; then
     fi
 fi
 if [ -z "$q1_fail" ]; then
-    echo "PASS: Q1 Python 3.11.x (venv from uv.lock; $versions) imports deepagents, langchain, langgraph, gate, oracle and schemas, and \`pytest gate oracle schemas\` gives: $tests; the probe on 3.11 gives: $probe311; plain \`uv run --python 3.11\` is $direct because pyproject pins requires-python ==3.12.*."
+    echo "PASS: Q1 Python 3.11.x (venv from uv.lock; $versions) imports deepagents, langchain, langgraph, gate, oracle and schemas, and \`pytest gate oracle schemas\` gives: $tests; the probe on 3.11 gives: $probe311; plain \`uv run --python 3.11\` is $direct (pyproject says requires-python >=3.11)."
 else
     echo "FAIL: Q1 Python 3.11 failed: $q1_fail; plain \`uv run --python 3.11\` is $direct."
 fi
