@@ -14,7 +14,7 @@ A user tells the planner agent "don't touch `migrations/`". The planner delegate
 
 The guard is a Deep Agents middleware that reads your rules from a YAML file. Before a tool runs it checks the call against every rule and, if one is broken, returns the rule's text as the tool result and never runs the tool. Each time the main agent hands work to a subagent, it adds the rule text to the task description. It makes no model calls and needs no sandbox.
 
-**Install.** `pip install nemogate` is not published yet. From a checkout run `pip install .` (Python 3.12), or build the wheel with `uv build --wheel` and install the file in `dist/`. That installs the guard alone. `pip install .[proof]` adds the sandbox SDK for the forked-run proof, and `pip install .[repair]` adds the repair extra.
+**Install.** `pip install nemogate` is not published yet. From a checkout run `pip install .` (Python 3.11 to 3.13 are tested; `requires-python` is `>=3.11`), or build the wheel with `uv build --wheel` and install the file in `dist/`. That installs the guard alone. `pip install ".[proof]"` adds the sandbox SDK and the checkpoint store for the forked-run proof. `pip install ".[repair]"` adds nothing today: `repair` has no extra dependencies, and the extra exists so the install line stays stable.
 
 **Rules.** `rules.yaml` is one rule: an id, the sentence the agent is told, and one check.
 
@@ -100,9 +100,63 @@ write_file -> error: Blocked by rule no-migrations: Never touch the migrations f
 
 **Three strikes.** The same blocked call (same tool, same arguments, same rule) is counted per thread. Attempts 1 and 2 return the rule text. Attempt 3 raises `GuardLoopError` and the tool still does not run. Counts and approvals belong to a `thread_id`, so pass one in the run config; runs without one share a single default thread.
 
-**Limits.**
+**Rule types.** A rule has one check. Rule ids are lowercase slugs (`no-migrations`, `rule-2`; letters and digits joined by single hyphens). Every block returns `Blocked by rule <id>: <text>` as the tool's error result, and the tool does not run.
+
+`path_forbidden` stops a file operation on a path that matches the glob. `ops` lists the operations to stop, from `write` (`write_file`, `edit_file`) and `delete`. The glob is relative to the project root and may not start with `/` or contain `..`.
+
+```yaml
+- id: no-secrets-write
+  text: Never write to the secrets folder.
+  check:
+    path_forbidden: {glob: "secrets/**", ops: [write, delete]}
+```
+
+A block: `write_file -> error: Blocked by rule no-secrets-write: Never write to the secrets folder.`
+
+`tool_forbidden` stops every call of one tool.
+
+```yaml
+- id: no-shell
+  text: Do not run shell commands.
+  check:
+    tool_forbidden: {name: execute}
+```
+
+A block: `execute -> error: Blocked by rule no-shell: Do not run shell commands.`
+
+`approval_before` stops a tool until the approval tool has run without error in the same thread. Name that tool once at the top of the file with `approval_tool:`, which is required when any rule uses `approval_before`. One approval, of any call, unlocks every later call of the guarded tool in that thread. A later denial does not revoke it. Use a human-in-the-loop tool as the approval tool: an agent that can call a plain tool itself can approve itself. An approval tool approves when it returns without error; raising, or returning `{"approved": false}`, denies.
+
+```yaml
+approval_tool: ask_human
+rules:
+  - id: ask-before-purge
+    text: Ask a person before purging records.
+    check:
+      approval_before: {tool: purge_records}
+```
+
+A block: `purge_records -> error: Blocked by rule ask-before-purge: Ask a person before purging records.`
+
+`tool_arg_bound` states the allowed condition on one top-level argument of one tool. `op` is one of `<`, `<=`, `==`, `!=`, `>=`, `>`, and the call is blocked when the condition is false. With `amount <= 100`, an amount of 100 goes through and 250 is blocked. A missing, null, wrong-type, infinite or NaN argument is blocked too. The ordering operators need a number as `value`.
+
+```yaml
+- id: refund-cap
+  text: Refunds are capped at 100.
+  check:
+    tool_arg_bound: {tool: refund, arg: amount, op: "<=", value: 100}
+```
+
+A block, with the reason appended: `refund -> error: Blocked by rule refund-cap: Refunds are capped at 100. (argument 'amount' is 250, the rule requires <= 100)`
+
+`mode: block` (the default) blocks. `mode: observe` lets the call run and logs what would have been blocked. The top-level `tools:` map names your own file tools so that `path_forbidden` applies to them: `tools: {save_note: {path_arg: file, op: write}}` (`op` is `write` or `delete`).
+
+**Limits you should know.**
 - Deep Agents apps only.
-- It blocks the file tools it knows (`write_file`, `edit_file`) and tools you map under `tools:` in the rules file, for example `tools: {save_note: {path_arg: file, op: write}}`. Shell commands are not parsed, so a rule can be bypassed through a shell tool.
+- Globs are relative to the process working directory, so run the app from the project root. An absolute path to the same file is matched too.
+- Path matching is case-sensitive and does not normalise Unicode. On a case-insensitive filesystem (the macOS default) a different case reaches the same file: add a rule per spelling, or run on Linux.
+- It blocks the file tools it knows (`write_file`, `edit_file`, `delete`) and tools you map under `tools:`. Shell and execute commands are not parsed, so a rule can be bypassed through a shell tool.
+- Counters and approvals live in memory in each `Guard` object and reset when the process restarts. Within one process they persist across invokes of the same thread.
+- A thread that hit the third identical blocked call keeps raising `GuardLoopError` for that call while the same `Guard` holds the count.
 - A subagent is protected only if `guard.middleware()` is in its own `SubAgent` spec. The default general-purpose subagent does not get the main list, which is why the code declares one.
 
 ## Results
@@ -133,7 +187,7 @@ Every model call goes through **Nebius Token Factory** (`https://api.tokenfactor
 | `helper` | `nvidia/Nemotron-3_5-Lightning` | Mutations at handoffs (`drop`, `hedge`, `compress`; only `drop` was run live), rule extraction, compilation into checks |
 | `planner` | `nvidia/Nemotron-3-Ultra-550b-a55b` | Repair planning |
 
-Each run's file edits and shell commands (the system under test's tools, and every forked arm's) run in a fresh **Nebius Sandbox** (Contree) session from the same seed image, and a filesystem diff of the final image shows what the agents changed. The agent loop and the model calls run on the host, as do unit tests, helper-model work (rule extraction, mutation, picking where to fork), scoring and the report, and scoring is deterministic, so it can be re-checked offline from the saved trace and diff. `common/llm.py` is the only place a model client is built. It keeps a running spend total, refuses calls past the cap, and stamps a hash of the serving settings onto every trace line.
+Each run's file edits and shell commands (the system under test's tools, and every forked arm's) run in a fresh **Nebius Sandbox** (Contree) session from the same seed image, and a filesystem diff of the final image shows what the agents changed. The agent loop and the model calls run on the host, as do unit tests, helper-model work (rule extraction, mutation, picking where to fork), scoring and the report, and scoring is deterministic, so it can be re-checked offline from the saved trace and diff. `src/nemogate/common/llm.py` is the only place a model client is built. It keeps a running spend total, refuses calls past the cap, and stamps a hash of the serving settings onto every trace line.
 
 **Where Token Factory and Sandboxes sped us up.** One OpenAI-compatible endpoint serves all three Nemotron sizes under one key, so each job gets the cheapest model that can do it and changing a model is a config change (`get_model(role)`). `GET /v1/models` lists each model's price and rate limits, which the budget check reads. At $0.06 to $3.00 per million tokens a T6 run (the costliest task) cost about $0.12 to $0.19 and the other tasks about $0.01 to $0.07 per run, so a study of several hundred live runs, many of them forks re-run from the same point under up to four conditions, cost about $38 of the $60 credit on one account (the console balance read $22.20 on Oct 28). Sandboxes make the re-running cheap: a fork is a new session on a snapshot, 1.3 s at the median. What was hard on these platforms, with evidence, is in [`docs/submission/FEEDBACK.md`](docs/submission/FEEDBACK.md).
 
@@ -148,9 +202,9 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
                      trace.jsonl + filesystem diff ──▶ oracle ──▶ run record
 ```
 
-- **Ledger** (`ledger/`, `nemogate.yaml`): the typed rules that must survive handoffs. Each rule has a scope and one check from a closed list; a rule with no check is reported as unverified, never guessed. `python -m nemogate.ledger.extract` proposes new rules from a prompt with the helper model, and a human confirms or rejects each one. The ledger is append-only.
-- **Oracle** (`oracle/`): `evaluate(ledger, trace, fs_diff)` checks six deterministic predicates: `path_forbidden`, `files_frozen`, `tool_forbidden`, `approval_before`, `output_must_include` and `output_must_not_include`. No language model ever decides pass or fail.
-- **Gate** (`gate/`): one Deep Agents middleware placed in the planner and in every subagent. It records every handoff and tool call as a validated trace line, and in each arm:
+- **Ledger** (`src/nemogate/ledger/`, `nemogate.yaml`): the typed rules that must survive handoffs. Each rule has a scope and one check from a closed list; a rule with no check is reported as unverified, never guessed. `python -m nemogate.ledger.extract` proposes new rules from a prompt with the helper model, and a human confirms or rejects each one. The ledger is append-only.
+- **Oracle** (`src/nemogate/oracle/`): `evaluate(ledger, trace, fs_diff)` checks seven deterministic predicates: `path_forbidden`, `files_frozen`, `tool_forbidden`, `approval_before`, `output_must_include`, `output_must_not_include` and `tool_arg_bound`. No language model ever decides pass or fail.
+- **Gate** (`src/nemogate/gate/`): one Deep Agents middleware placed in the planner and in every subagent. It records every handoff and tool call as a validated trace line, and in each arm:
 
   | Arm | At the target handoff | Tool calls |
   | --- | --- | --- |
@@ -160,7 +214,7 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
   | `gated` (NemoGate) | operator applied, then the rule re-pinned | blocked as above; replies that miss an output rule are held back so the planner re-delegates |
 
   Operators run on delegation boundaries (planner → subagent) and on return boundaries (subagent → planner).
-- **Replay** (`src/nemogate/proof/`): the runner writes the run config, starts the team from the seed image with the gate, computes the filesystem diff and the task check, calls the oracle, and writes a run record. The record carries the model ids, the safe-config hash, the ledger hash, the repo commit and the lockfile hash, so only runs made under identical conditions are ever pooled.
+- **Proof** (`src/nemogate/proof/`): the runner writes the run config, starts the team from the seed image with the gate, computes the filesystem diff and the task check, calls the oracle, and writes a run record. The record carries the model ids, the safe-config hash, the ledger hash, the repo commit and the lockfile hash, so only runs made under identical conditions are ever pooled.
 - **Which subagent mode.** Deep Agents' default subagent is isolated: it sees only the description the planner writes for it. An experimental `fork` mode lets a subagent continue the parent's conversation instead. Every result in this repository is for the default mode; we have not measured `fork`.
 - **Reference app** (`refapp/`): a small Flask + sqlite3 task tracker and a Deep Agents coding team (planner, coder, reviewer). It's test data: nothing in the pipeline names it, and adding a task is a data-only change.
 
@@ -188,13 +242,18 @@ NEMOGATE_LIVE=1 uv run python -m nemogate.ledger.extract --ledger nemogate.yaml 
 
 ## Repository
 
+The core packages are under `src/nemogate/`. The other top-level folders are `refapp`, `preflight`, `report`, `scripts`, `examples`, `tests` and `docs`.
+
 | Folder | What |
 | --- | --- |
-| `schemas/` | The shared formats: ledger, trace events, run config and record, app config |
-| `common/` | `get_model(role)`, the spend log and cap, `.env` loading |
-| `ledger/`, `oracle/`, `gate/` | The rules, the deterministic checks, the middleware |
+| `src/nemogate/schemas/` | The shared formats: ledger, trace events, run config and record, app config |
+| `src/nemogate/common/` | `get_model(role)`, the spend log and cap, `.env` loading |
+| `src/nemogate/ledger/`, `oracle/`, `gate/` | The rules, the deterministic checks, the middleware |
 | `src/nemogate/proof/` | The runner, the filesystem diff, the budget check |
+| `src/nemogate/repair/` | The repair agent: the closed fix menu, the patch writer, accept or reject |
 | `refapp/` | The reference app and its tasks (test data) |
+| `preflight/`, `report/` | The serving and cost probes; the results page |
+| `scripts/`, `examples/`, `tests/` | The install check, the offline examples (`examples/quickstart`), the tests and fixtures |
 | `docs/` | `SPEC.md` (the plan and its change log), `FACTS.md` (verified facts about the libraries, the platform and the models, with evidence) |
 
 Licensed under Apache-2.0 (`LICENSE`).
