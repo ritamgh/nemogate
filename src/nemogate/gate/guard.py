@@ -10,6 +10,7 @@ allowed condition: `{tool: refund, arg: amount, op: "<=", value: 100}` lets amou
 and blocks 250. See oracle.arg_bound_problem for how a missing, null or mistyped argument fails.
 """
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -170,14 +171,23 @@ def _check_arg_bound(params: dict, where: str) -> None:
     for field in ("tool", "arg"):
         if isinstance(params.get(field), str) and not params[field].strip():
             raise ValueError(f"{where}: tool_arg_bound field {field!r} must not be empty")
+    arg = params.get("arg")
+    if isinstance(arg, str) and (arg != arg.strip() or "." in arg):
+        raise ValueError(
+            f"{where}: tool_arg_bound field 'arg' must be the exact name of a top-level argument "
+            f"(no surrounding spaces, no '.'), got {arg!r}"
+        )
     value = params.get("value")
     if isinstance(value, bool):  # the model would read true as 1
         raise ValueError(
             f"{where}: tool_arg_bound field 'value' must be a number or text, got a bool"
         )
-    if params.get("op") not in ("==", "!=") and isinstance(value, str):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{where}: tool_arg_bound field 'value' must be finite, got {value!r}")
+    op = params.get("op")
+    if op in ("<", "<=", ">=", ">") and isinstance(value, str):
         raise ValueError(
-            f"{where}: tool_arg_bound field 'value' must be a number for op {params['op']!r}, "
+            f"{where}: tool_arg_bound field 'value' must be a number for op {op!r}, "
             f"got the text {value!r}"
         )
 

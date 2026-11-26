@@ -16,8 +16,9 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from nemogate.gate.errors import GuardLoopError
 from nemogate.gate.guard import Guard
 from nemogate.gate.policy import blocking_constraint, checkable_before_the_call
+from nemogate.oracle import evaluate
 from nemogate.schemas.ledger import Ledger, ToolArgBound
-from nemogate.schemas.trace import ToolCall
+from nemogate.schemas.trace import ToolCall, dump_event_jsonl, parse_trace_jsonl
 
 CAP = """\
 version: 1
@@ -148,6 +149,67 @@ def test_other_tools_are_untouched(tmp_path):
     with thread():
         result = run(mw, tool_, "lookup", {"amount": 9999})
     assert result.content == "ran"
+
+
+@pytest.mark.parametrize(
+    ("op", "limit", "sent"),
+    [
+        (">", 0, float("inf")),  # inf > 0 is true
+        ("!=", 100, float("nan")),  # nan != 100 is true
+        ("<=", 100, float("nan")),
+        (">=", 0, float("inf")),
+    ],
+)
+def test_inf_and_nan_are_blocked_and_the_oracle_agrees_on_the_recorded_trace(
+    tmp_path, op, limit, sent
+):
+    # Breaks if inf or NaN count as numbers: they pass the comparison in the gate, yet a trace
+    # writes them as null, so the oracle would grade the same call as a type mismatch.
+    text = CAP.replace('op: "<="', f'op: "{op}"').replace("value: 100", f"value: {limit}")
+    mw, tool_ = make(tmp_path, text), Tool()
+    with thread():
+        result = run(mw, tool_, "refund", {"amount": sent})
+    assert tool_.ran == []
+    assert result.content == blocked(
+        "argument 'amount': type does not match (got non-finite number, the rule needs a number)"
+    )
+    stamp = {
+        "run_id": "r-1",
+        "arm": "natural",
+        "operator": "none",
+        "model_id": "m",
+        "safe_config_hash": "h",
+        "ledger_hash": "l",
+    }
+    event = ToolCall(**stamp, step=1, agent="coder", tool="refund", args={"amount": sent})
+    (recorded,) = parse_trace_jsonl(dump_event_jsonl(event) + "\n")
+    check = {"type": "tool_arg_bound", "tool": "refund", "arg": "amount", "op": op, "value": limit}
+    entry = {
+        "id": "C-001",
+        "text": "rule",
+        "kind": "constraint",
+        "source": "user",
+        "authority": "binding",
+        "scope": ["coder"],
+        "origin": "declared",
+        "check": check,
+    }
+    ledger = Ledger.model_validate({"version": 1, "constraints": [entry]})
+    assert [v.step for v in evaluate(ledger, [recorded], [])] == [1]
+
+
+def test_a_huge_argument_value_is_cut_in_the_block_message(tmp_path):
+    # Breaks if the reason echoes the whole value: it goes to the model, the trace and the log.
+    trace = tmp_path / "trace.jsonl"
+    mw, tool_ = make(tmp_path, REGION, trace_path=trace), Tool()
+    with thread():
+        result = run(mw, tool_, "deploy", {"region": "x" * 100_000})
+    assert tool_.ran == []
+    assert len(result.content) < 500
+    assert result.content.startswith("Blocked by rule eu-only: Only the eu region may be touched.")
+    assert "..." in result.content
+    (line,) = [json.loads(x) for x in trace.read_text().splitlines()]
+    assert len(line["reason"]) < 500
 
 
 def test_the_third_identical_blocked_call_raises_guard_loop_error(tmp_path):
@@ -309,6 +371,11 @@ def test_a_tool_arg_bound_rule_loads_with_its_four_fields(tmp_path):
         ('{tool: refund, arg: amount, op: "<=", value: "100"}', "value"),
         ('{tool: refund, arg: amount, op: ">", value: eu}', "value"),
         ("{tool: refund, arg: amount, op: '<='}", "value"),
+        ("{tool: refund, arg: amount, value: eu}", "op"),  # no op at all
+        ('{tool: refund, arg: " amount", op: "<=", value: 1}', "arg"),
+        ('{tool: refund, arg: "order.amount", op: "<=", value: 1}', "arg"),
+        ('{tool: refund, arg: amount, op: "<=", value: .nan}', "value"),
+        ('{tool: refund, arg: amount, op: "<=", value: .inf}', "value"),
         ('{tool: refund, arg: "", op: "<=", value: 1}', "arg"),
     ],
 )

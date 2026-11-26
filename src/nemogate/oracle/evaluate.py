@@ -4,6 +4,7 @@ Reads only ledger.constraints: the runner passes a ledger rebuilt without its ap
 the gate has already made in-repo tool-call paths repo-relative and emitted approval events.
 """
 
+import math
 import operator
 import re
 from typing import Any
@@ -124,7 +125,17 @@ _COMPARE = {
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool)
+    """A finite int or float. inf and NaN are not numbers here: a trace file writes them as
+    null, so the gate and the oracle reading that file would grade the same call differently."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    return not isinstance(value, float) or math.isfinite(value)
+
+
+def _shown(value: Any) -> str:
+    """repr(value), cut at 80 characters: the reason goes to the model, the trace and the log."""
+    text = repr(value)
+    return text if len(text) <= 80 else text[:77] + "..."
 
 
 def _kind(value: Any) -> str:
@@ -134,6 +145,8 @@ def _kind(value: Any) -> str:
         return "boolean"
     if _is_number(value):
         return "number"
+    if isinstance(value, float):
+        return "non-finite number"
     return "text" if isinstance(value, str) else "other"
 
 
@@ -153,14 +166,14 @@ def arg_bound_problem(check: ToolArgBound, args: dict[str, Any]) -> str | None:
     if check.op not in ("==", "!=") and not _is_number(want):
         return (
             f"{name}: type does not match "
-            f"(the rule value {want!r} is text, {check.op} needs numbers)"
+            f"(the rule value {_shown(want)} is text, {check.op} needs numbers)"
         )
     if _kind(got) != _kind(want):
         needs = "a number" if _is_number(want) else "text"
         return f"{name}: type does not match (got {_kind(got)}, the rule needs {needs})"
     if _COMPARE[check.op](got, want):
         return None
-    return f"{name} is {got!r}, the rule requires {check.op} {want!r}"
+    return f"{name} is {_shown(got)}, the rule requires {check.op} {_shown(want)}"
 
 
 def _tool_arg_bound(c: Constraint, check: ToolArgBound, trace, diff) -> list[Violation]:
