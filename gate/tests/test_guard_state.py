@@ -203,14 +203,19 @@ def test_a_changed_argument_starts_a_new_count_at_one(tmp_path, changed):
 
 
 def test_the_same_arguments_on_another_tool_are_counted_apart(tmp_path):
-    # Breaks if the key leaves out the tool name.
+    # Breaks if the key leaves out the tool name: one path rule guards write_file and edit_file,
+    # so only the tool tells these two calls apart.
     _, mw = make(tmp_path)
     ran = Tool()
+    args = {"file_path": "migrations/001.sql"}
     with thread("t1"):
-        attempt(mw, ran, "run_shell", {"cmd": "ls"})
-        attempt(mw, ran, "run_shell", {"cmd": "ls"})
-        other = attempt(mw, ran, "run_python", {"cmd": "ls"})
-    assert other == PYTHON
+        attempt(mw, ran, "write_file", args)
+        attempt(mw, ran, "write_file", args)
+        other = attempt(mw, ran, "edit_file", args)
+        write_again = attempt(mw, ran, "write_file", args)
+    assert other == MIGRATIONS
+    assert isinstance(write_again, GuardLoopError)
+    assert ran.ran == []
 
 
 def test_a_call_that_breaks_two_rules_counts_against_each_and_the_first_rule_is_named(tmp_path):
