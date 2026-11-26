@@ -21,6 +21,7 @@ from nemogate.repair.guards import (
     check_append_only,
     check_editable,
     check_edits,
+    protected_reason,
 )
 from nemogate.repair.loop import (
     PENDING_REASON,
@@ -264,6 +265,27 @@ def test_protected_paths_can_never_be_edited(path):
         check_edits([bad], files)
     with pytest.raises(GuardViolation, match="protected"):
         check_editable([path])
+
+
+def test_the_packages_own_folders_stay_protected_under_src_nemogate():
+    # Breaks if the guard stops matching folder names as path components (say, by comparing only
+    # the first component): after the move into src/nemogate/, the agent could edit the ledger
+    # loader, the oracle or its own guards.
+    inside = [
+        "src/nemogate/gate/middleware.py",
+        "src/nemogate/oracle/evaluate.py",
+        "src/nemogate/ledger/x.py",
+        "src/nemogate/schemas/x.py",
+        "src/nemogate/proof/x.py",
+        "src/nemogate/repair/x.py",
+        "src/nemogate/common/x.py",
+    ]
+    reasons = {path: protected_reason(path) for path in inside + ["app/notes.md", "app/team.py"]}
+    assert reasons == {
+        **dict.fromkeys(inside, "pipeline, test, task, docs or CI folder"),
+        "app/notes.md": None,
+        "app/team.py": None,
+    }
 
 
 def test_app_prompt_files_are_editable():
