@@ -19,7 +19,7 @@ import common.llm
 import gate
 from gate.errors import GuardLoopError
 from gate.guard import Guard
-from gate.middleware import GateMiddleware, repin
+from gate.middleware import GateMiddleware, glob_may_match_below, repin
 from gate.trace import TraceWriter
 from schemas.ledger import Constraint, Ledger
 from schemas.run import RunConfig
@@ -729,3 +729,113 @@ def test_a_real_graph_blocks_a_virtual_absolute_write_into_the_forbidden_folder(
     replies = [m.content for m in out["messages"] if isinstance(m, ToolMessage)]
     assert replies[0] == BLOCK_MIGRATIONS
     assert sorted(out["files"]) == ["/app/ok.py"]
+
+
+# Which deletes can remove something a glob protects
+
+
+@pytest.mark.parametrize(
+    ("glob", "target", "expected"),
+    [
+        ("app/migrations/**", "app", True),
+        ("app/migrations/**", ".", True),
+        ("app/migrations/**", "app/migrations", True),
+        ("app/migrations/**", "app/main.py", False),
+        ("app/migrations/**", "other", False),
+        ("app/*/migrations/**", "app", True),
+        ("app/*/migrations/**", "app/team", True),
+        ("app/*/migrations/**", "app/team/migrations", True),
+        ("app/*/migrations/**", "other/team", False),
+        # fnmatch lets * cross "/" (oracle/paths.py), so app/a/b/migrations/x is protected too
+        ("app/*/migrations/**", "app/a/b", True),
+        ("**/migrations/**", "app", True),
+        ("**/migrations/**", "app/main.py", True),  # a leading ** blocks every delete: exact
+        ("data/v?/old", "data/v1", True),
+        ("data/v?/old", "data/w1", False),
+        ("data/v?/old", "data/v1/old/x", False),  # below the match: the oracle's own check
+    ],
+)
+def test_glob_may_match_below_says_whether_a_delete_of_target_can_remove_a_match(
+    glob, target, expected
+):
+    assert glob_may_match_below(glob, target) is expected
+
+
+@pytest.mark.parametrize(
+    ("glob", "path", "blocked"),
+    [
+        ("app/*/migrations/**", "/app/team", True),
+        ("app/*/migrations/**", "app/team/", True),
+        ("**/migrations/**", "/app", True),
+        ("**/migrations/**", "app", True),
+        ("app/migrations/**", "app/main.py", False),
+    ],
+)
+def test_a_delete_is_blocked_when_a_wildcard_glob_can_match_below_it(
+    tmp_path, repo, glob, path, blocked
+):
+    # Breaks if only the glob's leading literal segments are compared: delete("app/team")
+    # removes app/team/migrations/001.sql under app/*/migrations/**.
+    rules = f"""\
+version: 1
+rules:
+  - id: keep
+    text: Keep it.
+    check:
+      path_forbidden: {{glob: "{glob}", ops: [delete]}}
+"""
+    _, mw = make(tmp_path, rules)
+    tool = Tool()
+    with thread():
+        result = run(mw, tool, "delete", {"file_path": path})
+    assert (tool.ran == []) is blocked
+    assert (result.content == "Blocked by rule keep: Keep it.") is blocked
+
+
+# Approval answers that mean no
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"approved": 0.0}',
+        '{"approved": -0.0}',
+        '{"approved": 0e0}',
+        '{"approved": 0}',
+        '{"approve": false}',
+        '{"approved": "no"}',
+        '{"approved": " No "}',
+        '{"approved": "denied"}',
+        '{"approved": "0.0"}',
+        '{"approved": "0"}',
+    ],
+)
+def test_every_spelling_of_no_in_an_approval_answer_denies(tmp_path, repo, content):
+    # Breaks if only False, "false" and 0 are read as no: a tool answering 0.0 or "no" ran fine.
+    result, drop = approval_run(tmp_path, message(content))
+    assert drop.ran == []
+    assert result.content == "Blocked by rule ask-before-delete: Ask a human before deleting."
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        message('{"approved": true}'),
+        message('{"approved": 1}'),
+        message('{"approved": "yes"}'),
+        message('{"approved": 0.5}'),
+        message('{"approved": "nan"}'),
+        message('{"approved": null}'),
+        lambda r: {"approved": 1.0},
+    ],
+)
+def test_a_yes_in_an_approval_answer_still_approves(tmp_path, repo, answer):
+    result, drop = approval_run(tmp_path, answer)
+    assert drop.ran == [{"name": "users"}]
+
+
+def test_a_deeply_nested_approval_answer_is_not_a_denial_and_does_not_crash(tmp_path, repo):
+    # Breaks if json.loads' RecursionError escapes the hook and aborts the graph.
+    nested = "[" * 10000 + "0" + "]" * 10000
+    result, drop = approval_run(tmp_path, message(nested))
+    assert drop.ran == [{"name": "users"}]

@@ -24,6 +24,7 @@ having waited.
 """
 
 import asyncio
+import fnmatch
 import json
 import logging
 import os
@@ -413,44 +414,81 @@ def virtual_path(path: str) -> str:
     return posixpath.normpath("/" + path.replace("\\", "/")).lstrip("/") or "."
 
 
+def glob_may_match_below(glob: str, target: str) -> bool:
+    """True if some path at or below `target` (a repo-relative path, "." for the root) can match
+    `glob`: deleting `target` could then remove a protected path.
+
+    Segments are compared with fnmatch. A segment with a wildcard may also stretch over more
+    target segments, since fnmatch lets `*` cross `/` (oracle/paths.py), and `**` stands for any
+    number of them: so a leading `**` makes every directory delete match (over-blocking, never
+    under-blocking). A target already below a match is not this function's case: the oracle's
+    own check covers it."""
+    segments = [s for s in glob.split("/") if s]
+    parts = [s for s in target.split("/") if s and s != "."]
+
+    def walk(i: int, j: int) -> bool:
+        if i == len(parts):
+            return True  # the glob matches here, or something below could match the rest
+        if j == len(segments):
+            return False
+        segment = segments[j]
+        if segment == "**":
+            return True
+        if "*" not in segment:
+            return fnmatch.fnmatchcase(parts[i], segment) and walk(i + 1, j + 1)
+        literal = re.split(r"[*?\[]", segment, maxsplit=1)[0]
+        if not parts[i].startswith(literal):
+            return False
+        return (fnmatch.fnmatchcase(parts[i], segment) and walk(i + 1, j + 1)) or walk(i + 1, j)
+
+    return walk(0, 0)
+
+
 def _deletes_protected_parent(check: PathForbidden, calls: list[ToolCall]) -> bool:
-    """True if a delete in `calls` removes a folder that holds what `check` protects: its target
-    is the static part of the glob (its leading segments with no wildcard) or a parent of it."""
+    """True if a delete in `calls` removes a folder that holds what `check` protects."""
     if "delete" not in check.ops:
         return False
-    static = []
-    for segment in check.glob.split("/"):
-        if any(c in segment for c in "*?[]"):
-            break
-        static.append(segment)
     for call in calls:
         path = call.args.get(PATH_ARG)
         if FILE_OPS.get(call.tool) != "delete" or not isinstance(path, str):
             continue
         if path.startswith("/") or path == ".." or path.startswith("../"):
             continue  # outside the repo; the virtual reading of the same call is checked too
-        parts = [] if path == "." else path.split("/")
-        if static[: len(parts)] == parts:
+        if glob_may_match_below(check.glob, path):
             return True
+    return False
+
+
+def _is_no(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, int | float):
+        return value == 0  # NaN is not 0
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("false", "no", "denied"):
+            return True
+        try:
+            return float(text) == 0
+        except ValueError:
+            return False
     return False
 
 
 def _denied(answer: Any) -> bool:
     """True if an approval tool's answer says no: a mapping (or a JSON object in a string) whose
-    "approved" or "approve" key is false, "false" or 0."""
+    "approved" or "approve" key is false, 0 (also 0.0), or the text "false", "no", "denied" or "0".
+    Text that is not JSON, or JSON that cannot be read, is not a denial."""
     if isinstance(answer, list):
         answer = _text(answer)
     if isinstance(answer, str):
         try:
             answer = json.loads(answer)
-        except ValueError:
+        except (ValueError, TypeError, RecursionError):  # deeply nested JSON: RecursionError
             return False
     if not isinstance(answer, dict):
         return False
-    return any(
-        key in answer and str(answer[key]).strip().lower() in ("false", "0")
-        for key in ("approved", "approve")
-    )
+    return any(key in answer and _is_no(answer[key]) for key in ("approved", "approve"))
 
 
 def _run_config() -> dict | None:
