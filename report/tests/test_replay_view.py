@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from gate.middleware import REPIN
+from nemogate.gate.middleware import REPIN
 from report import replay_view
 
 BOUNDARY = "delegation:planner->coder"

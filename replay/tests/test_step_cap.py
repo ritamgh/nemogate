@@ -254,9 +254,9 @@ def test_the_cap_ends_a_run_through_the_real_gate_and_recorder(tmp_path):
 
     from deepagents.backends import LocalShellBackend
 
-    from gate import build_middleware
-    from gate.tests.stubs import picks
     from nemogate.common.env import REPO_ROOT
+    from nemogate.gate import build_middleware
+    from nemogate.gate.tests.stubs import picks
     from nemogate.ledger import load_ledger
     from nemogate.oracle import evaluate
     from nemogate.schemas.config import load_config

@@ -231,7 +231,7 @@ def test_status_counts_a_mutation_noop_apart_from_errors_and_top_up_still_counts
     put_error(tmp_path, "r-1", arm="mutated", operator="drop", seed=0)
     put_error(
         tmp_path, "r-2", arm="mutated", operator="drop", seed=1,
-        error_type="gate.operators.NothingToMutate",
+        error_type="nemogate.gate.operators.NothingToMutate",
     )  # fmt: skip
     ((key, row),) = sweep_status.status_rows(scan(tmp_path)).items()
     assert key[:3] == ("X1", "mutated", "drop")

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from gate import build_middleware
-from gate.operators import make_operator
 from nemogate.common.llm import get_model
+from nemogate.gate import build_middleware
+from nemogate.gate.operators import make_operator
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.run import RunConfig

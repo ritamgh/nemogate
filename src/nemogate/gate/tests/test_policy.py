@@ -2,7 +2,7 @@
 
 import pytest
 
-from gate.policy import blocking_constraint, checkable_before_the_call
+from nemogate.gate.policy import blocking_constraint, checkable_before_the_call
 from nemogate.schemas.ledger import Ledger
 from nemogate.schemas.trace import Approval, ToolCall
 

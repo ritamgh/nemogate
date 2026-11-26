@@ -5,9 +5,9 @@ import threading
 
 import pytest
 
-from gate.errors import GuardLoopError
-from gate.guard import Guard
-from gate.state import GuardState
+from nemogate.gate.errors import GuardLoopError
+from nemogate.gate.guard import Guard
+from nemogate.gate.state import GuardState
 from nemogate.schemas.ledger import ApprovalBefore, PathForbidden, ToolForbidden
 
 MINIMAL = """\
@@ -273,7 +273,7 @@ def test_thread_key_reads_thread_id_from_the_config():
 def test_missing_thread_id_is_the_default_thread_with_exactly_one_warning(caplog):
     state = GuardState()
 
-    with caplog.at_level(logging.WARNING, logger="gate.state"):
+    with caplog.at_level(logging.WARNING, logger="nemogate.gate.state"):
         keys = [
             state.thread_key({}),
             state.thread_key({"configurable": {}}),
@@ -288,7 +288,7 @@ def test_missing_thread_id_is_the_default_thread_with_exactly_one_warning(caplog
 
 
 def test_each_state_warns_once_for_itself(caplog):
-    with caplog.at_level(logging.WARNING, logger="gate.state"):
+    with caplog.at_level(logging.WARNING, logger="nemogate.gate.state"):
         GuardState().thread_key({})
         GuardState().thread_key({})
 

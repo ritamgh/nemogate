@@ -2,7 +2,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from gate.middleware import _with_text, main_agent_name
+from nemogate.gate.middleware import _with_text, main_agent_name
 
 
 def test_with_text_replaces_a_tool_message_content():

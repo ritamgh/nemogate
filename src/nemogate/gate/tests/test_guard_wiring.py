@@ -15,12 +15,12 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-import gate
 import nemogate.common.llm
-from gate.errors import GuardLoopError
-from gate.guard import Guard
-from gate.middleware import GateMiddleware, glob_may_match_below, repin
-from gate.trace import TraceWriter
+from nemogate import gate
+from nemogate.gate.errors import GuardLoopError
+from nemogate.gate.guard import Guard
+from nemogate.gate.middleware import GateMiddleware, glob_may_match_below, repin
+from nemogate.gate.trace import TraceWriter
 from nemogate.schemas.ledger import Constraint, Ledger
 from nemogate.schemas.run import RunConfig
 
@@ -671,7 +671,7 @@ def test_a_failing_trace_write_changes_no_decision_and_warns_once(
     guard, mw = make(tmp_path, OBSERVE, trace_path=tmp_path / "trace.jsonl")
     monkeypatch.setattr(guard._writer, "emit", FullDisk())
     tool = Tool()
-    with caplog.at_level("WARNING", logger="gate.middleware"), thread():
+    with caplog.at_level("WARNING", logger="nemogate.gate.middleware"), thread():
         blocked = run(mw, tool, "write_file", {"file_path": "migrations/001.sql"})
         allowed = run(mw, tool, "write_file", {"file_path": "app/a.py"}, "c2")
         observed = run(mw, tool, "run_shell", {"cmd": "ls"}, "c3")

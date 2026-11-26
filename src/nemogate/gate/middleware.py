@@ -40,12 +40,12 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.config import get_config
 from langgraph.types import Command
 
-from gate.errors import GuardLoopError
-from gate.operators import MutationFailed
-from gate.policy import blocking_constraint, checkable_before_the_call
-from gate.state import GuardState
-from gate.text import message_text as _text
-from gate.trace import TraceWriter
+from nemogate.gate.errors import GuardLoopError
+from nemogate.gate.operators import MutationFailed
+from nemogate.gate.policy import blocking_constraint, checkable_before_the_call
+from nemogate.gate.state import GuardState
+from nemogate.gate.text import message_text as _text
+from nemogate.gate.trace import TraceWriter
 from nemogate.oracle.evaluate import FILE_OPS
 from nemogate.oracle.paths import PATH_ARG, repo_relative
 from nemogate.schemas.ledger import (
@@ -69,7 +69,7 @@ from nemogate.schemas.trace import (
 )
 
 if TYPE_CHECKING:
-    from gate.guard import Rule
+    from nemogate.gate.guard import Rule
 
 log = logging.getLogger(__name__)
 

@@ -15,9 +15,9 @@ from langchain_core.messages import ToolMessage
 from langchain_core.runnables.config import var_child_runnable_config
 from langchain_core.tools import tool
 
-from gate.errors import GuardLoopError
-from gate.guard import Guard
-from gate.tests.test_guard_wiring import ScriptedChat, Tool, req, thread
+from nemogate.gate.errors import GuardLoopError
+from nemogate.gate.guard import Guard
+from nemogate.gate.tests.test_guard_wiring import ScriptedChat, Tool, req, thread
 
 RULES = """\
 version: 1

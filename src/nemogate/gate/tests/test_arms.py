@@ -3,9 +3,9 @@
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
-from gate import PRIOR_EVENTS, EmptyMutation, NothingToMutate
-from gate.tests.stubs import picks
-from gate.tests.test_end_to_end import APP, RULES, call, delegate, run
+from nemogate.gate import PRIOR_EVENTS, EmptyMutation, NothingToMutate
+from nemogate.gate.tests.stubs import picks
+from nemogate.gate.tests.test_end_to_end import APP, RULES, call, delegate, run
 from nemogate.oracle import evaluate
 from nemogate.schemas.trace import Approval, BoundaryIn, GateBlock, ToolCall, dump_event_jsonl
 

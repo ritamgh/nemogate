@@ -13,9 +13,9 @@ import yaml
 from langchain.agents.middleware import AgentMiddleware
 from pydantic import ValidationError
 
-from gate.middleware import GuardMiddleware
-from gate.state import GuardState
-from gate.trace import GuardTraceWriter
+from nemogate.gate.middleware import GuardMiddleware
+from nemogate.gate.state import GuardState
+from nemogate.gate.trace import GuardTraceWriter
 from nemogate.ledger import ledger_hash
 from nemogate.schemas.enums import FileOp
 from nemogate.schemas.ledger import AppInfo, Constraint, Ledger

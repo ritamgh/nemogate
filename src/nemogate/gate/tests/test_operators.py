@@ -1,8 +1,9 @@
 import pytest
 from langchain_core.messages import HumanMessage
 
-from gate import EmptyMutation, MutationFailed, NothingToMutate
-from gate.operators import (
+from nemogate.common.llm import get_model
+from nemogate.gate import EmptyMutation, MutationFailed, NothingToMutate
+from nemogate.gate.operators import (
     COMPRESS_PROMPT,
     HEDGE_PROMPT,
     HEDGE_RETURN_PROMPT,
@@ -16,8 +17,7 @@ from gate.operators import (
     numbered,
     sentences,
 )
-from gate.tests.stubs import picks, rewrites
-from nemogate.common.llm import get_model
+from nemogate.gate.tests.stubs import picks, rewrites
 from nemogate.schemas.enums import Operator
 
 
@@ -325,7 +325,7 @@ def _live_parse_error(content, finish="stop"):
     from openai.lib._parsing._completions import parse_chat_completion
     from openai.types.chat import ChatCompletion
 
-    from gate.operators import Picks
+    from nemogate.gate.operators import Picks
 
     completion = ChatCompletion.model_validate(
         {"id": "x", "object": "chat.completion", "created": 0, "model": "m",
@@ -347,7 +347,7 @@ def _langchain_parse_error(content, refusal=None):
     from langchain_core.messages import AIMessage
     from langchain_openai.chat_models.base import _oai_structured_outputs_parser
 
-    from gate.operators import Picks
+    from nemogate.gate.operators import Picks
 
     extra = {"refusal": refusal} if refusal else {}
     try:
@@ -403,7 +403,7 @@ def test_a_live_reply_that_does_not_parse_is_asked_again_then_raises_unparsed(er
     # Ritam's review of #55: live, a bad structured reply raises instead of returning None, so a
     # retry keyed on None never fired and the error escaped as neither a retry nor a
     # MutationFailed (so the gate could not pass a later handoff on).
-    from gate.operators import Picks
+    from nemogate.gate.operators import Picks
 
     helper = Scripted(error, Picks(numbers=[2]))
     assert (

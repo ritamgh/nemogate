@@ -23,10 +23,10 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from gate import NothingToMutate, build_middleware
-from gate.tests.stubs import picks
 from nemogate.common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
 from nemogate.common.llm import get_model
+from nemogate.gate import NothingToMutate, build_middleware
+from nemogate.gate.tests.stubs import picks
 from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator

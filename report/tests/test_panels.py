@@ -222,7 +222,7 @@ def test_a_mutation_noop_run_folder_is_skipped_never_an_exemplar(tmp_path):
     noop = runs / "r-20260101T000007-noop77"
     shutil.copytree(runs / "r-20260101T000002-bbb222", noop)
     (noop / "record.json").unlink()
-    (noop / "error.json").write_text('{"error_type": "gate.operators.NothingToMutate"}')
+    (noop / "error.json").write_text('{"error_type": "nemogate.gate.operators.NothingToMutate"}')
 
     evidence = load_evidence([runs])
 

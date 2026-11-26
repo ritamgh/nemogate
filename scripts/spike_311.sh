@@ -41,7 +41,7 @@ versions=""
 if [ -z "$q1_fail" ]; then
     "$VENV/bin/python" -c '
 import deepagents, langchain, langgraph  # noqa: F401
-import gate.middleware, oracle.evaluate, schemas.ledger, schemas.run, schemas.trace  # noqa: F401
+import nemogate.gate.middleware, oracle.evaluate, schemas.ledger, schemas.run, schemas.trace  # noqa: F401
 from importlib.metadata import version
 print(" ".join(f"{n} {version(n)}" for n in ("deepagents", "langgraph", "langchain")))
 ' >"$LOG/imports.txt" 2>&1 || q1_fail="import: $(tail -1 "$LOG/imports.txt" | cut -c1-200)"

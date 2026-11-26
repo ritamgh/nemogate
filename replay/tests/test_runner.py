@@ -1013,7 +1013,7 @@ def test_default_run_names_gate_when_it_cannot_be_imported(monkeypatch):
     monkeypatch.setitem(
         sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
     )
-    monkeypatch.setitem(sys.modules, "gate", None)
+    monkeypatch.setitem(sys.modules, "nemogate.gate", None)
     with pytest.raises(RuntimeError, match="gate"):
         runner.run(["X1"], [Arm.natural], [Operator.none], 1)
 
@@ -1022,7 +1022,9 @@ def test_default_run_names_the_missing_ledger_file(monkeypatch, tmp_path):
     monkeypatch.setitem(
         sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
     )
-    monkeypatch.setitem(sys.modules, "gate", _module("gate", make_middleware=lambda rc: []))
+    monkeypatch.setitem(
+        sys.modules, "nemogate.gate", _module("nemogate.gate", make_middleware=lambda rc: [])
+    )
     monkeypatch.setattr(runner, "LEDGER_PATH", tmp_path / "no-such-ledger.yaml")
     with pytest.raises(RuntimeError, match="no-such-ledger.yaml"):
         runner.run(["X1"], [Arm.natural], [Operator.none], 1)
@@ -1388,7 +1390,9 @@ def test_default_runner_writes_to_runs_dir_unless_told_otherwise(monkeypatch, tm
     monkeypatch.setitem(
         sys.modules, "nemogate.oracle", _module("nemogate.oracle", evaluate=lambda *a: [])
     )
-    monkeypatch.setitem(sys.modules, "gate", _module("gate", make_middleware=lambda rc: []))
+    monkeypatch.setitem(
+        sys.modules, "nemogate.gate", _module("nemogate.gate", make_middleware=lambda rc: [])
+    )
     monkeypatch.setattr(runner, "LEDGER_PATH", ledger)
     assert runner.default_runner().runs_dir == runner.RUNS_DIR
     assert runner.default_runner(tmp_path / "other").runs_dir == tmp_path / "other"
@@ -1678,7 +1682,7 @@ def test_arun_stops_on_any_failure_during_setup_whatever_its_type(tmp_path, brok
 def test_arun_stops_when_the_real_gate_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
     # The real gate.make_middleware raises ValueError (not ConfigError) for a stale hash.
     # Breaks if that is carried past: three error.json attempts for n=3 and nothing measured.
-    import gate
+    from nemogate import gate
 
     monkeypatch.setattr(gate, "safe_config_hash", lambda config: "stale0000000")
     h = Harness(tmp_path, make_middleware=gate.make_middleware)

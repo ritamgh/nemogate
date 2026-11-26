@@ -18,8 +18,8 @@ from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
-from gate import NothingToMutate
-from gate.middleware import REPIN
+from nemogate.gate import NothingToMutate
+from nemogate.gate.middleware import REPIN
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.run import RunRecord
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, Event, parse_trace_jsonl

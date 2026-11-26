@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 
-from gate.guard import Guard
+from nemogate.gate.guard import Guard
 
 RULES = """\
 version: 1

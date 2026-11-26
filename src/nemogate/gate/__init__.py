@@ -10,13 +10,13 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 
-from gate.errors import GuardLoopError
-from gate.guard import Guard
-from gate.middleware import GateMiddleware
-from gate.operators import EmptyMutation, MutationFailed, NothingToMutate, make_operator
-from gate.trace import TraceWriter
 from nemogate.common.env import REPO_ROOT, repo_config_path
 from nemogate.common.llm import get_model, safe_config_hash
+from nemogate.gate.errors import GuardLoopError
+from nemogate.gate.guard import Guard
+from nemogate.gate.middleware import GateMiddleware
+from nemogate.gate.operators import EmptyMutation, MutationFailed, NothingToMutate, make_operator
+from nemogate.gate.trace import TraceWriter
 from nemogate.ledger import load_ledger, scope_to
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator, Role

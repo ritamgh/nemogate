@@ -16,11 +16,11 @@ import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage
 
-from gate import NothingToMutate, build_middleware
-from gate.middleware import REPIN
-from gate.tests.stubs import picks
 from nemogate.common.env import REPO_ROOT
 from nemogate.common.llm import get_model
+from nemogate.gate import NothingToMutate, build_middleware
+from nemogate.gate.middleware import REPIN
+from nemogate.gate.tests.stubs import picks
 from nemogate.ledger import load_ledger
 from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
@@ -148,11 +148,11 @@ def test_a_drop_with_nothing_to_remove_is_counted_as_mutation_noop_and_the_sweep
     records = asyncio.run(runner.arun(["X1"], [Arm.mutated], [Operator.drop], 2, "HEAD"))
 
     assert len(records) == 1  # run 2 finished: the sweep went on
-    assert [e.error_type for e in runner.errors] == ["gate.operators.NothingToMutate"]
+    assert [e.error_type for e in runner.errors] == ["nemogate.gate.operators.NothingToMutate"]
     folders = {p.name: p for p in (tmp_path / "runs").iterdir()}
     noop_dir = folders[runner.errors[0].run_id]
     error = json.loads((noop_dir / "error.json").read_text())
-    assert error["error_type"] == "gate.operators.NothingToMutate"
+    assert error["error_type"] == "nemogate.gate.operators.NothingToMutate"
     assert error["error_type"] == noop.NOOP_ERROR_TYPE
     # The refused handoff was never stamped as sent or as received-after-mutation.
     trace = (noop_dir / "trace.jsonl").read_text() if (noop_dir / "trace.jsonl").exists() else ""
@@ -224,7 +224,7 @@ def test_a_drop_with_nothing_to_remove_on_a_return_boundary_is_also_a_mutation_n
     assert records == []
     (run_dir,) = (tmp_path / "runs").iterdir()
     error = json.loads((run_dir / "error.json").read_text())
-    assert error["error_type"] == "gate.operators.NothingToMutate"
+    assert error["error_type"] == "nemogate.gate.operators.NothingToMutate"
     assert error["boundary"] == "return:coder->planner"
     # The reply was never stamped as sent or received at the target boundary.
     trace = parse_trace_jsonl((run_dir / "trace.jsonl").read_text())
@@ -393,7 +393,7 @@ def test_sweep_status_counts_a_finished_run_whose_operator_changed_nothing_as_no
 def test_load_runs_counts_only_the_gates_error_type_as_a_noop(tmp_path):
     # Breaks if any errored run is called a noop, or a noop is called a run_error.
     for run_id, error_type in [
-        ("r-noop", "gate.operators.NothingToMutate"),
+        ("r-noop", "nemogate.gate.operators.NothingToMutate"),
         ("r-other", "builtins.RuntimeError"),
         ("r-lookalike", "other.NothingToMutate"),
     ]:

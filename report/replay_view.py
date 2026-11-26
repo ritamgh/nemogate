@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gate.middleware import REPIN
+from nemogate.gate.middleware import REPIN
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.run import Violation
 from nemogate.schemas.trace import (

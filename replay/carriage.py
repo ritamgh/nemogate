@@ -34,7 +34,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from gate.middleware import REPIN
+from nemogate.gate.middleware import REPIN
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.ledger import (
     ApprovalBefore,

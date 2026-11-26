@@ -5,10 +5,10 @@ import asyncio
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from gate import build_middleware, make_middleware
-from gate.tests.stubs import picks
 from nemogate.common.env import REPO_ROOT
 from nemogate.common.llm import get_model
+from nemogate.gate import build_middleware, make_middleware
+from nemogate.gate.tests.stubs import picks
 from nemogate.ledger import load_ledger, scope_to
 from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
@@ -342,7 +342,7 @@ def test_build_refuses_a_stale_safe_config_hash(tmp_path, monkeypatch):
     # Breaks if a config.yaml whose stored hash no longer matches its settings can stamp traces:
     # get_model only checks on live calls, so stub runs and a gate built before the first live
     # call would pool runs made under different settings.
-    import gate as gate_module
+    from nemogate import gate as gate_module
     from nemogate.schemas.config import load_config as real_load
 
     def stale(path):

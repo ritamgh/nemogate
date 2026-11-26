@@ -19,10 +19,10 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-import gate
 import nemogate.common.llm
-from gate.errors import GuardLoopError
-from gate.guard import Guard
+from nemogate import gate
+from nemogate.gate.errors import GuardLoopError
+from nemogate.gate.guard import Guard
 
 RULES = """\
 version: 1
