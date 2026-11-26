@@ -3,8 +3,9 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from ledger import load_ledger
-from ledger.extract import (
+from nemogate.common.llm import get_model
+from nemogate.ledger import load_ledger
+from nemogate.ledger.extract import (
     COMPILE_PROMPT,
     EXTRACT_PROMPT,
     Proposal,
@@ -17,8 +18,7 @@ from ledger.extract import (
     propose,
     to_constraint,
 )
-from ledger.recall import recall
-from nemogate.common.llm import get_model
+from nemogate.ledger.recall import recall
 from nemogate.schemas.ledger import (
     Constraint,
     OutputMustInclude,

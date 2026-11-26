@@ -7,9 +7,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from gate import build_middleware, make_middleware
 from gate.tests.stubs import picks
-from ledger import load_ledger, scope_to
 from nemogate.common.env import REPO_ROOT
 from nemogate.common.llm import get_model
+from nemogate.ledger import load_ledger, scope_to
 from nemogate.schemas.config import load_config
 from nemogate.schemas.contracts import MakeMiddlewareFn
 from nemogate.schemas.enums import Role

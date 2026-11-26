@@ -3,7 +3,7 @@
 A declared constraint counts as recalled when extract+compile on the text that states it yields
 exactly its check. The comparison is deterministic: no model judges whether a rule was found.
 
-    NEMOGATE_LIVE=1 uv run python -m ledger.recall --cases CASES.yaml [--reps N] [--out FILE]
+    NEMOGATE_LIVE=1 python -m nemogate.ledger.recall --cases CASES.yaml [--reps N] [--out FILE]
 
 CASES.yaml holds `agents`, `tools` and `cases` (each a `name`, a `text` and the one `expect`ed
 check, or null when the text states no rule). It prints, per case, whether the expected check
@@ -21,8 +21,8 @@ from typing import Any
 import yaml
 from pydantic import TypeAdapter
 
-from ledger.extract import propose
 from nemogate.common.env import is_live
+from nemogate.ledger.extract import propose
 from nemogate.schemas.enums import Role
 from nemogate.schemas.ledger import Check
 
@@ -80,7 +80,7 @@ def _positive(text: str) -> int:
 
 
 def main(argv: Sequence[str] | None = None, *, model: Any = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m ledger.recall", description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m nemogate.ledger.recall", description=__doc__)
     parser.add_argument("--cases", required=True, type=Path)
     parser.add_argument("--reps", type=_positive, default=1, help="ask the helper this many times")
     parser.add_argument("--out", type=Path, help="write every proposal and the totals as JSON")

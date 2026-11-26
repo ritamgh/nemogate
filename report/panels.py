@@ -619,8 +619,8 @@ def whole(value: Any, path: Path, key: str) -> int:
 
 
 def load_recall(paths: list[Path]) -> list[RecallView]:
-    """One recall measurement per file (`python -m ledger.recall` output: `matched`, `total`,
-    `extra`), in the order given. OSError or ValueError on anything that is not one."""
+    """One recall measurement per file (`python -m nemogate.ledger.recall` output: `matched`,
+    `total`, `extra`), in the order given. OSError or ValueError on anything that is not one."""
     views = []
     for path in paths:
         try:

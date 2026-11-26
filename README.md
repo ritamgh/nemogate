@@ -53,7 +53,7 @@ user message ──▶ planner ──task──▶ coder / reviewer ──reply�
                      trace.jsonl + filesystem diff ──▶ oracle ──▶ run record
 ```
 
-- **Ledger** (`ledger/`, `nemogate.yaml`): the typed rules that must survive handoffs. Each rule has a scope and one check from a closed list; a rule with no check is reported as unverified, never guessed. `python -m ledger.extract` proposes new rules from a prompt with the helper model, and a human confirms or rejects each one. The ledger is append-only.
+- **Ledger** (`ledger/`, `nemogate.yaml`): the typed rules that must survive handoffs. Each rule has a scope and one check from a closed list; a rule with no check is reported as unverified, never guessed. `python -m nemogate.ledger.extract` proposes new rules from a prompt with the helper model, and a human confirms or rejects each one. The ledger is append-only.
 - **Oracle** (`oracle/`): `evaluate(ledger, trace, fs_diff)` checks six deterministic predicates: `path_forbidden`, `files_frozen`, `tool_forbidden`, `approval_before`, `output_must_include` and `output_must_not_include`. No language model ever decides pass or fail.
 - **Gate** (`gate/`): one Deep Agents middleware placed in the planner and in every subagent. It records every handoff and tool call as a validated trace line, and in each arm:
 
@@ -87,7 +87,7 @@ uv run python -m replay.budget --bucket kill_gate --arms natural mutated \
 #   no runs/ folder yet? replace --from-runs runs with --cost-per-run 0.15
 NEMOGATE_LIVE=1 uv run python -m replay.runner --tasks T1 T6 \
     --arms natural mutated --operators none drop --n N --yes     # replace N with the number of runs per cell the budget check printed
-NEMOGATE_LIVE=1 uv run python -m ledger.extract --ledger nemogate.yaml \
+NEMOGATE_LIVE=1 uv run python -m nemogate.ledger.extract --ledger nemogate.yaml \
     --text-file PROMPT.txt --agents planner,coder,reviewer --tools write_file,delete,http_get --dry-run
 ```
 

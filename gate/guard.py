@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from gate.middleware import GuardMiddleware
 from gate.state import GuardState
 from gate.trace import GuardTraceWriter
-from ledger import ledger_hash
+from nemogate.ledger import ledger_hash
 from nemogate.schemas.enums import FileOp
 from nemogate.schemas.ledger import AppInfo, Constraint, Ledger
 

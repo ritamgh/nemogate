@@ -5,7 +5,7 @@ the ledger, which is append-only. A rule the helper cannot express as exactly on
 check, or whose check does not validate, is kept unverified (`check: null`) and never guessed.
 LLMs propose here; they never grade (AGENTS.md rule 7).
 
-    NEMOGATE_LIVE=1 uv run python -m ledger.extract --ledger nemogate.yaml \
+    NEMOGATE_LIVE=1 uv run python -m nemogate.ledger.extract --ledger nemogate.yaml \
         --text-file PROMPT.txt --agents a,b --tools x,y [--dry-run | --yes]
 """
 
@@ -267,7 +267,7 @@ def main(
     model: Any = None,
     ask: Callable[[str], str] = input,
 ) -> int:
-    parser = argparse.ArgumentParser(prog="python -m ledger.extract", description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m nemogate.ledger.extract", description=__doc__)
     parser.add_argument("--ledger", required=True, type=Path)
     parser.add_argument("--text-file", required=True, type=Path)
     parser.add_argument("--agents", required=True, help="comma-separated agent names")

@@ -360,7 +360,7 @@ def test_the_reference_c008_entry_flags_an_emptied_file_and_c003_does_not():
     # deleting, C-003 (the same rule without also_empty) leaves every earlier run comparable.
     from pathlib import Path
 
-    from ledger import load_ledger, scope_to
+    from nemogate.ledger import load_ledger, scope_to
 
     full = load_ledger(Path(__file__).resolve().parents[2] / "nemogate.yaml").ledger
     diff = [FsChange(path="app/old.py", op="modified", emptied=True)]

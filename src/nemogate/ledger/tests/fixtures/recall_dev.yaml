@@ -3,7 +3,7 @@
 # of the first reference measurement's misses and shares the reference rules' shapes, so the
 # reference tasks are not a clean held-out set (docs/FACTS.md §6). Each case is a message to the
 # team and the one check it states (null: the message states no rule).
-# Run: NEMOGATE_LIVE=1 uv run python -m ledger.recall --cases FILE
+# Run: NEMOGATE_LIVE=1 uv run python -m nemogate.ledger.recall --cases FILE
 agents: [researcher, writer, editor]
 tools: [search_web, read_file, write_file, edit_file, delete, send_email, publish, query_db, request_approval]
 cases:

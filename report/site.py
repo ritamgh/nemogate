@@ -3050,8 +3050,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         nargs="+",
         metavar="FILE",
-        help="extraction recall files (python -m ledger.recall output), one per set: shown when "
-        "results.json has no recall, with the note that it is not a held-out measure",
+        help="extraction recall files (python -m nemogate.ledger.recall output), one per set: "
+        "shown when results.json has no recall, with the note that it is not a held-out measure",
     )
     parser.add_argument(
         "--ledger",

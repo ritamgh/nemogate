@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from ledger import load_ledger
-from ledger.extract import _canonical, compile_rule, propose
-from ledger.recall import load_cases, main
-from ledger.tests.test_extract import AGENTS, TOOLS, Spy, structured
+from nemogate.ledger import load_ledger
+from nemogate.ledger.extract import _canonical, compile_rule, propose
+from nemogate.ledger.recall import load_cases, main
+from nemogate.ledger.tests.test_extract import AGENTS, TOOLS, Spy, structured
 from nemogate.schemas.ledger import OutputMustInclude, ToolForbidden
 from oracle.paths import glob_matches
 
 DEV = Path(__file__).parent / "fixtures" / "recall_dev.yaml"
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[4]
 TEXTS = [
     "",
     "\n",
