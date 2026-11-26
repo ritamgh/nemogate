@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-from nemogate.schemas.enums import Arm, BoundaryId, ConstraintId, Operator
 from pydantic import TypeAdapter, ValidationError
+
+from nemogate.schemas.enums import Arm, BoundaryId, ConstraintId, Operator
 
 TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 

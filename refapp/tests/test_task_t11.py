@@ -13,7 +13,6 @@ from nemogate.oracle import evaluate
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.trace import ToolCall
-
 from refapp.seedenv import SEED_DIR, materialize, run_seed_python, task_success
 from refapp.tasks import TASKS_DIR, load_task
 from refapp.tests.test_tasks_files import changed_migrations, fs_diff_against_seed, tree

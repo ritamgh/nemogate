@@ -1,5 +1,4 @@
 from nemogate.ledger.recall import load_cases
-
 from refapp import recall_cases
 from refapp.tasks import load_tasks
 

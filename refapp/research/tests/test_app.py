@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage
+
 from nemogate.common.env import REPO_ROOT
 from nemogate.common.llm import get_model
 from nemogate.gate import build_middleware
@@ -21,7 +22,6 @@ from nemogate.oracle import evaluate
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.trace import parse_trace_jsonl
-
 from refapp.research import sandbox
 from refapp.research.app import APP, ResearchApp
 from refapp.research.search import CachedSearch

@@ -16,8 +16,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import yaml
-from nemogate.ledger import load_ledger
 
+from nemogate.ledger import load_ledger
 from refapp.tasks import load_tasks
 from refapp.team import AGENTS
 from refapp.tools import make_tools

@@ -10,7 +10,6 @@ import hashlib
 from pathlib import Path
 
 from nemogate.common.spend import spend_log_path
-
 from refapp import sandbox as coding
 
 REPO = coding.REPO
