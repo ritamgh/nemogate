@@ -124,7 +124,7 @@ A block: `write_file -> error: Blocked by rule no-secrets-write: Never write to 
 
 A block: `execute -> error: Blocked by rule no-shell: Do not run shell commands.`
 
-`approval_before` stops a tool until the approval tool has run without error in the same thread. Name that tool once at the top of the file with `approval_tool:`, which is required when any rule uses `approval_before`. One approval, of any call, unlocks every later call of the guarded tool in that thread. A later denial does not revoke it. Use a human-in-the-loop tool as the approval tool: an agent that can call a plain tool itself can approve itself. An approval tool approves when it returns without error; raising, or returning `{"approved": false}`, denies. A reply that reads as a denial (starts with no, denied, rejected, declined, cancelled, not approved...) never counts. Anything else the approval tool returns counts, so make your approval tool return an explicit yes/no.
+`approval_before` stops a tool until the approval tool has answered yes in the same thread. Name that tool once at the top of the file with `approval_tool:`, which is required when any rule uses `approval_before`. One approval, of any call, unlocks every later call of the guarded tool in that thread. A later denial does not revoke it. Use a human-in-the-loop tool as the approval tool: an agent that can call a plain tool itself can approve itself. Only an explicit yes counts as an approval: a reply that starts with yes/ok/approved/allow... and contains no denial word, or JSON `{"approved": true}`. Anything else, including an error, silence or an unknown wording, does not unlock the call. Make your approval tool return `{"approved": true|false}` or `yes`/`no`. This is checked on the approval tool's reply, not on what the model says.
 
 ```yaml
 approval_tool: ask_human
@@ -156,10 +156,10 @@ A mapped tool's path argument may be a string or a list of strings; anything els
 - Deep Agents apps only.
 - Globs are relative to the process working directory, so run the app from the project root. An absolute path to the same file is matched too.
 - Path matching is case-sensitive and does not normalise Unicode. On a case-insensitive filesystem (the macOS default) a different case reaches the same file: add a rule per spelling, or run on Linux.
-- A delete of a folder is blocked when something below it could match a `path_forbidden` glob. This includes an absolute path to a parent of the project root, and `/`.
+- A delete of a folder is blocked when something below it could match a `path_forbidden` glob. This includes an absolute path to a parent of the project root, and `/`. A path that exists and is a plain file is matched directly only.
 - It blocks the file tools it knows (`write_file`, `edit_file`, `delete`) and tools you map under `tools:`. Shell and execute commands are not parsed, so a rule can be bypassed through a shell tool.
 - Counters and approvals live in memory in each `Guard` object and reset when the process restarts. Within one process they persist across invokes of the same thread.
-- Counters and approvals are bounded in memory: the oldest are dropped past 10,000 threads, and past 256 distinct blocked calls in one thread. A path with more than 256 segments is blocked.
+- Counters and approvals are bounded in memory: the oldest are dropped past 10,000 threads, and past 256 distinct blocked calls in one thread. A path with more than 256 segments or 4096 characters is blocked, before any filesystem work. An agent that cycles through more than 256 distinct blocked calls in one thread is never stopped by `GuardLoopError`, but every one of those calls is still blocked.
 - A thread that hit the third identical blocked call keeps raising `GuardLoopError` for that call while the same `Guard` holds the count.
 - A subagent is protected only if `guard.middleware()` is in its own `SubAgent` spec. The default general-purpose subagent does not get the main list, which is why the code declares one.
 

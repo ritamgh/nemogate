@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from nemogate.gate.errors import GuardLoopError
-from nemogate.gate.middleware import approval_denied, glob_may_match_below
+from nemogate.gate.middleware import approval_granted, glob_may_match_below
 from nemogate.gate.state import MAX_BLOCKS_PER_THREAD, MAX_THREADS, GuardState
 from nemogate.gate.tests.test_guard_wiring import (
     Tool,
@@ -48,33 +48,45 @@ DENIALS = [
     '{"decision": "denied"}',
     '{"decision": "Rejected"}',
     '{"decision": false}',
+    "Notice: approved by admin",
+    "Note: nothing to decide",
+    "Nobody objected",
+    "",
+    "Not now",
+    "Permission denied",
+    "\u201cNo\u201d",
+    "No\u2014do not delete",
+    "\u200bNo",
+    "not\tapproved",
+    "\u200bYes, not now",
 ]
 APPROVALS = [
     "yes",
     "Approved",
     "ok, go ahead",
-    "Notice: approved by admin",
-    "Note: nothing to decide",
-    "Nobody objected",
-    "",
+    "approved by admin",
+    "\u201cYes\u201d",
+    "\u200bYes",
+    "Yes\u2014go ahead",
+    "ok,\tgo",
     '{"approved": true}',
     '{"decision": "approved"}',
 ]
 
 
 @pytest.mark.parametrize("text", DENIALS)
-def test_a_plain_text_denial_is_not_recorded_as_an_approval(tmp_path, repo, text):
-    # Breaks if any non-error result of the approval tool counts: "Denied by user" would unlock
-    # drop_table.
+def test_a_denial_or_an_unknown_reply_is_not_recorded_as_an_approval(tmp_path, repo, text):
+    # Breaks if anything but an explicit yes counts: "Denied by user", "" or "No" in curly
+    # quotes would unlock drop_table.
     result, drop = approval_run(tmp_path, message(text))
     assert drop.ran == []
     assert result.content == DROP
 
 
 @pytest.mark.parametrize("text", APPROVALS)
-def test_any_other_reply_still_counts_as_an_approval(tmp_path, repo, text):
-    # Breaks if the classifier is widened past the denial words: "Notice: ..." starts with "no"
-    # but its first word is not one.
+def test_an_explicit_yes_counts_as_an_approval(tmp_path, repo, text):
+    # Breaks if an explicit yes (curly quotes, a zero-width space, an em dash, a tab) is not read
+    # as one, so a human's approval never unlocks the tool.
     result, drop = approval_run(tmp_path, message(text))
     assert drop.ran == [{"name": "users"}]
 
@@ -104,31 +116,90 @@ def test_a_denial_does_not_revoke_an_earlier_approval(tmp_path, repo):
 
 
 @pytest.mark.parametrize(
-    ("result", "expected"),
+    "result",
     [
-        ("Denied by user", True),
-        ("No", True),
-        ("no thanks", True),
-        ("Rejected: not allowed", True),
-        ("not approved", True),
-        ("Stop.", True),
-        ("yes", False),
-        ("Approved", False),
-        ("ok, go ahead", False),
-        ("Notice: approved by admin", False),
-        ("", False),
-        ({"approved": False}, True),
-        ({"approved": True}, False),
-        ({"decision": "no"}, True),
-        ({"decision": "yes"}, False),
-        (ToolMessage(content="No", tool_call_id="c", name="t"), True),
-        (ToolMessage(content="yes", tool_call_id="c", name="t"), False),
-        (ToolMessage(content="boom", tool_call_id="c", name="t", status="error"), True),
-        (ToolMessage(content=[{"type": "text", "text": "Declined"}], tool_call_id="c"), True),
+        "yes",
+        "Yes.",
+        "Approved",
+        "approved by admin",
+        "ok, go ahead",
+        "OK",
+        {"approved": True},
+        {"approved": "yes"},
+        {"approved": "Approved."},
+        {"decision": "approved"},
+        {"status": "ok"},
+        "true",
+        '"yes"',
+        "\u201cYes\u201d",
+        "\u200bYes",
+        "Yes\u2014go ahead",
+        "ok,\tgo",
+        ToolMessage(content="yes", tool_call_id="c", name="t"),
+        ToolMessage(content='{"approved": true}', tool_call_id="c", name="t"),
+        ToolMessage(content=[{"type": "text", "text": "Approved"}], tool_call_id="c"),
     ],
 )
-def test_approval_denied_classifies_literal_answers(result, expected):
-    assert approval_denied(result) is expected
+def test_approval_granted_accepts_an_explicit_yes(result):
+    # Breaks if an explicit yes in any of its shapes stops unlocking the guarded tool.
+    assert approval_granted(result) is True
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "Not now",
+        "Permission denied",
+        "User denied the request",
+        "The user declined",
+        "Nope",
+        "Never",
+        "Absolutely not",
+        "not allowed",
+        "",
+        "   ",
+        "no thanks",
+        "Yes, but not now",
+        "Yes, I don't allow it",
+        "Denied by user",
+        "Notice: approved by admin",
+        "No problem, go ahead",
+        "pending",
+        "\u201cNo\u201d",
+        "No\u2014do not delete",
+        "\u200bNo",
+        "not\tapproved",
+        "\u200bYes, not now",
+        "false",
+        "0",
+        "null",
+        "1",
+        '"No."',
+        False,
+        0,
+        None,
+        {"approved": "rejected"},
+        {"approved": "No."},
+        {"approved": None},
+        {"approved": False},
+        {"approved": 1},
+        {"approved": "maybe"},
+        {"status": "denied"},
+        {"decision": "yes", "status": "denied"},
+        {"approved": False, "decision": "approved"},
+        {"reason": "no key"},
+        {},
+        ["approved", True],
+        ToolMessage(content="boom", tool_call_id="c", name="t", status="error"),
+        ToolMessage(content="yes", tool_call_id="c", name="t", status="error"),
+        ToolMessage(content="No", tool_call_id="c", name="t"),
+        ToolMessage(content=[{"type": "text", "text": "Declined"}], tool_call_id="c"),
+        ToolMessage(content="", tool_call_id="c", name="t"),
+    ],
+)
+def test_approval_granted_refuses_everything_but_an_explicit_yes(result):
+    # Breaks if a denial wording, silence or an unknown reply is recorded as an approval.
+    assert approval_granted(result) is False
 
 
 # F2. Counters and approvals are bounded in memory
@@ -289,3 +360,80 @@ def test_a_normal_path_is_unchanged_by_the_limit(tmp_path, repo):
         bad = run(mw, ran, "write_file", {"file_path": "migrations/001.sql"}, "c2")
     assert ran.ran == [{"file_path": deep}]
     assert bad.content == "Blocked by rule no-migrations: Never touch the migrations folder."
+
+
+# H3. A huge path is rejected before any filesystem work
+
+
+def test_a_300000_segment_path_is_blocked_in_under_half_a_second(tmp_path, repo):
+    # Breaks if the path is resolved on the filesystem before its size is checked: 300,000
+    # segments took about 5.7 s to reject.
+    _, mw = make(tmp_path)
+    ran = Tool()
+    start = time.perf_counter()
+    with thread():
+        result = run(mw, ran, "write_file", {"file_path": "/".join(["a"] * 300_000)})
+    assert time.perf_counter() - start < 0.5
+    assert ran.ran == []
+    assert result.content == (
+        "Blocked by rule no-migrations: Never touch the migrations folder."
+        " (tool write_file: path has too many segments (more than 256))"
+    )
+
+
+def test_a_path_over_4096_characters_is_blocked_with_its_reason(tmp_path, repo):
+    # Breaks if only the segment count is bounded: one 5000-character segment is cheap to count
+    # but not a path to resolve.
+    _, mw = make(tmp_path)
+    ran = Tool()
+    with thread():
+        result = run(mw, ran, "write_file", {"file_path": "app/" + "a" * 5000})
+        fine = run(mw, ran, "write_file", {"file_path": "app/" + "a" * 4000}, "c2")
+    assert result.content == (
+        "Blocked by rule no-migrations: Never touch the migrations folder."
+        " (tool write_file: path is too long (more than 4096 characters))"
+    )
+    assert fine.content == "ran"
+
+
+# H2. Deleting an existing plain file is judged by the direct glob match only
+
+ENV_RULE = """\
+version: 1
+rules:
+  - id: keep-env
+    text: Keep env files.
+    check:
+      path_forbidden: {glob: "**/.env", ops: [delete]}
+"""
+
+
+@pytest.mark.parametrize(
+    ("path", "blocked"),
+    [
+        ("README.md", False),  # an existing file: only the oracle's direct match applies
+        ("src/a.py", False),
+        (".env", True),  # the oracle's own match
+        ("src/.env", True),
+        ("src", True),  # an existing folder holding a .env below
+        ("docs", True),  # an existing folder: kept conservative even though empty of matches
+        ("no/such/path", True),  # not on disk: the old conservative answer
+    ],
+)
+def test_deleting_an_existing_plain_file_is_not_blocked_by_a_glob_that_only_matches_below(
+    tmp_path, repo, path, blocked
+):
+    # Breaks if a plain file is treated as a folder that could hold a .env: deleting README.md
+    # was blocked although the oracle passes it.
+    (repo / "src").mkdir()
+    (repo / "docs").mkdir()
+    (repo / "README.md").write_text("x", encoding="utf-8")
+    (repo / "src" / "a.py").write_text("x", encoding="utf-8")
+    (repo / "src" / ".env").write_text("", encoding="utf-8")
+    (repo / ".env").write_text("", encoding="utf-8")
+    _, mw = make(tmp_path, ENV_RULE)
+    tool = Tool()
+    with thread():
+        result = run(mw, tool, "delete", {"file_path": path})
+    assert (tool.ran == []) is blocked
+    assert (result.content == "Blocked by rule keep-env: Keep env files.") is blocked
