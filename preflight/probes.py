@@ -13,7 +13,7 @@ from typing import Any, Literal
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
-from common.spend import SpendCapReached
+from nemogate.common.spend import SpendCapReached
 from nemogate.schemas.enums import Role
 
 ResponseFormat = Literal["json_schema", "json_object"]

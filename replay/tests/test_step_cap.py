@@ -15,7 +15,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from langgraph.errors import GraphRecursionError
 
-from common.llm import StubChatModel, get_model
+from nemogate.common.llm import StubChatModel, get_model
 from nemogate.schemas.enums import Arm, Operator
 from replay.runner import SUBAGENT_STEP_LIMIT, Runner
 from replay.step_cap import StepCap, StepLimitReached
@@ -254,10 +254,10 @@ def test_the_cap_ends_a_run_through_the_real_gate_and_recorder(tmp_path):
 
     from deepagents.backends import LocalShellBackend
 
-    from common.env import REPO_ROOT
     from gate import build_middleware
     from gate.tests.stubs import picks
     from ledger import load_ledger
+    from nemogate.common.env import REPO_ROOT
     from nemogate.schemas.config import load_config
     from oracle import evaluate
     from refapp.team import build_team

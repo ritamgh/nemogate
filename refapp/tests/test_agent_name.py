@@ -11,8 +11,8 @@ from deepagents.backends import LocalShellBackend
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.config import get_config
+from nemogate.common.llm import get_model
 
-from common.llm import get_model
 from refapp.team import build_team
 
 

@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from common.env import REPO_ROOT
 from ledger import LoadedLedger, ledger_hash, load_ledger, scope_to
+from nemogate.common.env import REPO_ROOT
 from refapp.tasks import load_tasks
 
 YAML = """\

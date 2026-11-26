@@ -23,10 +23,10 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
-from common.llm import get_model
 from gate import NothingToMutate, build_middleware
 from gate.tests.stubs import picks
+from nemogate.common.env import COMPACT_KEEP_ENV, COMPACT_TOKENS_ENV, REPO_ROOT
+from nemogate.common.llm import get_model
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.ledger import (
@@ -1078,7 +1078,7 @@ def test_a_helper_that_cannot_answer_leaves_the_cut_where_it_was_asked(tmp_path)
 def test_the_spend_cap_while_choosing_the_cut_stops_the_fork(tmp_path):
     """Catches the cut search swallowing the spend cap (AGENTS.md rule 3: stop and tell a human)
     as it falls back on any other helper failure."""
-    from common import SpendCapReached
+    from nemogate.common import SpendCapReached
 
     class Capped:
         def with_structured_output(self, schema):

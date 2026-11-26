@@ -21,8 +21,8 @@ from typing import Any
 import yaml
 from pydantic import TypeAdapter
 
-from common.env import is_live
 from ledger.extract import propose
+from nemogate.common.env import is_live
 from nemogate.schemas.enums import Role
 from nemogate.schemas.ledger import Check
 
@@ -89,7 +89,7 @@ def main(argv: Sequence[str] | None = None, *, model: Any = None) -> int:
         if not is_live():
             print("refusing: recall calls the helper model; set NEMOGATE_LIVE=1", file=sys.stderr)
             return 2
-        from common.llm import get_model
+        from nemogate.common.llm import get_model
 
         model = get_model(Role.helper)
     agents, tools, cases = load_cases(args.cases)

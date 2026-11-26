@@ -3,7 +3,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage
 
-from common import SpendCapReached, get_model
+from nemogate.common import SpendCapReached, get_model
 from nemogate.schemas.enums import Role
 from preflight.probes import (
     ESCAPE_SAMPLE,

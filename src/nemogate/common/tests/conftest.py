@@ -9,7 +9,7 @@ import httpx
 import pytest
 import yaml
 
-import common.env
+import nemogate.common.env
 
 FAKE_KEY = "fake-key-sentinel-7f3a91c2"
 
@@ -18,7 +18,7 @@ FAKE_KEY = "fake-key-sentinel-7f3a91c2"
 def _isolated(tmp_path, monkeypatch):
     # Breaks if a test reads the developer's real .env or the real spend log (the default one is
     # under the home directory, so HOME points into tmp_path too).
-    monkeypatch.setattr(common.env, "REPO_ROOT", tmp_path / "no-repo-root")
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", tmp_path / "no-repo-root")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("NEMOGATE_LIVE", raising=False)
     monkeypatch.delenv("NEBIUS_API_KEY", raising=False)

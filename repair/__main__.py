@@ -26,8 +26,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from common.env import REPO_ROOT, is_live
-from common.spend import total_spent
+from nemogate.common.env import REPO_ROOT, is_live
+from nemogate.common.spend import total_spent
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator, Role
 from repair.evidence import load_evidence, load_records
@@ -138,7 +138,7 @@ def main(
         return 1
 
     if planner_model is None or writer_model is None:
-        from common.llm import get_model
+        from nemogate.common.llm import get_model
 
         planner_model = planner_model or get_model(Role.planner)
         writer_model = writer_model or get_model(Role.sut)

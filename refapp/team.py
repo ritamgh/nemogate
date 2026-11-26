@@ -24,9 +24,9 @@ from deepagents.profiles.harness.harness_profiles import (
 )
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
+from nemogate.common.llm import get_model
 from nemogate.schemas.enums import Role
 
-from common.llm import get_model
 from refapp.prompts import (
     CODER_DESCRIPTION,
     CODER_PROMPT,

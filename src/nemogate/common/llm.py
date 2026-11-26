@@ -25,8 +25,8 @@ from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from pydantic import PrivateAttr
 
-from common.env import REPO_ROOT, is_live, require_env
-from common.spend import admit, append_spend, cost_usd
+from nemogate.common.env import REPO_ROOT, is_live, repo_config_path, require_env
+from nemogate.common.spend import admit, append_spend, cost_usd
 from nemogate.schemas.config import AppConfig, ModelConfig, load_config
 from nemogate.schemas.enums import Role
 
@@ -336,7 +336,7 @@ def get_model(
             "stub_responses given while NEMOGATE_LIVE=1: a test meant for the stub must never spend"
         )
     require_env(API_KEY_ENV)
-    config = load_config(config_path or REPO_ROOT / "config.yaml")
+    config = load_config(config_path or repo_config_path(REPO_ROOT))
     model_cfg = config.models[role]
     _require(model_cfg.id, "id", role)
     _require(model_cfg.input_usd_per_mtok, "input_usd_per_mtok", role)

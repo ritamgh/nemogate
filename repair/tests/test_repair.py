@@ -12,7 +12,7 @@ import pytest
 import yaml
 from langchain_core.messages import AIMessage
 
-from common.llm import get_model
+from nemogate.common.llm import get_model
 from nemogate.schemas.run import RunRecord
 from repair.__main__ import main
 from repair.evidence import Evidence, load_evidence

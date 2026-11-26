@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from langchain_core.language_models import BaseChatModel
 
-from common.llm import get_model, safe_config_hash
+from nemogate.common.llm import get_model, safe_config_hash
 from nemogate.schemas.config import AppConfig, SafeConfig, load_config
 from preflight.probes import (
     RESPONSE_FORMATS,

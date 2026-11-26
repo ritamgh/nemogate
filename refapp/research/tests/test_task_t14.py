@@ -5,9 +5,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from nemogate.common.env import REPO_ROOT
 from nemogate.schemas.trace import FinalOutput
 
-from common.env import REPO_ROOT
 from ledger import load_ledger, scope_to
 from oracle import evaluate
 from refapp.research.tests.test_task import STAMP, reply

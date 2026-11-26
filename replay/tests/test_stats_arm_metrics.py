@@ -5,7 +5,7 @@
 import json
 from pathlib import Path
 
-from common.spend import append_spend, run_scope
+from nemogate.common.spend import append_spend, run_scope
 from nemogate.schemas.enums import Role
 from nemogate.schemas.ledger import load_ledger_yaml
 from nemogate.schemas.trace import dump_event_jsonl

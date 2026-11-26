@@ -1,7 +1,6 @@
 import pytest
 from langchain_core.messages import HumanMessage
 
-from common.llm import get_model
 from gate import EmptyMutation, MutationFailed, NothingToMutate
 from gate.operators import (
     COMPRESS_PROMPT,
@@ -18,6 +17,7 @@ from gate.operators import (
     sentences,
 )
 from gate.tests.stubs import picks, rewrites
+from nemogate.common.llm import get_model
 from nemogate.schemas.enums import Operator
 
 
@@ -416,7 +416,7 @@ def test_a_live_reply_that_does_not_parse_is_asked_again_then_raises_unparsed(er
 
 
 def test_a_spend_cap_or_transport_error_is_not_retried_or_swallowed():
-    from common.spend import SpendCapReached
+    from nemogate.common.spend import SpendCapReached
 
     for error in (SpendCapReached("cap"), ConnectionError("down")):
         helper = Scripted(error)

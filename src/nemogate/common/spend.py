@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from common import env
+from nemogate.common import env
 from nemogate.schemas.config import AppConfig, ModelConfig
 from nemogate.schemas.enums import Role
 

@@ -1,8 +1,8 @@
 import httpx
 import pytest
 
-from common.tests.conftest import FAKE_KEY
-from common.tokenfactory import list_model_ids
+from nemogate.common.tests.conftest import FAKE_KEY
+from nemogate.common.tokenfactory import list_model_ids
 
 BASE = "https://tf.example.invalid/v1"
 

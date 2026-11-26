@@ -9,8 +9,8 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
+from nemogate.common.env import COMPACT_TOKENS_ENV, compaction_from_env
 
-from common.env import COMPACT_TOKENS_ENV, compaction_from_env
 from refapp.research import sandbox
 from refapp.research.search import CachedSearch, make_search_tool, tavily_client
 from refapp.research.team import build_team

@@ -9,7 +9,7 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from common.spend import total_spent
+from nemogate.common.spend import total_spent
 from nemogate.schemas.config import AppConfig, load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.run import RunRecord

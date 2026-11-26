@@ -20,7 +20,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from common.env import is_live
+from nemogate.common.env import is_live
 from nemogate.schemas.enums import Role
 from nemogate.schemas.ledger import (
     ApprovalBefore,
@@ -283,7 +283,7 @@ def main(
                 "refusing: extraction calls the helper model; set NEMOGATE_LIVE=1", file=sys.stderr
             )
             return 2
-        from common.llm import get_model
+        from nemogate.common.llm import get_model
 
         model = get_model(Role.helper)
     agents = [a.strip() for a in args.agents.split(",") if a.strip()]

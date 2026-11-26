@@ -16,8 +16,8 @@ from uuid import UUID
 import pytest
 from langchain_core.messages import AIMessage
 
-from common import ConfigError, MissingEnvError, SpendCapReached, env
-from common.spend import append_spend
+from nemogate.common import ConfigError, MissingEnvError, SpendCapReached, env
+from nemogate.common.spend import append_spend
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, FsOp, Operator, Role
 from nemogate.schemas.ledger import Constraint, Ledger, ToolForbidden, load_ledger_yaml

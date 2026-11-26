@@ -2,10 +2,10 @@ import os
 
 import pytest
 
-import common.env
-from common import MissingEnvError
-from common.env import is_live, load_dotenv, main_checkout_root, require_env
-from common.tests.conftest import make_repo_with_worktree, run_git
+import nemogate.common.env
+from nemogate.common import MissingEnvError
+from nemogate.common.env import is_live, load_dotenv, main_checkout_root, require_env
+from nemogate.common.tests.conftest import make_repo_with_worktree, run_git
 
 
 def _forget(monkeypatch, *names):
@@ -94,7 +94,7 @@ def test_require_env_reads_the_repo_root_dotenv(tmp_path, monkeypatch):
     root = tmp_path / "root"
     root.mkdir()
     (root / ".env").write_text("FROM_DOTENV_ONLY=ok\n", encoding="utf-8")
-    monkeypatch.setattr(common.env, "REPO_ROOT", root)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", root)
     _forget(monkeypatch, "FROM_DOTENV_ONLY")
     require_env("FROM_DOTENV_ONLY")
 
@@ -104,7 +104,7 @@ def test_require_env_finds_the_main_checkouts_dotenv_from_a_worktree(tmp_path, m
     # no untracked .env) fails with MissingEnvError.
     main, wt = make_repo_with_worktree(tmp_path)
     (main / ".env").write_text("FROM_MAIN_ONLY=ok\n", encoding="utf-8")
-    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", wt)
     _forget(monkeypatch, "FROM_MAIN_ONLY")
     require_env("FROM_MAIN_ONLY")
     assert os.environ["FROM_MAIN_ONLY"] == "ok"
@@ -115,7 +115,7 @@ def test_main_checkout_root_is_shared_by_every_worktree(monkeypatch, tmp_path):
     main, wt = make_repo_with_worktree(tmp_path)
     assert main_checkout_root(main).resolve() == main.resolve()
     assert main_checkout_root(wt).resolve() == main.resolve()
-    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", wt)
     assert main_checkout_root().resolve() == main.resolve()
 
 
@@ -182,7 +182,7 @@ def test_main_checkout_root_is_the_work_tree_when_the_git_dir_is_elsewhere(tmp_p
     assert main_checkout_root(wt).resolve() == wt.resolve()
     (git_dir.parent / ".env").write_text("FROM_GIT_DIR_PARENT=bad\n", encoding="utf-8")
     (project / ".env").write_text("FROM_PROJECT=ok\n", encoding="utf-8")
-    monkeypatch.setattr(common.env, "REPO_ROOT", project)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", project)
     _forget(monkeypatch, "FROM_GIT_DIR_PARENT", "FROM_PROJECT")
     require_env("FROM_PROJECT")
     assert "FROM_GIT_DIR_PARENT" not in os.environ
@@ -193,18 +193,18 @@ def test_main_checkout_root_is_the_work_tree_when_the_git_dir_is_elsewhere(tmp_p
 
 def test_compaction_is_off_when_the_token_variable_is_unset():
     # Breaks if an unset knob turns compaction on (default off: no behaviour change).
-    assert common.env.compaction_from_env({}) is None
+    assert nemogate.common.env.compaction_from_env({}) is None
 
 
 def test_compaction_reads_tokens_and_keep():
     # Breaks if either number is read from the wrong variable or left a string.
     environ = {"NEMOGATE_COMPACT_TOKENS": "9000", "NEMOGATE_COMPACT_KEEP": "2"}
-    assert common.env.compaction_from_env(environ) == (9000, 2)
+    assert nemogate.common.env.compaction_from_env(environ) == (9000, 2)
 
 
 def test_compaction_keep_defaults_to_the_deep_agents_default_of_six():
     # Breaks if a missing keep is an error or any value other than the library default.
-    assert common.env.compaction_from_env({"NEMOGATE_COMPACT_TOKENS": "9000"}) == (9000, 6)
+    assert nemogate.common.env.compaction_from_env({"NEMOGATE_COMPACT_TOKENS": "9000"}) == (9000, 6)
 
 
 @pytest.mark.parametrize(
@@ -221,4 +221,17 @@ def test_compaction_refuses_a_half_set_or_malformed_knob(environ):
     # Breaks if a typo silently runs an ordinary natural run that is then pooled as a compaction
     # run (or the reverse).
     with pytest.raises(ValueError, match="NEMOGATE_COMPACT"):
-        common.env.compaction_from_env(environ)
+        nemogate.common.env.compaction_from_env(environ)
+
+
+def test_repo_config_path_names_the_missing_file_when_there_is_no_checkout(tmp_path):
+    # Breaks if an installed package (no config.yaml beside it) fails with a bare
+    # FileNotFoundError that does not say config.yaml belongs to a source checkout.
+    with pytest.raises(FileNotFoundError, match="config.yaml.*source checkout"):
+        nemogate.common.env.repo_config_path(tmp_path)
+
+
+def test_repo_config_path_returns_the_file_in_a_checkout(tmp_path):
+    # Breaks if the helper changes the path the callers used to build by hand.
+    (tmp_path / "config.yaml").write_text("x: 1\n", encoding="utf-8")
+    assert nemogate.common.env.repo_config_path(tmp_path) == tmp_path / "config.yaml"

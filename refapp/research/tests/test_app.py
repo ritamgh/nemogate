@@ -12,12 +12,12 @@ from types import SimpleNamespace
 import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage
+from nemogate.common.env import REPO_ROOT
+from nemogate.common.llm import get_model
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.trace import parse_trace_jsonl
 
-from common.env import REPO_ROOT
-from common.llm import get_model
 from gate import build_middleware
 from gate.tests.stubs import picks
 from ledger import load_ledger

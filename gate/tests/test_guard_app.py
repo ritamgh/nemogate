@@ -19,8 +19,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-import common.llm
 import gate
+import nemogate.common.llm
 from gate.errors import GuardLoopError
 from gate.guard import Guard
 
@@ -113,7 +113,7 @@ def offline(monkeypatch):
         raise AssertionError("the guard asked for a model")
 
     monkeypatch.setattr(socket.socket, "connect", no_connect)
-    monkeypatch.setattr(common.llm, "get_model", no_model)
+    monkeypatch.setattr(nemogate.common.llm, "get_model", no_model)
     monkeypatch.setattr(gate, "get_model", no_model, raising=False)
     for key in ("OPENAI_API_KEY", "NEBIUS_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(key, raising=False)

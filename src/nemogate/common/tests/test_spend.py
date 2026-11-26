@@ -6,9 +6,9 @@ import time
 
 import pytest
 
-import common.env
-from common import SpendCapReached
-from common.spend import (
+import nemogate.common.env
+from nemogate.common import SpendCapReached
+from nemogate.common.spend import (
     admit,
     append_spend,
     check_cap,
@@ -19,7 +19,12 @@ from common.spend import (
     spend_log_path,
     total_spent,
 )
-from common.tests.conftest import make_repo_with_worktree, read_kind, read_log, write_config
+from nemogate.common.tests.conftest import (
+    make_repo_with_worktree,
+    read_kind,
+    read_log,
+    write_config,
+)
 from nemogate.schemas.config import ModelConfig, load_config
 from nemogate.schemas.enums import Role
 
@@ -71,7 +76,7 @@ def test_legacy_log_is_merged_into_the_home_log_and_left_untouched(monkeypatch, 
     default = _default_log(monkeypatch, tmp_path)
     main, _ = make_repo_with_worktree(tmp_path)
     legacy = _legacy_log(main, SETTLE_1_5 + SETTLE_0_25)
-    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", main)
     assert total_spent() == 1.75
     assert default.read_text(encoding="utf-8") == SETTLE_1_5 + SETTLE_0_25
     assert [p.name for p in default.parent.iterdir()] == ["spend.jsonl"]  # no temp file left
@@ -86,7 +91,7 @@ def test_a_home_log_created_first_does_not_hide_the_legacy_log(monkeypatch, tmp_
     default.write_text(SETTLE_0_25, encoding="utf-8")
     main, _ = make_repo_with_worktree(tmp_path)
     legacy = _legacy_log(main, SETTLE_9)
-    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", main)
     assert total_spent() == 9.25
     assert default.read_text(encoding="utf-8") == SETTLE_0_25 + SETTLE_9
     assert legacy.read_text(encoding="utf-8") == SETTLE_9
@@ -98,7 +103,7 @@ def test_lines_appended_to_the_legacy_log_after_the_merge_still_count(monkeypatc
     default = _default_log(monkeypatch, tmp_path)
     main, _ = make_repo_with_worktree(tmp_path)
     legacy = _legacy_log(main, SETTLE_1_5)
-    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", main)
     assert total_spent() == 1.5
     append_spend("sut", "m", 1, 1, 0.5)
     legacy.write_text(legacy.read_text(encoding="utf-8") + SETTLE_9, encoding="utf-8")
@@ -112,7 +117,7 @@ def test_merging_the_legacy_log_twice_adds_nothing(monkeypatch, tmp_path):
     default = _default_log(monkeypatch, tmp_path)
     main, _ = make_repo_with_worktree(tmp_path)
     _legacy_log(main, SETTLE_1_5 + SETTLE_0_25)
-    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", main)
     assert total_spent() == 1.75
     first = default.read_text(encoding="utf-8")
     assert total_spent() == 1.75
@@ -124,7 +129,7 @@ def test_a_worktree_carries_over_the_main_checkouts_legacy_log(monkeypatch, tmp_
     _default_log(monkeypatch, tmp_path)
     main, wt = make_repo_with_worktree(tmp_path)
     _legacy_log(main, SETTLE_1_5)
-    monkeypatch.setattr(common.env, "REPO_ROOT", wt)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", wt)
     assert total_spent() == 1.5
 
 
@@ -139,7 +144,7 @@ def test_the_override_ignores_the_legacy_log(monkeypatch, tmp_path):
     # Breaks if the carry-over also runs for NEMOGATE_SPEND_LOG, leaking real spend into tests.
     main, _ = make_repo_with_worktree(tmp_path)
     _legacy_log(main, SETTLE_9)
-    monkeypatch.setattr(common.env, "REPO_ROOT", main)
+    monkeypatch.setattr(nemogate.common.env, "REPO_ROOT", main)
     assert total_spent() == 0.0
     assert not (tmp_path / "home" / ".nemogate").exists()
 

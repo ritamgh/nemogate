@@ -10,7 +10,9 @@ from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# The source checkout: this file is src/nemogate/common/env.py. An installed package has no
+# checkout around it, so files that live at the repo root (config.yaml) are not found there.
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class MissingEnvError(RuntimeError):
@@ -39,6 +41,17 @@ def _main_checkout_root(repo_root: Path) -> Path:
     except (OSError, subprocess.SubprocessError):
         pass
     return repo_root
+
+
+def repo_config_path(repo_root: Path = REPO_ROOT) -> Path:
+    """`config.yaml` at the root of the source checkout, or a clear error where there is none."""
+    path = repo_root / "config.yaml"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} not found: config.yaml lives at the root of a source checkout and is not "
+            "part of the installed nemogate package; run from a checkout or pass the path"
+        )
+    return path
 
 
 def main_checkout_root(repo_root: Path | None = None) -> Path:

@@ -14,11 +14,11 @@ from pathlib import Path
 import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage, HumanMessage
+from nemogate.common.llm import get_model
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.run import RunConfig
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl
 
-from common.llm import get_model
 from gate import build_middleware
 from ledger import load_ledger, scope_to
 from oracle import evaluate

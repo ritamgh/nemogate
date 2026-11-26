@@ -7,9 +7,9 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
-from common.llm import get_model
-from common.spend import total_spent
-from common.tests.conftest import Transport, completion, read_kind, read_log, write_config
+from nemogate.common.llm import get_model
+from nemogate.common.spend import total_spent
+from nemogate.common.tests.conftest import Transport, completion, read_kind, read_log, write_config
 
 # Reserve for the prompt "hi" on sut (1.00 in / 3.00 out per Mtok): 1 input token + 4096 output.
 HI_RESERVE_USD = 0.012289
@@ -165,7 +165,7 @@ def test_response_without_usage_settles_at_its_reserve_and_returns_the_reply(
     # if the reserve is released as zero: it must settle at the reserve and warn.
     transport = Transport(completion(prompt_tokens=None))
     model = get_model("sut", config_path=config_path, **transport.clients)
-    with caplog.at_level(logging.WARNING, logger="common.llm"):
+    with caplog.at_level(logging.WARNING, logger="nemogate.common.llm"):
         reply = model.invoke("hi")
     assert reply.content == "hello"
     reserve, settle = read_log(spend_log)

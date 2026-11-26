@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from nemogate.common.env import REPO_ROOT
 from nemogate.schemas.ledger import OutputMustNotInclude
 from nemogate.schemas.trace import BoundaryIn, FinalOutput
 
-from common.env import REPO_ROOT
 from ledger import load_ledger, scope_to
 from oracle import evaluate
 from refapp.tasks import load_task, load_tasks

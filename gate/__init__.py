@@ -10,14 +10,14 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 
-from common.env import REPO_ROOT
-from common.llm import get_model, safe_config_hash
 from gate.errors import GuardLoopError
 from gate.guard import Guard
 from gate.middleware import GateMiddleware
 from gate.operators import EmptyMutation, MutationFailed, NothingToMutate, make_operator
 from gate.trace import TraceWriter
 from ledger import load_ledger, scope_to
+from nemogate.common.env import REPO_ROOT, repo_config_path
+from nemogate.common.llm import get_model, safe_config_hash
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator, Role
 from nemogate.schemas.ledger import (
@@ -96,7 +96,7 @@ def build_middleware(run_config: RunConfig, *, helper: Any | None = None) -> lis
     ledger = scope_to(loaded.ledger, run_config.target_constraint)
     _check_app(ledger)
     _check_target(run_config, ledger)
-    config = load_config(REPO_ROOT / "config.yaml")
+    config = load_config(repo_config_path(REPO_ROOT))
     model_id, safe_hash = config.models[Role.sut].id, config.safe_config.hash
     if model_id is None or safe_hash is None:
         raise ValueError("config.yaml needs models.sut.id and safe_config.hash to stamp traces")

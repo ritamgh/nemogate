@@ -10,9 +10,9 @@ import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from nemogate.common.llm import StubChatModel, get_model
 
 import refapp.app
-from common.llm import StubChatModel, get_model
 from refapp.team import build_team
 from replay.carriage import compaction_evidence
 

@@ -9,11 +9,11 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
-from common import ConfigError, MissingEnvError, SpendCapReached
-from common.env import REPO_ROOT
-from common.llm import get_model, safe_config_hash
-from common.spend import append_spend, run_scope, total_spent
-from common.tests.conftest import (
+from nemogate.common import ConfigError, MissingEnvError, SpendCapReached
+from nemogate.common.env import REPO_ROOT
+from nemogate.common.llm import get_model, safe_config_hash
+from nemogate.common.spend import append_spend, run_scope, total_spent
+from nemogate.common.tests.conftest import (
     FAKE_KEY,
     Transport,
     chunk,

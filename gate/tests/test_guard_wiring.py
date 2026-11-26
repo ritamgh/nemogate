@@ -15,8 +15,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.prebuilt.tool_node import ToolCallRequest
 
-import common.llm
 import gate
+import nemogate.common.llm
 from gate.errors import GuardLoopError
 from gate.guard import Guard
 from gate.middleware import GateMiddleware, glob_may_match_below, repin
@@ -464,7 +464,7 @@ def test_the_guard_makes_no_model_calls(tmp_path, repo, monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("the guard asked for a model")
 
-    monkeypatch.setattr(common.llm, "get_model", boom)
+    monkeypatch.setattr(nemogate.common.llm, "get_model", boom)
     monkeypatch.setattr(gate, "get_model", boom)
     _, mw = make(tmp_path)
     tool = Tool()

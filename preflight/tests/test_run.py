@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from common.tests.conftest import FAKE_KEY, Transport, write_config
+from nemogate.common.tests.conftest import FAKE_KEY, Transport, write_config
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Role
 from preflight.probes import Variant

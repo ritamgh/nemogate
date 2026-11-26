@@ -16,12 +16,12 @@ import pytest
 from deepagents.backends import LocalShellBackend
 from langchain_core.messages import AIMessage
 
-from common.env import REPO_ROOT
-from common.llm import get_model
 from gate import NothingToMutate, build_middleware
 from gate.middleware import REPIN
 from gate.tests.stubs import picks
 from ledger import load_ledger
+from nemogate.common.env import REPO_ROOT
+from nemogate.common.llm import get_model
 from nemogate.schemas.config import load_config
 from nemogate.schemas.enums import Arm, Operator
 from nemogate.schemas.trace import BoundaryIn, BoundaryOut, parse_trace_jsonl

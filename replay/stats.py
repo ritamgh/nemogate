@@ -23,9 +23,9 @@ from typing import Any, NamedTuple
 
 import yaml
 
-from common.env import compaction_from_env
-from common.spend import run_cost
 from gate.policy import checkable_before_the_call
+from nemogate.common.env import compaction_from_env
+from nemogate.common.spend import run_cost
 from nemogate.schemas.enums import Arm
 from nemogate.schemas.ledger import Ledger, load_ledger_yaml
 from nemogate.schemas.run import RunRecord, is_comparable

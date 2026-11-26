@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from common.tests.conftest import run_git, write_config
+from nemogate.common.tests.conftest import run_git, write_config
 from nemogate.schemas.enums import Role
 from preflight.__main__ import main
 from preflight.tests.conftest import scripted_factory

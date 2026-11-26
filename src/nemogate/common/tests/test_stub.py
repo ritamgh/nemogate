@@ -3,8 +3,8 @@ import asyncio
 import pytest
 from langchain_core.messages import AIMessage
 
-from common.llm import StubChatModel, get_model
-from common.tests.conftest import read_log
+from nemogate.common.llm import StubChatModel, get_model
+from nemogate.common.tests.conftest import read_log
 
 
 def test_default_stub_names_the_role_and_is_deterministic(spend_log):

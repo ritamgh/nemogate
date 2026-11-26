@@ -7,8 +7,8 @@ import os
 
 import httpx
 
-from common.env import is_live, require_env
-from common.llm import API_KEY_ENV
+from nemogate.common.env import is_live, require_env
+from nemogate.common.llm import API_KEY_ENV
 
 
 def list_model_ids(base_url: str, *, client: httpx.Client | None = None) -> list[str]:
