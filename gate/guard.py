@@ -10,9 +10,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from langchain.agents.middleware import AgentMiddleware
 from pydantic import ValidationError
 
+from gate.middleware import GuardMiddleware
 from gate.state import GuardState
+from gate.trace import GuardTraceWriter
+from ledger import ledger_hash
 from schemas.enums import FileOp
 from schemas.ledger import AppInfo, Constraint, Ledger
 
@@ -57,15 +61,21 @@ class Guard:
         rules: list[Rule],
         approval_tool: str | None,
         tool_map: dict[str, dict[str, str]],
+        trace_path: str | Path | None = None,
     ) -> None:
         self.rules = rules
         self.approval_tool = approval_tool
         self.tool_map = tool_map
+        self.trace_path = trace_path
         self.state = GuardState()
+        self._writer: GuardTraceWriter | None = None
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "Guard":
-        """Load a rules file; ValueError names the file (and the rule and field) at fault."""
+    def from_yaml(cls, path: str | Path, *, trace_path: str | Path | None = None) -> "Guard":
+        """Load a rules file; ValueError names the file (and the rule and field) at fault.
+
+        The guard writes a JSONL trace of its decisions to `trace_path` when one is given, and
+        no file otherwise."""
         path = Path(path)
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -87,10 +97,25 @@ class Guard:
             )
         except ValidationError as exc:
             raise ValueError(f"{path}: {exc}") from exc
-        return cls(rules, approval_tool, tool_map)
+        return cls(rules, approval_tool, tool_map, trace_path)
 
-    def middleware(self):
-        raise NotImplementedError("wired in T-001b")
+    def middleware(self) -> list[AgentMiddleware]:
+        """The list for create_deep_agent(middleware=) and for each SubAgent spec's middleware.
+
+        An approval tool (the file's approval_tool) approves when it returns without error and
+        its answer is not a denial. Raise, or return {"approved": false}, to deny: a mapping, or
+        JSON text of one, whose "approved" or "approve" is false, "false" or 0.
+
+        Every call shares this guard's state and trace, so the main agent's and each subagent's
+        instance count blocks and approvals together."""
+        ledger = Ledger(
+            version=1,
+            app=AppInfo(approval_tool=self.approval_tool),
+            constraints=tuple(r.constraint for r in self.rules),
+        )
+        if self._writer is None:
+            self._writer = GuardTraceWriter(self.trace_path, ledger_hash=ledger_hash(ledger))
+        return [GuardMiddleware(self.rules, ledger, self.state, self.tool_map, self._writer)]
 
 
 def _reject_unknown(mapping: dict, allowed: set[str], where: str) -> None:
@@ -136,6 +161,8 @@ def _load_rule(path: Path, raw: Any, approval_tool: str | None) -> Rule:
         raise ValueError(
             f"{where}: unknown check {kind!r}, expected one of {sorted(_CHECK_FIELDS)}"
         )
+    if kind == "tool_arg_bound":  # T-005 lifts this: until then the guard would skip the rule
+        raise ValueError(f"{where}: tool_arg_bound is not supported yet")
     if not isinstance(params, dict):
         raise ValueError(f"{where}: check {kind!r} must be a mapping")
     _reject_unknown(params, _CHECK_FIELDS[kind], f"{where}, check {kind!r}")

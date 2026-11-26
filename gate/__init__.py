@@ -12,6 +12,8 @@ from langchain.agents.middleware import AgentMiddleware
 
 from common.env import REPO_ROOT
 from common.llm import get_model, safe_config_hash
+from gate.errors import GuardLoopError
+from gate.guard import Guard
 from gate.middleware import GateMiddleware
 from gate.operators import EmptyMutation, MutationFailed, NothingToMutate, make_operator
 from gate.trace import TraceWriter
@@ -133,6 +135,8 @@ def make_middleware(run_config: RunConfig) -> list[AgentMiddleware]:
 __all__ = [
     "PRIOR_EVENTS",
     "EmptyMutation",
+    "Guard",
+    "GuardLoopError",
     "MutationFailed",
     "NothingToMutate",
     "build_middleware",
