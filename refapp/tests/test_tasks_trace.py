@@ -287,7 +287,7 @@ def test_t4_check_rejects_a_summary_unrelated_to_the_task(tmp_path):
 def test_t4_check_unescapes_the_summary_before_comparing(tmp_path):
     # A SUMMARY that is the title plus an escaped newline must be read as "Write report\n".
     repo = broken_variant(
-        tmp_path, "T4", "app/ical.py", "_escape(task['title'])", "_escape(task['title'] + '\\n')"
+        tmp_path, "T4", "app/ical.py", "_escape(task['title'])", "_escape(task['title'] + chr(10))"
     )
 
     proc = run_check(repo, "T4")
