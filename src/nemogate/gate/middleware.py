@@ -508,86 +508,89 @@ def _deletes_protected_parent(
     return False
 
 
-_YES_WORDS = frozenset(
-    "yes y yep yeah ok okay approve approved allow allowed grant granted accept accepted confirm "
-    "confirmed proceed true sure go".split()
+_YES_TOKENS = frozenset(
+    "yes y ok okay approve approved allow allowed grant granted confirm confirmed true accept "
+    "accepted".split()
 )
-_NO_WORDS = frozenset(
-    "not no never nope deny denied reject rejected decline declined refuse refused cancel "
-    "cancelled canceled disallowed forbidden stop abort aborted disapproved".split()
-)
-_APPROVED_VALUES = frozenset("true yes approved".split())
+_DECISION_KEYS = ("decision", "status", "result", "answer", "response")
 
 
-def _normalised(text: str) -> str:
-    """`text` NFKC-normalised, lowercased, with zero-width and other format characters (Unicode
-    category Cf) dropped."""
-    text = unicodedata.normalize("NFKC", text)
-    return "".join(c for c in text if unicodedata.category(c) != "Cf").lower()
-
-
-def _words(text: str) -> list[str]:
-    """The words of `text`, split on anything that is not a word character, so curly quotes,
-    dashes and tabs separate words the way spaces do."""
-    return re.findall(r"\w+", _normalised(text))
+def _is_edge(char: str) -> bool:
+    return char.isspace() or unicodedata.category(char).startswith("P")
 
 
 def _yes_text(text: str) -> bool:
-    """True if `text` is an explicit yes: its first word is a yes word and no word of it is a
-    denial word or a contraction of one ("don't", "isn't")."""
-    words = _words(text)
-    if not words or words[0] not in _YES_WORDS:
-        return False
-    return _NO_WORDS.isdisjoint(words) and not re.search(r"n['\u2019]t\b", _normalised(text))
+    """True only if the whole of `text` is one affirmative token. It is NFKC-normalised, format
+    characters (Unicode category Cf: zero-width and the like) removed, surrounding whitespace,
+    punctuation and quotes stripped, and casefolded. Extra words, key/value text and any
+    non-ASCII letter (a lookalike, an accent) make it not an approval."""
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    start, end = 0, len(text)  # only the edges are stripped; an inner space or mark fails the match
+    while start < end and _is_edge(text[start]):
+        start += 1
+    while end > start and _is_edge(text[end - 1]):
+        end -= 1
+    text = text[start:end].casefold()
+    return text in _YES_TOKENS
 
 
-def _yes_value(value: Any) -> bool:
-    if value is True:
-        return True
-    return isinstance(value, str) and "".join(_words(value)) in _APPROVED_VALUES
+def _yes_dict(reply: dict) -> bool:
+    """`approved` is exactly True and every decision-like key present is an affirmative token."""
+    return reply.get("approved") is True and all(
+        isinstance(reply[k], str) and _yes_text(reply[k]) for k in _DECISION_KEYS if k in reply
+    )
+
+
+def _single_text(blocks: list) -> str | None:
+    """The text of a reply that is a list holding exactly one text block, else None."""
+    if len(blocks) != 1:
+        return None
+    block = blocks[0]
+    if isinstance(block, str):
+        return block
+    if (
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ):
+        return block["text"]
+    return None
 
 
 def approval_granted(result: Any) -> bool:
-    """True only if an approval tool's reply is an explicit yes. Anything else, including an
-    error, silence, an unknown wording or a denial, is not an approval: it fails closed.
+    """True only if an approval tool's reply is an exact yes. Anything else, including an error,
+    silence, prose or a denial, is not an approval: it fails closed. A guard cannot read free
+    text safely, so it does not try.
 
     The reply is a ToolMessage (or a Command holding one), text, or a plain value. A ToolMessage
-    with status "error" is never an approval. Its text may be JSON, and then:
-    - an object: "approved" must be true, or the text "true", "yes" or "approved" (punctuation
-      and case ignored); any other value, null and 0 included, is a no. Without an "approved"
-      key, every one of "decision", "status" and "result" that is present must be true or an
-      explicit yes text, and at least one must be present;
-    - a scalar: only `true`, or a string that is an explicit yes text;
-    - anything else (a list, a number, null) is a no.
-    Plain text is an explicit yes when its first word is one of yes, y, yep, yeah, ok, okay,
-    approve(d), allow(ed), grant(ed), accept(ed), confirm(ed), proceed, true, sure or go, and no
-    word anywhere in it is not, no, never, nope, deny/denied, reject(ed), decline(d), refuse(d),
-    cancel(led), disallowed, forbidden, stop, abort(ed) or disapproved. Text is read as Unicode
-    words (NFKC, zero-width characters dropped, lowercased), so "“No”" and "No—stop" are noes."""
+    with status "error" is never an approval.
+    - Plain text approves only if the whole of it is one of yes, y, ok, okay, approve(d),
+      allow(ed), grant(ed), confirm(ed), true, accept(ed) (see `_yes_text`).
+    - Text that parses once as JSON is read by its value: an object approves only if "approved"
+      is exactly true and every "decision", "status", "result", "answer" and "response" present
+      is itself such a token; a string is read as plain text, with no further JSON decoding; a
+      boolean true approves. Any other value (false, null, a number, a list) does not.
+    - An object passed directly follows the object rule.
+    - A list of content blocks counts only when it holds a single text block.
+    - Anything else is not an approval."""
     message = _message(result)
     if message is not None:
         if message.status == "error":
             return False
         result = message.content
     if isinstance(result, list):
-        result = _text(result)
+        result = _single_text(result)
     if isinstance(result, str):
         try:
             result = json.loads(result)
         except (ValueError, TypeError, RecursionError):  # plain text; deep JSON: RecursionError
             return _yes_text(result)
-    if isinstance(result, str):
-        return _yes_text(result)
-    if result is True:
-        return True
-    if not isinstance(result, dict):
-        return False
-    if "approved" in result:
-        return _yes_value(result["approved"])
-    answers = [result[k] for k in ("decision", "status", "result") if k in result]
-    return bool(answers) and all(
-        a is True or (isinstance(a, str) and _yes_text(a)) for a in answers
-    )
+        if isinstance(result, str):
+            return _yes_text(result)
+    if isinstance(result, dict):
+        return _yes_dict(result)
+    return result is True
 
 
 def _run_config() -> dict | None:
