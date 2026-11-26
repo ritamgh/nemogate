@@ -433,7 +433,7 @@ constraints:
 | `approval_before(tool)` | Event order | Yes |
 | `output_must_include / must_not_include(regex, agent)` | The named agent's final message (for C-005, the reviewer's return to the planner) | No: there is nothing to block |
 | `output_must_include(regex, agent, each=true)` | Every reply from the named agent, not any one (for C-007, both reviews of the T12 chain); one violation per reply that does not match. Optional field, default `false` (PR #64) | No: there is nothing to block |
-| `tool_arg_bound(tool, arg, op, value)` (stretch, unused by the reference app) | Tool-call args | Yes |
+| `tool_arg_bound(tool, arg, op, value)` (stretch, unused by the reference app; implemented since the guard build, see FACTS section 13 row "`tool_arg_bound` semantics") | Tool-call args | Yes |
 
 **Event trace (JSONL, written by B's middleware, read by A's replay engine and report).** One line per event. Types: `boundary_out`, `boundary_in`, `tool_call`, `tool_result`, `approval`, `gate_block`, `final_output`.
 
