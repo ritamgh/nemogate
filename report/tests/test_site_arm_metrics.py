@@ -336,7 +336,7 @@ def fork_page(n: int, n_forks: int | None) -> dict:
 
 def test_a_cell_of_forks_says_cost_and_time_are_after_the_fork_point():
     # Breaks if a paired sweep's fork cells print cost and time that read as whole-run numbers:
-    # a fork's record holds only what came after the fork point (replay/README.md, "A fork
+    # a fork's record holds only what came after the fork point (proof/README.md, "A fork
     # record is partial").
     text = text_of(metrics_table(site.render(fork_page(2, 2))))
 

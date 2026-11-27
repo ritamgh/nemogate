@@ -1,8 +1,8 @@
 import pytest
 
+from nemogate.schemas.enums import Arm, Operator, Role
+from nemogate.schemas.run import RunRecord
 from preflight.cost import main, summarize
-from schemas.enums import Arm, Operator, Role
-from schemas.run import RunRecord
 
 
 def _record(run_id: str, arm: Arm, cost: float) -> RunRecord:
@@ -70,8 +70,8 @@ def _write_runs(parent, records):
 
 
 def test_cli_reads_a_folder_of_runs_and_single_run_folders_together(tmp_path, capsys):
-    # Breaks if either layout is not found: a parent of run folders (replay.budget's layout) or
-    # a run folder itself.
+    # Breaks if either layout is not found: a parent of run folders (nemogate.proof.budget's
+    # layout) or a run folder itself.
     _write_runs(tmp_path / "runs", RECORDS[:4])
     _write_runs(tmp_path / "other", RECORDS[4:])
     rc = main([str(tmp_path / "runs"), str(tmp_path / "other" / "r-5")])

@@ -2,7 +2,8 @@
 
 `python -m preflight.cost RUN_DIR...` makes no model call and no sandbox call. Each RUN_DIR is a
 run folder (holds `record.json`) or a folder of run folders (`*/record.json`, like
-`python -m replay.budget --from-runs`). The "all" row's mean is the number that command takes.
+`python -m nemogate.proof.budget --from-runs`). The "all" row's mean is the number that command
+takes.
 """
 
 import argparse
@@ -13,8 +14,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from schemas.enums import Arm
-from schemas.run import RunRecord
+from nemogate.schemas.enums import Arm
+from nemogate.schemas.run import RunRecord
 
 
 @dataclass(frozen=True)

@@ -5,10 +5,10 @@ import json
 
 import pytest
 
+from nemogate.schemas.enums import Role
+from nemogate.schemas.run import RunRecord
+from nemogate.schemas.trace import Approval, ToolCall
 from report import step_limit
-from schemas.enums import Role
-from schemas.run import RunRecord
-from schemas.trace import Approval, ToolCall
 
 TASK, RULE, OTHER_RULE = "X1", "C-001", "C-002"
 BOUNDARY = "delegation:planner->coder"
@@ -284,8 +284,8 @@ def test_no_pooled_runs_is_an_error(tmp_path, ledger_file):
 
 
 def test_cells_of_different_compaction_settings_are_refused(tmp_path, ledger_file):
-    # Breaks if build() sums the cells replay.stats splits by compaction: the row would merge
-    # runs made with the summariser on and off, which the results page keeps apart.
+    # Breaks if build() sums the cells nemogate.proof.stats splits by compaction: the row would
+    # merge runs made with the summariser on and off, which the results page keeps apart.
     root = tmp_path / "runs"
     root.mkdir()
     finished(root, "r-off1", knobs={})
@@ -307,9 +307,11 @@ def test_a_single_compaction_setting_is_unchanged(tmp_path, ledger_file):
 
 def test_step_limit_subclass_raised_by_the_runner_is_detected(tmp_path, ledger_file):
     # Breaks if only the bare GraphRecursionError name matches: the runner raises
-    # replay.step_cap.StepLimitReached, so its error.json names that class.
+    # nemogate.proof.step_cap.StepLimitReached, so its error.json names that class.
     root = sweep(tmp_path / "runs")
-    errored(root, "r-s1", error_type="replay.step_cap.StepLimitReached", calls=[("delete", {})])
+    errored(
+        root, "r-s1", error_type="nemogate.proof.step_cap.StepLimitReached", calls=[("delete", {})]
+    )
     rep = report(root, ledger_file)
     assert [r.run_id for r in rep.step_limit_runs] == ["r-s1"]
     assert rep.sensitivity.n == 5

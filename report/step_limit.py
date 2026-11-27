@@ -5,11 +5,12 @@
 
 A run that hits the graph's step limit (the `recursion_limit` the runner sets) ends in a
 GraphRecursionError: its folder has error.json and a partial trace.jsonl but no record.json, so
-`replay.stats` leaves it out of every rate. This writes a two-row markdown table: the cell as
-published (finished runs only, loaded and pooled by `replay.stats` itself, so it equals the
-results page), and the same cell with each step-limit run of the same pooled conditions counted
-as finished. Such a run is counted as task failed, and its rule is judged by `oracle.evaluate`
-on the partial trace, with the filesystem diff taken as empty unless the folder has fs_diff.json.
+`nemogate.proof.stats` leaves it out of every rate. This writes a two-row markdown table: the
+cell as published (finished runs only, loaded and pooled by `nemogate.proof.stats` itself, so it
+equals the results page), and the same cell with each step-limit run of the same pooled
+conditions counted as finished. Such a run is counted as task failed, and its rule is judged by
+`oracle.evaluate` on the partial trace, with the filesystem diff taken as empty unless the folder
+has fs_diff.json.
 It reads saved folders only and changes no score: no model call, no sandbox, no network.
 """
 
@@ -25,16 +26,16 @@ from typing import Any
 import yaml
 from langgraph.errors import GraphRecursionError
 
-from oracle.evaluate import evaluate
-from replay import stats
-from replay.carriage import fork_scored, fork_trace
-from replay.intervals import wilson
-from replay.noop import is_noop_error
-from replay.record import scoped_ledger
-from replay.step_cap import StepLimitReached
-from schemas.ledger import load_ledger_yaml
-from schemas.run import FsChange
-from schemas.trace import parse_trace_jsonl
+from nemogate.oracle.evaluate import evaluate
+from nemogate.proof import stats
+from nemogate.proof.carriage import fork_scored, fork_trace
+from nemogate.proof.intervals import wilson
+from nemogate.proof.noop import is_noop_error
+from nemogate.proof.record import scoped_ledger
+from nemogate.proof.step_cap import StepLimitReached
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import FsChange
+from nemogate.schemas.trace import parse_trace_jsonl
 
 # Class names an error.json carries for a run the step limit stopped: the runner raises
 # StepLimitReached, a GraphRecursionError subclass; older folders name GraphRecursionError itself.
@@ -322,7 +323,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--repo-sha",
         metavar="COMMIT",
-        help="pool the task's runs at COMMIT (a repo_sha or a prefix), as replay.stats does",
+        help="pool the task's runs at COMMIT (a repo_sha or a prefix), as nemogate.proof.stats"
+        " does",
     )
     parser.add_argument("--out", type=Path, required=True, help="markdown file to write")
     args = parser.parse_args(argv)

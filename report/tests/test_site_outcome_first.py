@@ -7,6 +7,7 @@ import re
 
 import pytest
 
+from nemogate.schemas.ledger import load_ledger_yaml
 from report import panels, site
 from report.tests.test_site import (  # noqa: F401
     FIXTURES,
@@ -17,7 +18,6 @@ from report.tests.test_site import (  # noqa: F401
     with_groups,
 )
 from report.tests.test_site_arm_metrics import BLOCKS, rate, stat, with_metrics
-from schemas.ledger import load_ledger_yaml
 
 
 @pytest.fixture

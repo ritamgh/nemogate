@@ -5,7 +5,7 @@
 user's rule, the handoff that lost it, the action that broke it, and the gated run beside it.
 Stepping is radio inputs and labels (no script), every text on it is read from the run folders
 and escaped, and the oracle's verdict is the saved `violations.json`, never recomputed. The rule
-and its text anchor come from each run's own `ledger.yaml` (`replay.carriage.anchors_of`).
+and its text anchor come from each run's own `ledger.yaml` (`nemogate.proof.carriage.anchors_of`).
 A run folder that lacks a file a step needs is exit code 2 naming it.
 """
 
@@ -20,12 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gate.middleware import REPIN
-from replay.carriage import anchors_of
-from report import panels
-from schemas.ledger import load_ledger_yaml
-from schemas.run import Violation
-from schemas.trace import (
+from nemogate.gate.middleware import REPIN
+from nemogate.proof.carriage import anchors_of
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import Violation
+from nemogate.schemas.trace import (
     BoundaryIn,
     BoundaryOut,
     Event,
@@ -34,6 +33,7 @@ from schemas.trace import (
     ToolResult,
     parse_trace_jsonl,
 )
+from report import panels
 
 CSS = (Path(__file__).parent / "site.css").read_text(encoding="utf-8") + (
     Path(__file__).parent / "replay.css"
@@ -705,7 +705,7 @@ def build(
 
 def registry_message(task_id: str) -> str | None:
     """The user message of a task, from the default app's task registry."""
-    from replay.carriage import load_user_messages
+    from nemogate.proof.carriage import load_user_messages
 
     return load_user_messages().get(task_id)
 

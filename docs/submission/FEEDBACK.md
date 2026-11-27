@@ -115,8 +115,8 @@ use:** NeMo Guardrails and the NeMo Agent Toolkit. We read their documentation t
   `EXECUTING` with no way out.
 - **A real case.** Deep Agents' `grep` wraps the command in `asyncio.wait_for` (35 s). When it timed
   out, the cancel landed inside the session and the agent's next tool call raised, which ended a whole
-  run. We wrote a wrapper that runs each command as a shielded task (`replay/sandbox.py`,
-  `replay/tests/test_sandbox.py`).
+  run. We wrote a wrapper that runs each command as a shielded task (`src/nemogate/proof/sandbox.py`,
+  `src/nemogate/proof/tests/test_sandbox.py`).
 - **Suggestion.** Let a failed session be reset to its last good image, or document the rebuild pattern
   next to the timeout parameter.
 
@@ -163,7 +163,7 @@ use:** NeMo Guardrails and the NeMo Agent Toolkit. We read their documentation t
    its edit quoted a line with the wrong quotes and backslash (0 occurrences), and our guard refused
    it twice. The second round inserted text after a backslash line-continuation, so the patched prompt
    read "...for the user.Copy every rule...". Our fixes: show the model the real lines on retry, and
-   reject an insert that runs into its neighbour (`repair/guards.py`). Exact string copying is where
+   reject an insert that runs into its neighbour (`src/nemogate/repair/guards.py`). Exact string copying is where
    we saw it fail.
 3. **Tool-call-as-text did not occur.** We were looking for the failure class behind NeMo Agent Toolkit
    issue 2274 and found none (0 in 1,474 messages). We report it because it is a result: the failure

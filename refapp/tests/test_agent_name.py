@@ -12,7 +12,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.config import get_config
 
-from common.llm import get_model
+from nemogate.common.llm import get_model
 from refapp.team import build_team
 
 

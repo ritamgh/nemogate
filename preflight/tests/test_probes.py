@@ -3,7 +3,8 @@ import json
 import pytest
 from langchain_core.messages import AIMessage
 
-from common import SpendCapReached, get_model
+from nemogate.common import SpendCapReached, get_model
+from nemogate.schemas.enums import Role
 from preflight.probes import (
     ESCAPE_SAMPLE,
     Variant,
@@ -13,7 +14,6 @@ from preflight.probes import (
     thinking_probe,
     tool_call_probe,
 )
-from schemas.enums import Role
 
 SCHEMA_OFF = Variant(Role.sut, "json_schema", False)
 SCHEMA_ON = Variant(Role.sut, "json_schema", True)

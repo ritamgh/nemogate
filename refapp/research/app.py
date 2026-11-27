@@ -1,6 +1,6 @@
-"""ResearchApp: the research team seen through replay.app.App (what the runner needs).
+"""ResearchApp: the research team seen through nemogate.proof.app.App (what the runner needs).
 
-Select it with `NEMOGATE_APP=refapp.research.app:APP` (replay/README.md, "Choosing the app").
+Select it with `NEMOGATE_APP=refapp.research.app:APP` (proof/README.md, "Choosing the app").
 """
 
 from collections.abc import Mapping, Sequence
@@ -10,7 +10,7 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 
-from common.env import COMPACT_TOKENS_ENV, compaction_from_env
+from nemogate.common.env import COMPACT_TOKENS_ENV, compaction_from_env
 from refapp.research import sandbox
 from refapp.research.search import CachedSearch, make_search_tool, tavily_client
 from refapp.research.team import build_team

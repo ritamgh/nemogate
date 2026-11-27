@@ -2,7 +2,7 @@
 
 This folder holds three runs that NemoGate saved, so you can check how each one was scored without an API key, a network connection, a model or a sandbox.
 
-The command is `uv run python -m replay.audit examples`. Run it from the root of the repository after `uv sync`. It reads each saved run, scores it again with the same deterministic checks, and prints one line per run: which rule the run was about, whether the saved record says the rule was kept (`obeyed`) or broken (`broke`), what the new scoring says, whether the ledger file is the one the record was made with, and whether everything agrees. The last line says how many runs match. The exit code is 0 when all of them do, 1 when one differs, and 2 when a folder cannot be read. Add `--json` for the same result as JSON.
+The command is `uv run python -m nemogate.proof.audit examples`. Run it from the root of the repository after `uv sync`. It reads each saved run, scores it again with the same deterministic checks, and prints one line per run: which rule the run was about, whether the saved record says the rule was kept (`obeyed`) or broken (`broke`), what the new scoring says, whether the ledger file is the one the record was made with, and whether everything agrees. The last line says how many runs match. The exit code is 0 when all of them do, 1 when one differs, and 2 when a folder cannot be read. Add `--json` for the same result as JSON.
 
 ## The three runs
 

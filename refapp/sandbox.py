@@ -20,8 +20,8 @@ from uuid import UUID
 
 from contree_sdk.sdk.exceptions import NotFoundError, OperationTimedOutError
 
-from common import env
-from common.spend import spend_log_path
+from nemogate.common import env
+from nemogate.common.spend import spend_log_path
 from refapp import seedenv
 
 REPO = "/repo"

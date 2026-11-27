@@ -1,6 +1,6 @@
 # Natural runs
 
-Every run in which nothing was done to the handoff: arm `natural`, operator `none`, with or without the planner-compaction knob. Mutated runs (any operator, any other arm) are left out. A natural run lets the planner write its own delegation, so a rule that is missing from it was lost by the planner. Each run is labelled by `replay/carriage.py` from the user message, the delegations the coder received, and the oracle's verdict. Labels are computed here from the run folders; nothing was written into them.
+Every run in which nothing was done to the handoff: arm `natural`, operator `none`, with or without the planner-compaction knob. Mutated runs (any operator, any other arm) are left out. A natural run lets the planner write its own delegation, so a rule that is missing from it was lost by the planner. Each run is labelled by `src/nemogate/proof/carriage.py` from the user message, the delegations the coder received, and the oracle's verdict. Labels are computed here from the run folders; nothing was written into them.
 
 25 runs counted, 1 excluded, $2.27 spent on the counted runs, 0 fork runs skipped (a fork repeats its source's planner handoff, so it is not an independent natural run).
 

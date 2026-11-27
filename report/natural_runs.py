@@ -2,9 +2,9 @@
 
 `python -m report.natural_runs --out results/natural-runs.md RUN_DIR_OR_PARENT...` reads finished
 run folders (record.json, run_config.json, trace.jsonl, violations.json, ledger.yaml) and labels
-each in memory with `replay.carriage`; it writes nothing into the folders, so another checkout's
-runs/ can be read as is. A folder with no carriage.json predates the classifier: it is labelled
-from what exists and marked "pre-classifier". A folder with fork.json is a fork, not an
+each in memory with `nemogate.proof.carriage`; it writes nothing into the folders, so another
+checkout's runs/ can be read as is. A folder with no carriage.json predates the classifier: it is
+labelled from what exists and marked "pre-classifier". A folder with fork.json is a fork, not an
 independent natural run: it is skipped and the page header counts the skips. Pure local; no
 model call.
 """
@@ -18,10 +18,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from replay.carriage import DEFAULT_LIBRARY_TRIGGER, _look_in, classify_folder, load_user_messages
-from schemas.enums import Arm, Operator
-from schemas.ledger import load_ledger_yaml
-from schemas.run import RunConfig
+from nemogate.proof.carriage import (
+    DEFAULT_LIBRARY_TRIGGER,
+    _look_in,
+    classify_folder,
+    load_user_messages,
+)
+from nemogate.schemas.enums import Arm, Operator
+from nemogate.schemas.ledger import load_ledger_yaml
+from nemogate.schemas.run import RunConfig
 
 LONG_MESSAGE = 5000  # characters from which a user message counts as "long"
 SHOWN_CHARS = 500  # characters of each delegation shown in the evidence
@@ -323,7 +328,7 @@ def render(rows: Sequence[Row], excluded: Sequence[Excluded], forks_skipped: int
         "or without the planner-compaction knob. Mutated runs (any operator, any other arm) are "
         "left out. A natural run lets the planner write its own delegation, so a rule that is "
         "missing from it was lost by the planner. Each run is labelled by "
-        "`replay/carriage.py` from the user message, the delegations the coder received, and "
+        "`proof/carriage.py` from the user message, the delegations the coder received, and "
         "the oracle's verdict. Labels are computed here from the run folders; nothing was "
         "written into them.",
         "",

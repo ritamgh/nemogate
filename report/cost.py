@@ -1,6 +1,6 @@
 """The price of one prevented rule break: "Cost of prevention" on the results page.
 
-Pure functions over the cells of a results file (`replay/README.md`, "stats.py"); no file, no
+Pure functions over the cells of a results file (`proof/README.md`, "stats.py"); no file, no
 clock, no model. For one rule at one sabotage setting a row compares an arm that blocks (gated,
 block-only) with the arm at the same setting that has no gate (mutated at a sabotage operator,
 natural at "none"):
@@ -36,7 +36,7 @@ from typing import Any
 
 ARMS = ("gated", "block_only")  # the arms that block, in the order the table shows them
 ARM_NAME = {"gated": "Gated", "block_only": "Block-only"}
-MIN_RUNS = 5  # below this the cost is a range, not a 95% interval (replay/intervals.py)
+MIN_RUNS = 5  # below this the cost is a range, not a 95% interval (src/nemogate/proof/intervals.py)
 DASH = "&mdash;"
 
 
