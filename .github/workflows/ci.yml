@@ -17,6 +17,8 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # three runner tests resolve HEAD~1, which a shallow clone lacks
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python-version }}
