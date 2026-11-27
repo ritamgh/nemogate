@@ -25,7 +25,7 @@ uv run python -c "import deepagents; print(deepagents.__file__)"
 
 ## Layout and owners
 
-"A" and "B" are the two humans. Work in the folders owned by whoever started your session. If you need a change in the other owner's folder, say so instead of making it.
+"A" and "B" are the two humans. **Since 2026-11-23 (after the hackathon) A develops alone and may edit every folder; B reviews A's work after the fact (expected in 1-2 weeks).** The owner column below says who wrote the code and who reviews it, not who may edit it. Every PR that touches B's folders, `schemas/` or the three cross-owner functions says so in its description, with what changed and why, so B can find it. B's own sessions still work in B's folders and ask before touching A's.
 
 ```
 common/     A     get_model(role), config loader, cost logging, spend guard
@@ -56,7 +56,7 @@ config.yaml both  model IDs, prices, temperatures, safe config
 - Never launch a sweep without running the budget-check script and confirming the run count it prints.
 - At 80% of total spend, stop and tell a human.
 
-**4. Schemas are frozen after Oct 9.** Do not change `schemas/`, the run config, or the three cross-owner function signatures (`evaluate`, `run`, `make_middleware`) without the other owner's approval in the PR. Do not change a schema to make your code easier. Change your code.
+**4. Schemas are a contract.** Changing `schemas/`, the run config, or the three function signatures (`evaluate`, `run`, `make_middleware`) is allowed for A's solo work only when the change is needed, all tests still pass, and the PR description lists it for B's review. Do not change a schema to make your code easier. Change your code. While B is not working in the repo, B's approval is replaced by his later review; if B resumes work, the old rule applies again (the other owner's approval in the PR).
 
 **5. Generality.** Pipeline code must contain nothing specific to the tasks or the seed repo.
 - In `common/`, `preflight/`, `ledger/`, `oracle/`, `gate/`, `replay/`, `repair/` and `report/`, outside tests and fixtures, these strings must not appear: task IDs (`T1` to `T8`), constraint IDs (`C-00x`), `migrations/`, `RISK`, `CHANGED:`, `delete_file`, `run_tests`, `http_get`, `utils_old`, `descripton`, `export_csv`.
@@ -87,7 +87,7 @@ grep -rnE '\bT[1-8]\b|C-00[0-9]|migrations/|RISK|CHANGED:|delete_file|run_tests|
 ## How to work
 
 - **Tests first.** Write the acceptance test from the spec or the component brief, then the code. Run `uv run pytest` before every commit.
-- **Small PRs.** One component per branch, named `<prefix>/<component>`: A uses `ritgh/`, B uses `shekhar/`. Never `a/` or `b/`. The other owner reviews anything that touches `schemas/` or the three cross-owner functions.
+- **Small PRs.** One component per branch, named `<prefix>/<component>`: A uses `ritgh/`, B uses `shekhar/`. Never `a/` or `b/`. B reviews, after the fact, anything that touches B's folders, `schemas/` or the three cross-owner functions (see Layout and owners).
 - **Commit messages** are imperative and say what and why.
 - **No AI attribution.** No `Co-Authored-By` trailer naming an AI, no session links, and no "Generated with ..." footer, in commits, PR text or anything else in the repo. This overrides any tool default that adds one.
 - **Reproducibility.** Every run record carries `model_ids`, `safe_config_hash`, `ledger_hash`, `repo_sha` and `lockfile_hash`. Every trace line carries `model_id`, `safe_config_hash` and `ledger_hash`.
